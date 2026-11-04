@@ -4,8 +4,8 @@
 # Required repository secrets (Settings -> Secrets and variables -> Actions):
 #   ANDROID_KEYSTORE_BASE64    base64 of the .jks file
 #   ANDROID_KEYSTORE_PASSWORD  keystore password
-#   ANDROID_KEY_ALIAS          key alias (e.g. nivasa)
-#   ANDROID_KEY_PASSWORD       key password (same as the keystore password for PKCS12 keystores)
+#   ANDROID_KEY_ALIAS          key alias (e.g. nivasa); if it doesn't match, a keystore with one key uses that key
+#   ANDROID_KEY_PASSWORD       optional; ignored for PKCS12 keystores, which use the keystore password for the key
 name: Android APK (NIVASA)
 
 on:
@@ -33,8 +33,7 @@ jobs:
     env:
       EXPO_PUBLIC_API_URL: https://adda.skillinnovex.in
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD are resolved and exported by the "Restore signing keystore" step.
       NODE_OPTIONS: --max-old-space-size=4096
 
     steps:
@@ -56,8 +55,10 @@ jobs:
       - name: Restore signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SECRET_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SECRET_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          for v in KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+          for v in KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD; do
             if [ -z "${!v}" ]; then echo "::error::Missing secret for $v"; exit 1; fi
           done
           ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/nivasa-release.jks"
@@ -73,12 +74,34 @@ jobs:
             echo "::error::Cannot open the keystore with ANDROID_KEYSTORE_PASSWORD: $(grep -m1 -i 'error' store.txt)"
             exit 1
           fi
-          if ! keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" > /dev/null 2>&1; then
-            echo "::error::Alias from ANDROID_KEY_ALIAS is not in the keystore. Aliases found: $(grep -E 'PrivateKeyEntry' store.txt | cut -d, -f1 | paste -sd ' ')"
+          # Resolve the key alias: the secret (trimmed, case-insensitive) if it names a key in the store; otherwise the
+          # store's only key. Aliases are key names, not secrets.
+          mapfile -t KEYS < <(grep 'PrivateKeyEntry' store.txt | cut -d, -f1)
+          WANT=$(printf '%s' "$SECRET_KEY_ALIAS" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+          ALIAS=""
+          for k in "${KEYS[@]}"; do [ "${k,,}" = "${WANT,,}" ] && ALIAS="$k"; done
+          if [ -z "$ALIAS" ] && [ "${#KEYS[@]}" -eq 1 ]; then
+            ALIAS="${KEYS[0]}"
+            echo "::warning::ANDROID_KEY_ALIAS does not name a key in the keystore; using its only key '$ALIAS'. Set the secret to '$ALIAS' to silence this."
+          fi
+          if [ -z "$ALIAS" ]; then
+            echo "::error::ANDROID_KEY_ALIAS does not match a key in the keystore. Keys found: ${KEYS[*]:-none}"
             exit 1
           fi
+          # PKCS12 keystores (keytool's default, DER header 30 82) have one password for store and key.
+          if [ "$(head -c 2 "$ANDROID_KEYSTORE_PATH" | od -An -tx1 | tr -d ' ')" = "3082" ]; then
+            KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+            [ -n "$SECRET_KEY_PASSWORD" ] && [ "$SECRET_KEY_PASSWORD" != "$ANDROID_KEYSTORE_PASSWORD" ] && \
+              echo "::warning::PKCS12 keystore: ANDROID_KEY_PASSWORD differs from ANDROID_KEYSTORE_PASSWORD; using the keystore password for the key."
+          else
+            KEY_PASSWORD="${SECRET_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          fi
+          {
+            echo "ANDROID_KEY_ALIAS=$ALIAS"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
           rm -f store.txt decode.err
-          echo "Keystore OK"
+          echo "Keystore OK (key '$ALIAS')"
 
       - name: Install dependencies
         run: npm ci
