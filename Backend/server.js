@@ -39,7 +39,6 @@ const schema = z.object({
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_DAYS_MOBILE: z.coerce.number().default(30),
   REFRESH_TOKEN_DAYS_PANEL: z.coerce.number().default(7),
-  CORS_ORIGINS: list,
   PUBLIC_API_BASE_URL: z.string().default('http://localhost:3015'),
   PANEL_BASE_URL: z.string().default('http://localhost:5173'),
   TRUST_PROXY: z.string().optional(),
@@ -5830,13 +5829,11 @@ function createApp() {
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
-      origin(origin, cb) {
-        // Native apps send no Origin header; browsers must be on the allowlist.
-        if (!origin || env.CORS_ORIGINS.includes(origin)) return cb(null, true);
-        return cb(null, false);
-      },
+      // Any website may call the API. Auth is a bearer token the page must hold (no cookies, credentials: false),
+      // so another origin gains nothing it couldn't do with curl.
+      origin: true,
       credentials: false,
-      allowedHeaders: ['Authorization', 'Content-Type', 'X-Society-Id'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'X-Society-Id', 'X-Action-Reason'],
       exposedHeaders: ['Content-Disposition'],
       maxAge: 600,
     }),

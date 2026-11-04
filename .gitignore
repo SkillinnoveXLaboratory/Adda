@@ -37,3 +37,7 @@ dist-apk/
 
 # local backups (e.g. Adda_App's old template git history)
 /.backup/
+
+# signing key exports (base64 copies of the keystore)
+*keystore*.txt
+*.jks.base64
