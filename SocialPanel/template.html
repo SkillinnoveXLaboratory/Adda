@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azea - Admin Panel Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Google Fonts: Poppins -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Poppins', 'sans-serif'],
+                    },
+                    colors: {
+                        azea: {
+                            purple: '#705ec8',
+                            purpleDark: '#5c4ac7',
+                            purpleLight: '#f0eeff',
+                            text: '#2c2c2c',
+                            muted: '#9ba2b7',
+                            bg: '#f2f4f9',
+                            green: '#2dce89',
+                            orange: '#ff5b51',
+                            blue: '#1170e4'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #f2f4f9;
+            color: #495057;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.03);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 4px;
+        }
+
+        /* Sidebar Dynamic Collapse */
+        .sidebar {
+            transition: width 0.3s ease, min-width 0.3s ease;
+        }
+        
+        .sidebar.collapsed {
+            width: 70px !important;
+            min-width: 70px !important;
+        }
+
+        .sidebar.collapsed .sidebar-text,
+        .sidebar.collapsed .sidebar-arrow,
+        .sidebar.collapsed .sidebar-header-title {
+            display: none !important;
+        }
+
+        .sidebar.collapsed .sidebar-item {
+            justify-content: center;
+            padding-left: 0;
+            padding-right: 0;
+        }
+
+        /* Metric Card Sparklines */
+        .sparkline-svg {
+            stroke-dasharray: 200;
+            stroke-dashoffset: 0;
+            animation: dash 3s linear infinite;
+        }
+
+        /* Card Gradients */
+        .bg-grad-purple {
+            background: linear-gradient(135deg, #705ec8 0%, #8d7ce6 100%);
+        }
+        .bg-grad-green {
+            background: linear-gradient(135deg, #19b159 0%, #2dce89 100%);
+        }
+        .bg-grad-orange {
+            background: linear-gradient(135deg, #fc5b23 0%, #ff8338 100%);
+        }
+        .bg-grad-cyan {
+            background: linear-gradient(135deg, #01b8ff 0%, #4bcfff 100%);
+        }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden bg-[#f2f4f9]">
+
+    <!-- ================= SIDEBAR ================= -->
+    <aside id="sidebar" class="sidebar w-64 bg-white border-r border-gray-200 flex flex-col flex-shrink-0 z-30 select-none">
+        
+        <!-- Logo Header -->
+        <div class="h-16 flex items-center px-6 border-b border-gray-100 flex-shrink-0">
+            <div class="flex items-center space-x-2.5 cursor-pointer">
+                <!-- Azea Circular Logo Graphic -->
+                <div class="w-8 h-8 rounded-full border-[3.5px] border-azea-purple flex items-center justify-center">
+                    <div class="w-2.5 h-2.5 rounded-full bg-azea-purple"></div>
+                </div>
+                <span class="sidebar-text text-2xl font-bold tracking-tight text-gray-800">azea</span>
+            </div>
+        </div>
+
+        <!-- Navigation Links Container -->
+        <div class="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+            
+            <!-- MAIN -->
+            <div>
+                <p class="sidebar-header-title text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-2">MAIN</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-azea-purple font-medium bg-azea-purpleLight transition-colors">
+                        <i class="fa-regular fa-compass text-base w-5 text-center"></i>
+                        <span class="sidebar-text text-xs font-semibold">Dashboard</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- COMPONENTS -->
+            <div>
+                <p class="sidebar-header-title text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-2">COMPONENTS</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-database text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Elements</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-border-all text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Apps</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-box text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Advanced UI</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <i class="fa-regular fa-paper-plane text-xs w-5 text-center"></i>
+                        <span class="sidebar-text text-xs font-medium">Landing Page</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- ICONS -->
+            <div>
+                <p class="sidebar-header-title text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-2">ICONS</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <i class="fa-solid fa-gift text-xs w-5 text-center"></i>
+                        <span class="sidebar-text text-xs font-medium">Icons</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- MAPS -->
+            <div>
+                <p class="sidebar-header-title text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-2">MAPS</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-regular fa-map text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Maps</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                </div>
+            </div>
+
+            <!-- CUSTOM & SUB MENUS -->
+            <div>
+                <p class="sidebar-header-title text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-2">CUSTOM & SUB MENUS</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-layer-group text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Custom Pages</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3.5 py-2.5 rounded-lg text-gray-600 hover:text-azea-purple hover:bg-gray-50 transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-bars text-xs w-5 text-center"></i>
+                            <span class="sidebar-text text-xs font-medium">Sub Menus</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-right text-[10px] text-gray-400"></i>
+                    </a>
+                </div>
+            </div>
+
+        </div>
+    </aside>
+
+    <!-- ================= MAIN CONTENT WRAPPER ================= -->
+    <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+        
+        <!-- HEADER NAVBAR -->
+        <header class="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-6 z-20 flex-shrink-0">
+            <!-- Left Header (Hamburger & Search) -->
+            <div class="flex items-center space-x-6">
+                <button id="toggleSidebar" class="text-gray-500 hover:text-azea-purple focus:outline-none">
+                    <i class="fa-solid fa-bars text-lg"></i>
+                </button>
+                <div class="relative hidden sm:block w-56 md:w-64">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400">
+                        <i class="fa-solid fa-magnifying-glass text-xs"></i>
+                    </span>
+                    <input type="text" class="w-full py-1.5 pl-9 pr-4 text-xs bg-gray-50/80 text-gray-700 border border-transparent rounded-full focus:outline-none focus:bg-white focus:border-gray-200 placeholder-gray-400" placeholder="Search...">
+                </div>
+            </div>
+
+            <!-- Right Header Controls -->
+            <div class="flex items-center space-x-4 text-gray-500 text-sm">
+                <button class="hover:text-azea-purple transition-colors p-1">
+                    <i class="fa-regular fa-moon"></i>
+                </button>
+                <button class="hover:text-azea-purple transition-colors p-1 hidden sm:block">
+                    <i class="fa-solid fa-expand"></i>
+                </button>
+
+                <!-- Language Selector -->
+                <div class="hidden sm:flex items-center space-x-1.5 px-2 py-1 cursor-pointer hover:bg-gray-50 rounded">
+                    <img src="https://flagcdn.com/w20/us.png" class="w-4 h-3 rounded-sm" alt="English">
+                    <span class="text-xs text-gray-600 font-medium">English</span>
+                </div>
+
+                <!-- Messages Notification Badge -->
+                <button class="relative hover:text-azea-purple transition-colors p-1">
+                    <i class="fa-regular fa-envelope"></i>
+                    <span class="absolute -top-1 -right-1.5 bg-emerald-500 text-white text-[9px] font-bold px-1 rounded-full border-2 border-white">5</span>
+                </button>
+
+                <!-- Alerts Notification Badge -->
+                <button class="relative hover:text-azea-purple transition-colors p-1">
+                    <i class="fa-regular fa-bell"></i>
+                    <span class="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white"></span>
+                </button>
+
+                <!-- User Profile Picture -->
+                <div class="flex items-center space-x-2 pl-2 cursor-pointer">
+                    <img src="https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&auto=format&fit=crop&q=80" class="w-8 h-8 rounded-full object-cover border border-gray-200" alt="User Profile">
+                </div>
+
+                <!-- Settings Icon -->
+                <button class="hover:text-azea-purple transition-colors p-1">
+                    <i class="fa-spin fa-gear"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- DASHBOARD BODY CONTAINER -->
+        <main class="flex-1 overflow-y-auto p-6">
+            
+            <!-- PAGE TITLE & TOP ACTION BUTTONS -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6">
+                <h1 class="text-xl font-bold text-gray-800 tracking-tight">Dashboard</h1>
+                
+                <div class="flex items-center space-x-3 mt-3 sm:mt-0">
+                    <!-- Import Button -->
+                    <button class="px-3.5 py-1.5 bg-white border border-gray-200 text-azea-purple text-xs font-semibold rounded-md hover:bg-gray-50 shadow-sm flex items-center space-x-1.5 transition-colors">
+                        <i class="fa-solid fa-download text-[11px]"></i>
+                        <span>Import</span>
+                    </button>
+                    <!-- Search By Date Button -->
+                    <button class="px-3.5 py-1.5 bg-azea-purple text-white text-xs font-semibold rounded-md hover:bg-azea-purpleDark shadow-sm flex items-center space-x-2 transition-colors">
+                        <i class="fa-regular fa-calendar-days text-xs"></i>
+                        <span>Search By Date</span>
+                        <i class="fa-solid fa-chevron-down text-[9px] ml-1"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- TOP 4 METRIC GRADIENT CARDS -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+
+                <!-- Card 1: Total Sales (Purple) -->
+                <div class="bg-grad-purple rounded-xl p-5 text-white shadow-sm flex justify-between relative overflow-hidden">
+                    <div class="flex flex-col justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-white/80">Total Sales</p>
+                            <h2 class="text-2xl font-bold mt-1">3,257</h2>
+                        </div>
+                        <div class="mt-4 text-[11px] text-white/90">
+                            <span class="inline-flex items-center font-semibold">
+                                <i class="fa-regular fa-circle-down text-[10px] mr-1"></i> 76%
+                            </span>
+                            <span class="ml-1 opacity-80">Growth This Month</span>
+                        </div>
+                    </div>
+                    <!-- Sparkline Wave SVG -->
+                    <div class="w-24 h-16 self-center">
+                        <svg class="w-full h-full" viewBox="0 0 100 40">
+                            <path d="M0 30 Q 15 10, 30 25 T 60 15 T 90 20 T 100 5" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2.5"/>
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Card 2: Total Stats (Green) -->
+                <div class="bg-grad-green rounded-xl p-5 text-white shadow-sm flex justify-between relative overflow-hidden">
+                    <div class="flex flex-col justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-white/80">Total Stats</p>
+                            <h2 class="text-2xl font-bold mt-1">1,678</h2>
+                        </div>
+                        <div class="mt-4 text-[11px] text-white/90">
+                            <span class="inline-flex items-center font-semibold">
+                                <i class="fa-regular fa-circle-down text-[10px] mr-1"></i> 15%
+                            </span>
+                            <span class="ml-1 opacity-80">Loss This Month</span>
+                        </div>
+                    </div>
+                    <!-- Sparkline Wave SVG -->
+                    <div class="w-24 h-16 self-center">
+                        <svg class="w-full h-full" viewBox="0 0 100 40">
+                            <path d="M0 25 Q 20 35, 40 15 T 70 20 T 100 10" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2.5"/>
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Card 3: Total Income (Orange) -->
+                <div class="bg-grad-orange rounded-xl p-5 text-white shadow-sm flex justify-between relative overflow-hidden">
+                    <div class="flex flex-col justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-white/80">Total Income</p>
+                            <h2 class="text-2xl font-bold mt-1">$2,590</h2>
+                        </div>
+                        <div class="mt-4 text-[11px] text-white/90">
+                            <span class="inline-flex items-center font-semibold">
+                                <i class="fa-regular fa-circle-down text-[10px] mr-1"></i> 62%
+                            </span>
+                            <span class="ml-1 opacity-80">From Last Month</span>
+                        </div>
+                    </div>
+                    <!-- Sparkline Wave SVG -->
+                    <div class="w-24 h-16 self-center">
+                        <svg class="w-full h-full" viewBox="0 0 100 40">
+                            <path d="M0 20 Q 25 5, 45 25 T 75 10 T 100 30" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2.5"/>
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Card 4: Total Tax (Cyan/Blue) -->
+                <div class="bg-grad-cyan rounded-xl p-5 text-white shadow-sm flex justify-between relative overflow-hidden">
+                    <div class="flex flex-col justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-white/80">Total Tax</p>
+                            <h2 class="text-2xl font-bold mt-1">$1,954</h2>
+                        </div>
+                        <div class="mt-4 text-[11px] text-white/90">
+                            <span class="inline-flex items-center font-semibold">
+                                <i class="fa-regular fa-circle-down text-[10px] mr-1"></i> 53%
+                            </span>
+                            <span class="ml-1 opacity-80">From Last Month</span>
+                        </div>
+                    </div>
+                    <!-- Sparkline Wave SVG -->
+                    <div class="w-24 h-16 self-center">
+                        <svg class="w-full h-full" viewBox="0 0 100 40">
+                            <path d="M0 30 Q 15 20, 35 30 T 70 5 T 100 25" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2.5"/>
+                        </svg>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- MAIN ANALYTICS ROW -->
+            <div class="grid grid-cols-12 gap-6">
+
+                <!-- LEFT: SALES ACTIVITY CHART (COL SPAN 8) -->
+                <div class="col-span-12 lg:col-span-8 bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider">SALES ACTIVITY</h2>
+                        </div>
+                        
+                        <!-- Chart Container -->
+                        <div class="h-80 relative">
+                            <canvas id="salesActivityChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT: RECENT ACTIVITY LIST (COL SPAN 4) -->
+                <div class="col-span-12 lg:col-span-4 bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <!-- Header & View All Button -->
+                        <div class="flex items-center justify-between mb-5">
+                            <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider">RECENT ACTIVITY</h2>
+                            <button class="px-2.5 py-1 text-xs font-semibold text-white bg-azea-purple hover:bg-azea-purpleDark rounded transition-colors">
+                                View All
+                            </button>
+                        </div>
+
+                        <!-- Timeline List -->
+                        <div class="space-y-4">
+                            
+                            <!-- Activity Item 1 -->
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-start space-x-3">
+                                    <div class="w-8 h-8 rounded-full bg-azea-purple text-white font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                                        1
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-medium text-gray-700">
+                                            <span class="font-semibold">New Products,</span> 
+                                            <span class="text-blue-500">52% New products</span>
+                                        </p>
+                                        <p class="text-[11px] text-gray-400 mt-0.5">More than 200 new products are added</p>
+                                    </div>
+                                </div>
+                                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap pl-2">6.45pm</span>
+                            </div>
+
+                            <!-- Activity Item 2 -->
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-start space-x-3">
+                                    <div class="w-8 h-8 rounded-full bg-emerald-500 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                                        2
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-medium text-gray-700">
+                                            <span class="font-semibold">New Sale,</span> 
+                                            <span class="text-rose-400">76% Profit earned.</span>
+                                        </p>
+                                        <p class="text-[11px] text-gray-400 mt-0.5">$2,546 income earned in today sale</p>
+                                    </div>
+                                </div>
+                                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap pl-2">1day ago</span>
+                            </div>
+
+                            <!-- Activity Item 3 -->
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-start space-x-3">
+                                    <div class="w-8 h-8 rounded-full bg-amber-400 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                                        3
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-medium text-gray-700">
+                                            <span class="font-semibold">New Customers,</span> 
+                                            <span class="text-emerald-500">24% New customers</span>
+                                        </p>
+                                        <p class="text-[11px] text-gray-400 mt-0.5">1.3k new customers reached us this year</p>
+                                    </div>
+                                </div>
+                                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap pl-2">7.45pm</span>
+                            </div>
+
+                            <!-- Activity Item 4 -->
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-start space-x-3">
+                                    <div class="w-8 h-8 rounded-full bg-blue-500 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                                        4
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-medium text-gray-700">
+                                            <span class="font-semibold">New Reviews,</span> 
+                                            <span class="text-amber-500">95% Positive reviews.</span>
+                                        </p>
+                                        <p class="text-[11px] text-gray-400 mt-0.5">There are 500 plus new reviews</p>
+                                    </div>
+                                </div>
+                                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap pl-2">1min ago</span>
+                            </div>
+
+                            <!-- Activity Item 5 -->
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-start space-x-3">
+                                    <div class="w-8 h-8 rounded-full bg-rose-500 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                                        5
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-medium text-gray-700">
+                                            <span class="font-semibold">Customer Visits,</span> 
+                                            <span class="text-blue-500">33% target achieved.</span>
+                                        </p>
+                                        <p class="text-[11px] text-gray-400 mt-0.5">daily 20 plus new customers visits us</p>
+                                    </div>
+                                </div>
+                                <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap pl-2">today</span>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ================= JAVASCRIPT ================= -->
+    <script>
+        // Toggle Sidebar Dynamic Collapsing
+        const sidebar = document.getElementById('sidebar');
+        const toggleBtn = document.getElementById('toggleSidebar');
+
+        toggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+        });
+
+        // Initialize Dual Bar Chart for Sales Activity
+        const ctx = document.getElementById('salesActivityChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'],
+                datasets: [
+                    {
+                        label: 'Purple Series',
+                        data: [20, 30, 55, 35, 32, 20, 30, 58, 75, 55, 52, 90, 45, 60],
+                        backgroundColor: '#705ec8',
+                        borderRadius: 2,
+                        barThickness: 6
+                    },
+                    {
+                        label: 'Cyan Series',
+                        data: [40, 48, 68, 40, 38, 42, 41, 78, 52, 20, 30, 75, 30, 40],
+                        backgroundColor: '#01b8ff',
+                        borderRadius: 2,
+                        barThickness: 6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: true }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { display: false }
+                    },
+                    y: {
+                        min: 0,
+                        max: 100,
+                        grid: { color: '#f8fafc' },
+                        ticks: {
+                            stepSize: 20,
+                            font: { size: 10, family: 'Poppins' },
+                            color: '#9ba2b7'
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+docRoot                   /home/nodeproxy
+vhDomain                  adda.skillinnovex.in
+adminEmails               webmaster@skillinnovex.in
+
+vhssl  {
+    keyFile                 /etc/letsencrypt/live/adda.skillinnovex.in/privkey.pem
+    certFile                /etc/letsencrypt/live/adda.skillinnovex.in/fullchain.pem
+}
+
+context /.well-known/acme-challenge {
+    location                /usr/local/lsws/Example/html/.well-known/acme-challenge
+    allowBrowse             1
+    rewrite  { enable 0 }
+}
+
+extprocessor addaapi {
+    type                    proxy
+    address                 127.0.0.1:3015
+    maxConns                100
+    pcKeepAliveTimeout      60
+    initTimeout             60
+    retryTimeout            0
+    respBuffer              0
+}
+
+rewrite  {
+    enable                  1
+    autoLoadHtaccess        0
+
+    # Canonical protocol: http -> https
+    RewriteCond %{HTTPS} !=on
+    RewriteRule ^(.*)$ https://adda.skillinnovex.in/$1 [R=301,L]
+
+    # Proxy everything (API, /media, /health, /ready) to the AddaApp Node backend
+    RewriteRule ^(.*)$ http://addaapi/$1 [P,L]
+}

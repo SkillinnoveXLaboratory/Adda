@@ -1,0 +1,39 @@
+# dependencies & builds
+node_modules/
+dist/
+build/
+.expo/
+web-build/
+android/
+ios/
+*.apk
+*.aab
+coverage/
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+credentials.json
+google-services.json
+
+# runtime data
+Backend/uploads/
+Backend/logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# local QA / test output
+dist-web/
+qa-screenshots/
+test-results/
+playwright-report/
+.e2e-state.json
+.vite-dev.log
+dist-apk/
+
+# local backups (e.g. Adda_App's old template git history)
+/.backup/

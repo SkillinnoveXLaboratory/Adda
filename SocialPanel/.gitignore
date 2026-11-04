@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+qa-screenshots/
+test-results/
+playwright-report/
+.e2e-state.json
+# These two contain only the public API URL (no secrets) and are part of the build config.
+!.env.development
+!.env.production
+!.env.example
+.env.local
+.env.*.local
+.vite-dev.log

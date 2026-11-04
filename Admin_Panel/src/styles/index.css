@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Values below are copied from template.html ---- */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-family: 'Public Sans', sans-serif;
+    background-color: #f3f5f9;
+    color: #495057;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* Template uses Tailwind v3 preflight; keep form controls inheriting Public Sans. */
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid rgba(37, 99, 235, 0.55);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+}
+
+/* Custom Scrollbar (template) */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.03);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.15) rgba(0, 0, 0, 0.03);
+}
+
+/* Sidebar Dynamic Collapse (template) */
+.sidebar {
+  transition: width 0.3s ease, min-width 0.3s ease, transform 0.25s ease;
+}
+@media (min-width: 1024px) {
+  .sidebar.collapsed {
+    width: 70px !important;
+    min-width: 70px !important;
+  }
+  .sidebar.collapsed .sidebar-text,
+  .sidebar.collapsed .sidebar-arrow,
+  .sidebar.collapsed .sidebar-header-title,
+  .sidebar.collapsed .sidebar-badge {
+    display: none !important;
+  }
+  .sidebar.collapsed .sidebar-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .sidebar.collapsed .sidebar-logo {
+    padding-left: 0;
+    padding-right: 0;
+    justify-content: center;
+  }
+  .sidebar.collapsed .sidebar-section {
+    border-top: 1px solid #2d303e;
+    padding-top: 0.75rem;
+  }
+  .sidebar.collapsed .sidebar-section:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+
+/* Card Gradients (template) */
+.bg-grad-purple {
+  background: linear-gradient(135deg, #2563eb 0%, #60a5fa 100%);
+}
+.bg-grad-green {
+  background: linear-gradient(135deg, #19b159 0%, #2dce89 100%);
+}
+.bg-grad-orange {
+  background: linear-gradient(135deg, #fc5b23 0%, #ff8338 100%);
+}
+.bg-grad-cyan {
+  background: linear-gradient(135deg, #01b8ff 0%, #4bcfff 100%);
+}
+
+/* Public pages: purple brand panel */
+.bg-brand-panel {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.12) 0, rgba(255, 255, 255, 0) 40%),
+    radial-gradient(circle at 85% 85%, rgba(1, 184, 255, 0.25) 0, rgba(1, 184, 255, 0) 45%),
+    linear-gradient(135deg, #1d4ed8 0%, #2563eb 45%, #60a5fa 100%);
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl border border-gray-100 shadow-sm;
+  }
+  .card-title {
+    @apply text-xs font-bold text-gray-500 uppercase tracking-wider;
+  }
+  .form-input {
+    @apply block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 placeholder-gray-400 transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400;
+  }
+  .form-input-error {
+    @apply border-rose-300 focus:border-rose-400 focus:ring-rose-200;
+  }
+  .form-label {
+    @apply mb-1.5 block text-[11px] font-semibold text-gray-600;
+  }
+  .th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-gray-100 bg-gray-50 px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider text-gray-500;
+  }
+  .td {
+    @apply whitespace-nowrap border-b border-gray-50 px-4 py-3 text-xs text-gray-600;
+  }
+  .link {
+    @apply font-semibold text-brand hover:text-brand-dark hover:underline;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eef0f5 25%, #f6f7fb 37%, #eef0f5 63%);
+  background-size: 400% 100%;
+  animation: skeleton 1.4s ease infinite;
+}
+@keyframes skeleton {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Metric cards: drop the decorative sparkline/icon slot when the card is narrow so text never wraps awkwardly. */
+.metric-card {
+  container-type: inline-size;
+}
+@container (max-width: 250px) {
+  .metric-slot {
+    display: none !important;
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "NIVASA",
+    "slug": "addaapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/App_launch_Icon_installer.png",
+    "scheme": "addaapp",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#f4f6f9",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.nivasa.app"
+    },
+    "android": {
+      "package": "com.nivasa.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#032143",
+        "foregroundImage": "./assets/images/App_launch_Icon_installer.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/logo-mark.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "NIVASA needs access to your photos so you can attach pictures to complaints, posts and listings.",
+          "cameraPermission": "NIVASA needs camera access so you can photograph an issue for a complaint or a listing.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/icon-nivasa.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#032143"
+        }
+      ],
+      "./plugins/withReleaseSigning"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

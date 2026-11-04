@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paces - eCommerce Admin Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js for Donut and Line charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Public Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        sidebar: {
+                            bg: '#1e1f29',
+                            active: '#272936',
+                            text: '#98a6ad',
+                            hover: '#2d303e',
+                            title: '#50586c'
+                        },
+                        brand: {
+                            blue: '#2563eb',
+                            lightBg: '#f3f5f9',
+                            cardBg: '#ffffff'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Public Sans', sans-serif;
+            background-color: #f3f5f9;
+            color: #495057;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.05);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+
+        /* Sidebar Transition */
+        .sidebar {
+            transition: width 0.3s ease, min-width 0.3s ease;
+        }
+        
+        .sidebar.collapsed {
+            width: 70px !important;
+            min-width: 70px !important;
+        }
+
+        .sidebar.collapsed .sidebar-text,
+        .sidebar.collapsed .sidebar-arrow,
+        .sidebar.collapsed .sidebar-header-title {
+            display: none !important;
+        }
+
+        .sidebar.collapsed .sidebar-item {
+            justify-content: center;
+            padding-left: 0;
+            padding-right: 0;
+        }
+
+        .sidebar.collapsed .submenu {
+            display: none !important;
+        }
+
+        /* Range Track Visualizer */
+        .range-bar {
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 2px;
+            position: relative;
+        }
+        .range-fill {
+            height: 100%;
+            background: #2563eb;
+            border-radius: 2px;
+            position: absolute;
+        }
+        .range-dot {
+            width: 10px;
+            height: 10px;
+            background: #2563eb;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden bg-[#f3f5f9]">
+
+    <!-- ================= SIDEBAR ================= -->
+    <aside id="sidebar" class="sidebar w-64 bg-sidebar-bg text-[#98a6ad] flex flex-col flex-shrink-0 z-30 select-none">
+        <!-- Logo & Header -->
+        <div class="h-16 flex items-center justify-between px-5 border-b border-[#2d303e]/40">
+            <div class="flex items-center space-x-3 cursor-pointer overflow-hidden">
+                <div class="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+                    <i class="fa-solid fa-play text-xs rotate-[-90deg]"></i>
+                </div>
+                <span class="sidebar-text text-white font-bold text-xl tracking-tight">Paces</span>
+            </div>
+            <button id="toggleSidebar" class="text-[#98a6ad] hover:text-white focus:outline-none p-1 rounded">
+                <i class="fa-regular fa-circle-dot text-sm"></i>
+            </button>
+        </div>
+
+        <!-- Navigation Menu -->
+        <div class="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+            <!-- MAIN SECTION -->
+            <div>
+                <p class="sidebar-header-title text-[11px] font-bold text-sidebar-title uppercase tracking-wider px-3 mb-2">MAIN</p>
+                <div class="space-y-1">
+                    <!-- Dashboards Parent -->
+                    <div class="sidebar-menu-group">
+                        <button onclick="toggleSubmenu('dashboards-sub', 'dashboards-arrow')" class="sidebar-item w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-white font-medium hover:bg-sidebar-hover transition-colors">
+                            <div class="flex items-center space-x-3">
+                                <i class="fa-solid fa-gauge-high text-sm w-5 text-center"></i>
+                                <span class="sidebar-text text-sm">Dashboards</span>
+                            </div>
+                            <i id="dashboards-arrow" class="sidebar-arrow fa-solid fa-chevron-down text-xs transition-transform transform rotate-180"></i>
+                        </button>
+                        <!-- Submenu -->
+                        <div id="dashboards-sub" class="submenu pl-8 pr-2 pt-1 space-y-1">
+                            <a href="#" class="block px-3 py-2 text-sm text-white font-semibold rounded-md bg-sidebar-active/60">Ecommerce</a>
+                            <a href="#" class="block px-3 py-2 text-sm text-[#98a6ad] hover:text-white hover:bg-sidebar-hover rounded-md transition-colors">Analytics</a>
+                            <a href="#" class="block px-3 py-2 text-sm text-[#98a6ad] hover:text-white hover:bg-sidebar-hover rounded-md transition-colors">CRM</a>
+                            <a href="#" class="block px-3 py-2 text-sm text-[#98a6ad] hover:text-white hover:bg-sidebar-hover rounded-md transition-colors">Finance</a>
+                            <a href="#" class="block px-3 py-2 text-sm text-[#98a6ad] hover:text-white hover:bg-sidebar-hover rounded-md transition-colors">Projects</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- APPS SECTION -->
+            <div>
+                <p class="sidebar-header-title text-[11px] font-bold text-sidebar-title uppercase tracking-wider px-3 mb-2">APPS</p>
+                <div class="space-y-1">
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-bag-shopping text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Ecommerce</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-regular fa-comment-dots text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Chat</span>
+                        </div>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-briefcase text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Projects</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-list-check text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Tasks</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-regular fa-file-lines text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Invoice</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-heart-pulse text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">CRM</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-users text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Users</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                    <a href="#" class="sidebar-item flex items-center justify-between px-3 py-2.5 rounded-lg text-[#98a6ad] hover:text-white hover:bg-sidebar-hover transition-colors">
+                        <div class="flex items-center space-x-3">
+                            <i class="fa-solid fa-wallet text-sm w-5 text-center"></i>
+                            <span class="sidebar-text text-sm">Finance</span>
+                        </div>
+                        <i class="sidebar-arrow fa-solid fa-chevron-down text-xs"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ================= MAIN CONTENT WRAPPER ================= -->
+    <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+        
+        <!-- HEADER NAVBAR -->
+        <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 z-20">
+            <!-- Left Header Options -->
+            <div class="flex items-center space-x-6">
+                <!-- Search Input -->
+                <div class="relative w-64 md:w-72">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-gray-400">
+                        <i class="fa-solid fa-magnifying-glass text-sm"></i>
+                    </span>
+                    <input type="text" class="w-full py-1.5 pl-10 pr-4 text-sm bg-slate-50 text-gray-700 border border-gray-200 rounded-full focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white placeholder-gray-400" placeholder="Quick Search...">
+                </div>
+
+                <!-- Nav Dropdowns -->
+                <div class="hidden lg:flex items-center space-x-5 text-sm font-medium text-gray-600">
+                    <button class="flex items-center space-x-1.5 hover:text-blue-600 transition-colors">
+                        <span>Mega Menu</span>
+                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                    </button>
+                    <button class="flex items-center space-x-1.5 hover:text-blue-600 transition-colors">
+                        <span>Apps</span>
+                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Header Icons & Profile -->
+            <div class="flex items-center space-x-2 md:space-x-4 text-gray-600">
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors">
+                    <i class="fa-regular fa-sun text-base"></i>
+                </button>
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors">
+                    <i class="fa-solid fa-border-all text-base"></i>
+                </button>
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors relative">
+                    <i class="fa-regular fa-bell text-base"></i>
+                    <span class="absolute top-1 right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center border-2 border-white">5</span>
+                </button>
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors hidden sm:block">
+                    <i class="fa-solid fa-expand text-base"></i>
+                </button>
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors hidden sm:block">
+                    <i class="fa-solid fa-palette text-base"></i>
+                </button>
+                <button class="p-2 hover:bg-gray-100 rounded-full text-gray-500 hover:text-gray-700 transition-colors">
+                    <i class="fa-spin fa-gear text-base"></i>
+                </button>
+                
+                <!-- Language Flag -->
+                <div class="flex items-center space-x-1.5 px-2 py-1 cursor-pointer hover:bg-gray-100 rounded-md">
+                    <img src="https://flagcdn.com/w20/us.png" class="w-4 h-3 rounded-sm" alt="US Flag">
+                    <span class="text-xs font-semibold text-gray-700">EN</span>
+                </div>
+
+                <!-- User Profile -->
+                <div class="flex items-center space-x-3 pl-2 border-l border-gray-200 cursor-pointer">
+                    <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80" class="w-9 h-9 rounded-full object-cover border border-gray-200" alt="David Dev">
+                    <div class="hidden md:block text-left leading-tight">
+                        <p class="text-xs font-bold text-gray-800">David Dev</p>
+                        <p class="text-[11px] text-gray-400">Admin Head</p>
+                    </div>
+                    <i class="fa-solid fa-chevron-down text-[10px] text-gray-400 hidden md:block"></i>
+                </div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD BODY CONTAINER -->
+        <main class="flex-1 overflow-y-auto p-6">
+            
+            <!-- PAGE TITLE & BREADCRUMBS -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6">
+                <h1 class="text-xl font-bold text-gray-800 tracking-tight">eCommerce</h1>
+                <div class="text-xs text-gray-500 flex items-center space-x-2 mt-1 sm:mt-0">
+                    <span class="hover:text-blue-600 cursor-pointer">Paces</span>
+                    <i class="fa-solid fa-chevron-right text-[9px] text-gray-400"></i>
+                    <span class="hover:text-blue-600 cursor-pointer">Dashboard</span>
+                    <i class="fa-solid fa-chevron-right text-[9px] text-gray-400"></i>
+                    <span class="text-gray-400">eCommerce</span>
+                </div>
+            </div>
+
+            <!-- DASHBOARD GRID -->
+            <div class="grid grid-cols-12 gap-6">
+
+                <!-- TOP ROW LEFT STAT CARDS (COL SPAN 7) -->
+                <div class="col-span-12 xl:col-span-7 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    
+                    <!-- 1. GOOD DAY CARD -->
+                    <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between relative overflow-hidden">
+                        <div>
+                            <span class="text-[11px] font-bold text-gray-400 tracking-wider uppercase">GOOD DAY,</span>
+                            <h2 class="text-xl font-bold text-gray-800 mt-0.5">David Dev!</h2>
+                        </div>
+
+                        <!-- Vector Illustration Placeholder Mockup -->
+                        <div class="my-4 flex items-center justify-end pr-2">
+                            <div class="relative w-28 h-20 bg-indigo-50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-mobile-screen-button text-indigo-500 text-4xl"></i>
+                                <i class="fa-solid fa-user-check text-indigo-700 text-lg absolute -right-1 -bottom-1 bg-white p-1 rounded-full shadow"></i>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center space-x-4 text-xs font-medium text-gray-500 pt-2 border-t border-gray-100">
+                            <div class="flex items-center space-x-1.5">
+                                <i class="fa-regular fa-calendar text-gray-400"></i>
+                                <span>Oct 22, 2026</span>
+                            </div>
+                            <div class="flex items-center space-x-1.5">
+                                <i class="fa-regular fa-clock text-gray-400"></i>
+                                <span>7:47:12 PM</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. ORDERS CARD -->
+                    <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-gray-400 tracking-wider uppercase">ORDERS</span>
+                            <div class="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center text-base">
+                                <i class="fa-solid fa-cart-shopping"></i>
+                            </div>
+                        </div>
+                        <div class="my-3">
+                            <h3 class="text-2xl font-bold text-gray-800">9,754</h3>
+                        </div>
+                        <div class="text-xs font-medium">
+                            <span class="text-red-500 font-semibold"><i class="fa-solid fa-arrow-down text-[10px]"></i> 1.89%</span>
+                            <span class="text-gray-400 ml-1">Since last month</span>
+                        </div>
+                    </div>
+
+                    <!-- 3. REVENUE CARD -->
+                    <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-gray-400 tracking-wider uppercase">REVENUE</span>
+                            <div class="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center text-base">
+                                <i class="fa-solid fa-piggy-bank"></i>
+                            </div>
+                        </div>
+                        <div class="my-3">
+                            <h3 class="text-2xl font-bold text-gray-800">$75.21k</h3>
+                        </div>
+                        <div class="text-xs font-medium">
+                            <span class="text-red-500 font-semibold"><i class="fa-solid fa-arrow-down text-[10px]"></i> 5.23%</span>
+                            <span class="text-gray-400 ml-1">Since last month</span>
+                        </div>
+                    </div>
+
+                    <!-- 4. GROWTH CARD -->
+                    <div class="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-gray-400 tracking-wider uppercase">GROWTH</span>
+                            <div class="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center text-base">
+                                <i class="fa-solid fa-arrow-trend-up"></i>
+                            </div>
+                        </div>
+                        <div class="my-3">
+                            <h3 class="text-2xl font-bold text-gray-800">+ 25.08%</h3>
+                        </div>
+                        <div class="text-xs font-medium">
+                            <span class="text-emerald-500 font-semibold"><i class="fa-solid fa-arrow-up text-[10px]"></i> 4.87%</span>
+                            <span class="text-gray-400 ml-1">Since last month</span>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- STORE PERFORMANCE ANALYTICS (COL SPAN 5 - DONUT) -->
+                <div class="col-span-12 md:col-span-6 xl:col-span-5 bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-sm font-bold text-gray-800">Store Performance Analytics</h2>
+                        <button class="px-2.5 py-1 text-xs text-gray-500 border border-gray-200 rounded hover:bg-gray-50 flex items-center space-x-1.5 transition-colors">
+                            <i class="fa-solid fa-rotate text-[10px]"></i>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
+
+                    <!-- Chart Container -->
+                    <div class="relative flex items-center justify-center my-4 h-48">
+                        <canvas id="storeAnalyticsChart"></canvas>
+                        <!-- Donut Inner Text -->
+                        <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                            <span class="text-xs text-gray-400 font-medium">Total</span>
+                            <span class="text-xl font-bold text-gray-800">140</span>
+                        </div>
+                    </div>
+
+                    <!-- Status Badge Footer -->
+                    <div class="flex justify-center border-t border-dashed border-gray-200 pt-3">
+                        <span class="px-3 py-1 bg-rose-50 text-rose-500 rounded-full text-xs font-bold tracking-wide flex items-center space-x-1">
+                            <i class="fa-solid fa-star text-[10px]"></i>
+                            <span>POOR SALES</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- WEEKLY PERFORMANCE INSIGHTS (COL SPAN 12 - HORIZONTAL RANGE CHART) -->
+                <div class="col-span-12 bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-sm font-bold text-gray-800">Weekly Performance Insights</h2>
+                        <button class="text-gray-400 hover:text-gray-600">
+                            <i class="fa-solid fa-ellipsis-vertical text-sm"></i>
+                        </button>
+                    </div>
+
+                    <!-- Custom Range Bars Grid -->
+                    <div class="space-y-4 py-2">
+                        <!-- Monday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Mon</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 20%; width: 15%;"></div>
+                                    <div class="range-dot" style="left: 20%;"></div>
+                                    <div class="range-dot" style="left: 35%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tuesday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Tue</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 25%; width: 8%;"></div>
+                                    <div class="range-dot" style="left: 25%;"></div>
+                                    <div class="range-dot" style="left: 33%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wednesday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Wed</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 22%; width: 68%;"></div>
+                                    <div class="range-dot" style="left: 22%;"></div>
+                                    <div class="range-dot" style="left: 90%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Thursday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Thu</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 23%; width: 18%;"></div>
+                                    <div class="range-dot" style="left: 23%;"></div>
+                                    <div class="range-dot" style="left: 41%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Friday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Fri</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 30%; width: 6%;"></div>
+                                    <div class="range-dot" style="left: 30%;"></div>
+                                    <div class="range-dot" style="left: 36%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Saturday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Sat</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 42%; width: 22%;"></div>
+                                    <div class="range-dot" style="left: 42%;"></div>
+                                    <div class="range-dot" style="left: 64%;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sunday -->
+                        <div class="grid grid-cols-12 items-center text-xs">
+                            <span class="col-span-1 font-medium text-gray-400">Sun</span>
+                            <div class="col-span-11 relative">
+                                <div class="range-bar w-full">
+                                    <div class="range-fill" style="left: 35%; width: 18%;"></div>
+                                    <div class="range-dot" style="left: 35%;"></div>
+                                    <div class="range-dot" style="left: 53%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- X-Axis Labels -->
+                    <div class="grid grid-cols-12 pt-3 border-t border-dashed border-gray-200 text-xs text-gray-400 font-medium">
+                        <div class="col-span-1"></div>
+                        <div class="col-span-11 flex justify-between px-1">
+                            <span>20</span>
+                            <span>30</span>
+                            <span>40</span>
+                            <span>50</span>
+                            <span>60</span>
+                            <span>70</span>
+                            <span>80</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BOTTOM ROW LEFT: SALES REPORT (COL SPAN 7) -->
+                <div class="col-span-12 xl:col-span-7 bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <!-- Header & Tabs -->
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-3">
+                            <div class="flex items-center space-x-2">
+                                <h2 class="text-sm font-bold text-gray-800">Sales Report</h2>
+                                <span class="text-xs text-gray-400 font-normal">(25822 Orders)</span>
+                            </div>
+                            <div class="flex items-center space-x-6 text-xs font-semibold text-gray-500 mt-2 sm:mt-0">
+                                <button class="hover:text-blue-600">Today</button>
+                                <button class="text-blue-600 border-b-2 border-blue-600 pb-1.5 font-bold">Monthly</button>
+                                <button class="hover:text-blue-600">Annual</button>
+                            </div>
+                        </div>
+
+                        <!-- Stat Banner -->
+                        <div class="grid grid-cols-3 gap-4 my-4">
+                            <div>
+                                <span class="text-xs text-gray-400">Revenue</span>
+                                <div class="flex items-center space-x-1.5 mt-1">
+                                    <i class="fa-regular fa-square-check text-emerald-500 text-xs"></i>
+                                    <span class="text-base font-bold text-gray-800">$78,224.68</span>
+                                </div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-gray-400">Orders</span>
+                                <div class="flex items-center space-x-1.5 mt-1">
+                                    <i class="fa-solid fa-bag-shopping text-teal-500 text-xs"></i>
+                                    <span class="text-base font-bold text-gray-800">8,541</span>
+                                </div>
+                            </div>
+                            <div>
+                                <span class="text-xs text-gray-400">Growth Rate</span>
+                                <div class="flex items-center space-x-1.5 mt-1">
+                                    <i class="fa-solid fa-arrow-trend-up text-emerald-500 text-xs"></i>
+                                    <span class="text-base font-bold text-gray-800">25.30%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sales Report Line Chart -->
+                        <div class="h-44 relative mt-2">
+                            <p class="text-xs font-semibold text-gray-600 mb-1">Today's Earning: <span class="font-bold text-gray-800">$8,975.30</span></p>
+                            <canvas id="salesReportChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BOTTOM ROW RIGHT: TOP SELLING PRODUCTS (COL SPAN 5) -->
+                <div class="col-span-12 xl:col-span-5 bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <!-- Header & Action Buttons -->
+                        <div class="flex items-center justify-between pb-4 border-b border-gray-100">
+                            <h2 class="text-sm font-bold text-gray-800">Top Selling Products</h2>
+                            <div class="flex items-center space-x-2">
+                                <button class="px-2.5 py-1 text-xs text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded flex items-center space-x-1">
+                                    <i class="fa-solid fa-arrow-up-from-bracket text-[10px]"></i>
+                                    <span>Export</span>
+                                </button>
+                                <button class="px-2.5 py-1 text-xs text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded flex items-center space-x-1">
+                                    <i class="fa-solid fa-arrow-down-to-bracket text-[10px]"></i>
+                                    <span>Import</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Product List -->
+                        <div class="divide-y divide-gray-100">
+                            <!-- Product 1 -->
+                            <div class="py-3.5 flex items-center justify-between">
+                                <div class="flex items-center space-x-3">
+                                    <img src="https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=100&auto=format&fit=crop&q=80" class="w-10 h-10 rounded-md object-cover border border-gray-200 flex-shrink-0" alt="Sofa">
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800 hover:text-blue-600 cursor-pointer">Modern Fabric Sofa Set</p>
+                                        <p class="text-[11px] text-gray-400">By: Homeluxe</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-4 text-right">
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">$499.00</p>
+                                        <p class="text-[10px] text-gray-400">Price</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">34</p>
+                                        <p class="text-[10px] text-gray-400">Quantity</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">$16,966.00</p>
+                                        <p class="text-[10px] text-gray-400">Amount</p>
+                                    </div>
+                                    <span class="px-2 py-0.5 text-[10px] font-bold text-amber-600 bg-amber-50 rounded-full border border-amber-200/60">Low Stock</span>
+                                </div>
+                            </div>
+
+                            <!-- Product 2 -->
+                            <div class="py-3.5 flex items-center justify-between">
+                                <div class="flex items-center space-x-3">
+                                    <img src="https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?w=100&auto=format&fit=crop&q=80" class="w-10 h-10 rounded-md object-cover border border-gray-200 flex-shrink-0" alt="Sectional Sofa">
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800 hover:text-blue-600 cursor-pointer">L-Shaped Sectional Sofa</p>
+                                        <p class="text-[11px] text-gray-400">By: ComfortHub</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-4 text-right">
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">$899.00</p>
+                                        <p class="text-[10px] text-gray-400">Price</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">21</p>
+                                        <p class="text-[10px] text-gray-400">Quantity</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-bold text-gray-800">$18,879.00</p>
+                                        <p class="text-[10px] text-gray-400">Amount</p>
+                                    </div>
+                                    <span class="px-2 py-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 rounded-full border border-emerald-200/60">In Stock</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ================= JAVASCRIPT LOGIC ================= -->
+    <script>
+        // 1. Sidebar Toggle Logic
+        const sidebar = document.getElementById('sidebar');
+        const toggleBtn = document.getElementById('toggleSidebar');
+
+        toggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+        });
+
+        // 2. Submenu Expand/Collapse Function
+        function toggleSubmenu(id, arrowId) {
+            const submenu = document.getElementById(id);
+            const arrow = document.getElementById(arrowId);
+            if (submenu.classList.contains('hidden')) {
+                submenu.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                submenu.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        // 3. Initialize Donut Chart (Store Performance Analytics)
+        const donutCtx = document.getElementById('storeAnalyticsChart').getContext('2d');
+        new Chart(donutCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Sales', 'Remaining'],
+                datasets: [{
+                    data: [80, 60],
+                    backgroundColor: ['#2563eb', '#f59e0b'],
+                    borderWidth: 0,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                cutout: '78%',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: true }
+                }
+            }
+        });
+
+        // 4. Initialize Sales Report Chart (Area Line Chart)
+        const lineCtx = document.getElementById('salesReportChart').getContext('2d');
+        new Chart(lineCtx, {
+            type: 'line',
+            data: {
+                labels: ['100', '200', '300', '400', '500', '600'],
+                datasets: [{
+                    label: 'Earnings',
+                    data: [20, 45, 30, 75, 60, 90],
+                    borderColor: '#2563eb',
+                    borderWidth: 2,
+                    fill: true,
+                    backgroundColor: 'rgba(37, 99, 235, 0.05)',
+                    tension: 0.4,
+                    pointRadius: 3,
+                    pointBackgroundColor: '#2563eb'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { font: { size: 10 }, color: '#94a3b8' }
+                    },
+                    y: {
+                        grid: { color: '#f1f5f9' },
+                        ticks: { font: { size: 10 }, color: '#94a3b8' }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
