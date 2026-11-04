@@ -46,7 +46,7 @@ jobs:
           cache: npm
           cache-dependency-path: Adda_App/package-lock.json
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -63,10 +63,22 @@ jobs:
           ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/nivasa-release.jks"
           echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> "$GITHUB_ENV"
           # Tolerate CR/LF/spaces that Windows clipboards add to the pasted base64.
-          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > "$ANDROID_KEYSTORE_PATH"
-          # Fails here (not deep inside Gradle) if the password or alias is wrong.
-          keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" > /dev/null
-          echo "Keystore OK (alias $ANDROID_KEY_ALIAS)"
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > "$ANDROID_KEYSTORE_PATH" 2> decode.err; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 ($(cat decode.err)). Re-copy it with [Convert]::ToBase64String(...)."
+            exit 1
+          fi
+          echo "Decoded keystore: $(stat -c %s "$ANDROID_KEYSTORE_PATH") bytes, header $(head -c 4 "$ANDROID_KEYSTORE_PATH" | od -An -tx1 | tr -d ' ')"
+          # Fail here (not deep inside Gradle) with a clear reason if the password or alias is wrong.
+          if ! keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" > store.txt 2>&1; then
+            echo "::error::Cannot open the keystore with ANDROID_KEYSTORE_PASSWORD: $(grep -m1 -i 'error' store.txt)"
+            exit 1
+          fi
+          if ! keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::Alias from ANDROID_KEY_ALIAS is not in the keystore. Aliases found: $(grep -E 'PrivateKeyEntry' store.txt | cut -d, -f1 | paste -sd ' ')"
+            exit 1
+          fi
+          rm -f store.txt decode.err
+          echo "Keystore OK"
 
       - name: Install dependencies
         run: npm ci
