@@ -57,9 +57,9 @@ export default function Join() {
         {(data) => (
           <>
             <Card style={{ flexDirection: 'row', gap: 12, alignItems: 'center', backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }}>
-              <Ionicons name="business" size={26} color="#0b1a30" />
+              <Ionicons name="business" size={26} color="#07162c" />
               <View style={{ flex: 1 }}>
-                <T weight="extrabold" size={16} color="#0b1a30">
+                <T weight="extrabold" size={16} color="#07162c">
                   {data.society.name}
                 </T>
                 <T size={12.5} color="#334155">

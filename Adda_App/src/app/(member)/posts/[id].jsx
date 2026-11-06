@@ -87,7 +87,7 @@ export default function PostDetail() {
               accessibilityLabel="Comment"
               style={{ flex: 1, maxHeight: 110, fontFamily: fonts.medium, fontSize: 15, color: colors.text, paddingVertical: 8, outlineStyle: 'none' }}
             />
-            <Pressable onPress={send} disabled={sending || !comment.trim()} accessibilityRole="button" accessibilityLabel="Send comment" style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: comment.trim() ? '#0b1a30' : '#cbd5e1', alignItems: 'center', justifyContent: 'center' }}>
+            <Pressable onPress={send} disabled={sending || !comment.trim()} accessibilityRole="button" accessibilityLabel="Send comment" style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: comment.trim() ? '#07162c' : '#cbd5e1', alignItems: 'center', justifyContent: 'center' }}>
               <Ionicons name="send" size={18} color={colors.white} />
             </Pressable>
           </View>

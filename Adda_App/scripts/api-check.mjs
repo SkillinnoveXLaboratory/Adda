@@ -7,6 +7,7 @@
  * Creates its own society, staff and residents (use a development/staging database).
  */
 import { superAdminLogin } from './sa-login.mjs';
+import { Buffer } from 'node:buffer';
 
 const [BASE = 'http://localhost:3013', SA_EMAIL, SA_PASSWORD] = process.argv.slice(2);
 if (!SA_EMAIL || !SA_PASSWORD) {
@@ -258,31 +259,56 @@ check('service request list shows office note + category', srl.body.items[0]?.st
 check('cancel service request', (await call('POST', `/resident/service-requests/${sr.body._id}/cancel`, { token: R1 })).body?.status === 'cancelled');
 
 // ---------------------------------------------------------------- listings
-section('Property & marketplace');
-const fd3 = new FormData();
-fd3.append('file', new Blob([PNG], { type: 'image/png' }), 'flat.png');
-fd3.append('purpose', 'property');
-const up3 = await call('POST', '/uploads', { token: R1, form: fd3 });
-const prop = await call('POST', '/properties', { token: R1, body: { listingType: 'rent', propertyType: 'apartment', title: '2BHK Apartment for Rent', description: 'Sunny flat near the park.', pricePaise: 1500000, bedrooms: 2, bathrooms: 2, areaSqft: 980, furnishing: 'semi_furnished', locality: 'Salt Lake', city: 'Kolkata', contactPhone: P1, whatsappAvailable: true, photos: [up3.body._id], linkToMySociety: true } });
-check('create property → pending review', prop.status === 201 && prop.body.moderationStatus === 'pending', prop.body);
-const mine = await call('GET', '/properties/mine?limit=50', { token: R1 });
-check('my properties includes it', mine.body.items?.some((p) => p._id === prop.body._id && p.mine));
+section('Property & marketplace (properties come from KYC-verified vendors)');
+const fileUpload = async (token, purpose) => {
+  const f = new FormData();
+  f.append('file', new Blob([PNG], { type: 'image/png' }), `${purpose}.png`);
+  f.append('purpose', purpose);
+  return call('POST', '/uploads', { token, form: f });
+};
+// Valid test Aadhaar (Verhoeff check digit).
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const aadhaar = (b) => b + [0, 4, 3, 2, 1, 5, 6, 7, 8, 9][b.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
+async function verifiedVendor(n, name) {
+  const r = await call('POST', '/auth/resident/register', { body: { name, phone: phone(n), password: 'Provider12345', accountType: 'vendor' } });
+  const T = r.body.accessToken;
+  const d = [];
+  for (let i = 0; i < 3; i += 1) d.push((await fileUpload(T, 'kyc')).body?._id);
+  const k = await call('PUT', '/vendor/kyc', { token: T, body: { businessName: name, city: 'Kolkata', pan: `ABCDE${stamp.slice(-4)}F`, aadhaar: aadhaar(`2${stamp}${String(n).padStart(4, '0')}`), bankAccountHolder: name, bankAccountNumber: `50100${stamp}`, bankIfsc: 'HDFC0001234', panPhoto: d[0], aadhaarFront: d[1], aadhaarBack: d[2], consent: true } });
+  const ok = await call('POST', `/platform/vendors/${r.body.user._id}/kyc`, { token: SA, body: { decision: 'approved' } });
+  return { token: T, id: r.body.user._id, registered: r.status, kyc: k.status, approved: ok.status };
+}
+const PV = await verifiedVendor(4, 'Salt Lake Homes');
+check('vendor registers, submits KYC, owner approves', PV.registered === 201 && PV.kyc === 200 && PV.approved === 200, PV);
+const VEN = PV.token;
+const P4 = phone(4);
+const propBody = { listingType: 'rent', propertyType: 'apartment', title: '2BHK Apartment for Rent', description: 'Sunny flat near the park.', pricePaise: 1500000, bedrooms: 2, bathrooms: 2, areaSqft: 980, furnishing: 'semi_furnished', locality: 'Salt Lake', city: 'Kolkata', contactPhone: P4, whatsappAvailable: true };
+const memberProp = await call('POST', '/properties', { token: R1, body: propBody });
+check('member cannot list a property → 403 VENDOR_ONLY', memberProp.status === 403 && memberProp.body?.error?.code === 'VENDOR_ONLY', memberProp.body);
+check('member cannot upload property photos → 403', (await fileUpload(R1, 'property')).status === 403);
+const up3 = await fileUpload(VEN, 'property');
+const prop = await call('POST', '/properties', { token: VEN, body: { ...propBody, photos: [up3.body._id] } });
+check('vendor creates property → pending platform review, no society', prop.status === 201 && prop.body.moderationStatus === 'pending' && !prop.body.society, prop.body);
+const mine = await call('GET', '/properties/mine?limit=50', { token: VEN });
+check('vendor "my properties" includes it', mine.body.items?.some((p) => p._id === prop.body._id && p.mine));
 const browse1 = await call('GET', '/properties?limit=50', { token: R2 });
 check('pending listing hidden from others', !browse1.body.items.some((p) => p._id === prop.body._id));
-check('society admin approves listing', (await call('POST', `/society/listings/property/${prop.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } })).status === 200);
+check('society admin cannot moderate a vendor listing (404)', (await call('POST', `/society/listings/property/${prop.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } })).status === 404);
+check('platform owner approves listing', (await call('POST', `/platform/listings/property/${prop.body._id}/moderate`, { token: SA, body: { decision: 'approved' } })).status === 200);
 const browse2 = await call('GET', '/properties?listingType=rent&city=Kolkata&bedrooms=2&maxPrice=2000000&limit=50', { token: R2 });
 check('approved listing visible with filters', browse2.body.items.some((p) => p._id === prop.body._id && p.photos?.[0]?.url && p.mine === false));
 const pdet = await call('GET', `/properties/${prop.body._id}`, { token: R2 });
-check('property detail with contact', pdet.status === 200 && pdet.body.contactPhone === P1 && pdet.body.society?.name);
+check('property detail with contact', pdet.status === 200 && pdet.body.contactPhone === P4 && pdet.body.postedBy === 'Salt Lake Homes', pdet.body);
 check('non-owner cannot edit (404)', (await call('PATCH', `/properties/${prop.body._id}`, { token: R2, body: { pricePaise: 1 } })).status === 404);
-const avail = await call('PATCH', `/properties/${prop.body._id}`, { token: R1, body: { availability: 'rented' } });
+const avail = await call('PATCH', `/properties/${prop.body._id}`, { token: VEN, body: { availability: 'rented' } });
 check('owner marks rented (stays approved)', avail.status === 200 && avail.body.availability === 'rented' && avail.body.moderationStatus === 'approved', avail.body);
-check('status change keeps photos, contact settings and society', avail.body.photos?.length === 1 && avail.body.whatsappAvailable === true && !!avail.body.society, avail.body);
+check('status change keeps photos and contact settings', avail.body.photos?.length === 1 && avail.body.whatsappAvailable === true, avail.body);
 const editF = await call('PATCH', `/society/facilities/${fac.body._id}`, { token: ADM, body: { name: 'Community Hall A' } });
 check('facility rename keeps fee and hours (no default overwrite)', editF.body.feePaise === 120000 && editF.body.openTime === '09:00' && editF.body.rules, editF.body);
 const mcats = await call('GET', '/marketplace/categories', { token: R1 });
 const item = await call('POST', '/marketplace', { token: R2, body: { categoryId: mcats.body.items[0]._id, title: 'Study Table', pricePaise: 250000, condition: 'good', negotiable: true, contactPhone: P2, visibility: 'public' } });
-check('create marketplace item', item.status === 201, item.body);
+check('members still sell items to neighbours (marketplace)', item.status === 201, item.body);
 await call('POST', `/society/listings/marketplace/${item.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } });
 const mk = await call('GET', `/marketplace?categoryId=${mcats.body.items[0]._id}&limit=50`, { token: R1 });
 check('marketplace browse by category', mk.body.items.some((i) => i._id === item.body._id && i.category?.name));
@@ -291,86 +317,85 @@ check('seller marks sold (keeps condition/negotiable)', sold.status === 200 && s
 check('seller deletes listing', (await call('DELETE', `/marketplace/${item.body._id}`, { token: R2 })).status === 200);
 
 // ---------------------------------------------------------------- service offers
-section('Service offers (residents & local providers)');
+section('Service offers (KYC-verified vendors) & bookings');
+const PV3 = await verifiedVendor(3, 'Ravi Electric Works');
+check('second vendor verified', PV3.approved === 200, PV3);
+const R3 = PV3.token;
 const P3 = phone(3);
-const r3 = await call('POST', '/auth/resident/register', { body: { name: 'Ravi Electric Works', phone: P3, password: 'Provider12345' } });
-check('local provider (no society) can sign up', r3.status === 201, r3.body);
-const R3 = r3.body.accessToken;
-const ocats = await call('GET', '/service-offers/categories', { token: R1 });
-check('offer categories (platform + my society)', ocats.status === 200 && ocats.body.items.length > 0, ocats.body);
+const ocats = await call('GET', '/service-offers/categories', { token: VEN });
+check('offer categories (platform)', ocats.status === 200 && ocats.body.items.length > 0, ocats.body);
 const catId = ocats.body.items[0]._id;
-const offerBody = { categoryId: catId, title: 'Leak repair & bathroom fittings', description: 'Taps, flush tanks, pipe leaks.', priceType: 'starting_from', pricePaise: 29900, experienceYears: 8, serviceArea: 'Salt Lake, New Town', city: 'Kolkata', availabilityNote: 'Mon–Sat, 9 AM–7 PM', contactPhone: P1, whatsappAvailable: true };
+const offerBody = { categoryId: catId, title: 'Leak repair & bathroom fittings', description: 'Taps, flush tanks, pipe leaks.', priceType: 'starting_from', pricePaise: 29900, experienceYears: 8, serviceArea: 'Salt Lake, New Town', city: 'Kolkata', availabilityNote: 'Mon–Sat, 9 AM–7 PM', contactPhone: P4, whatsappAvailable: true };
 check('no auth → 401', (await call('GET', '/service-offers')).status === 401);
-check('price required unless "on request" → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, pricePaise: undefined } })).status === 400);
-check('unknown field (society) rejected → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, society: societyId } })).status === 400);
-check('mass-assign moderationStatus rejected → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, moderationStatus: 'approved' } })).status === 400);
-check('invalid contact phone → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, contactPhone: '12345' } })).status === 400);
-check('price over ₹10 lakh → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, pricePaise: 10_00_000_01 } })).status === 400);
-check('unknown category → 400', (await call('POST', '/service-offers', { token: R1, body: { ...offerBody, categoryId: '5f0000000000000000000000' } })).status === 400);
-check('society-only by a non-member → 400', (await call('POST', '/service-offers', { token: R3, body: { ...offerBody, contactPhone: P3, visibility: 'society' } })).status === 400);
+check('member cannot list a service → 403 VENDOR_ONLY', (await call('POST', '/service-offers', { token: R1, body: offerBody })).body?.error?.code === 'VENDOR_ONLY');
+check('price required unless "on request" → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, pricePaise: undefined } })).status === 400);
+check('unknown field (society) rejected → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, society: societyId } })).status === 400);
+check('mass-assign moderationStatus rejected → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, moderationStatus: 'approved' } })).status === 400);
+check('invalid contact phone → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, contactPhone: '12345' } })).status === 400);
+check('price over ₹10 lakh → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, pricePaise: 10_00_000_01 } })).status === 400);
+check('unknown category → 400', (await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, categoryId: '5f0000000000000000000000' } })).status === 400);
 const inj = await call('GET', '/service-offers?categoryId[$ne]=x&limit=50', { token: R1 });
 check('NoSQL operator in query is inert (plain key, ignored)', inj.status === 200 && Array.isArray(inj.body.items), inj.body);
 
-const fd5 = new FormData();
-fd5.append('file', new Blob([PNG], { type: 'image/png' }), 'work.png');
-fd5.append('purpose', 'service');
-const up5 = await call('POST', '/uploads', { token: R1, form: fd5 });
-check('upload purpose "service"', up5.status === 201, up5.body);
-const o1 = await call('POST', '/service-offers', { token: R1, body: { ...offerBody, photos: [up5.body._id] } });
-check('member offer → 201 pending, linked to society', o1.status === 201 && o1.body.moderationStatus === 'pending' && String(o1.body.society) === String(societyId) && o1.body.provider, o1.body);
-const myO = await call('GET', '/service-offers/mine', { token: R1 });
+const up5 = await fileUpload(VEN, 'service');
+check('vendor uploads a service photo', up5.status === 201, up5.body);
+const o1 = await call('POST', '/service-offers', { token: VEN, body: { ...offerBody, photos: [up5.body._id] } });
+check('vendor offer → 201 pending, no society', o1.status === 201 && o1.body.moderationStatus === 'pending' && !o1.body.society && o1.body.provider, o1.body);
+const myO = await call('GET', '/service-offers/mine', { token: VEN });
 check('my services lists it (mine)', myO.body.items?.some((o) => o._id === o1.body._id && o.mine && o.category?.name), myO.body.items);
 check('pending hidden from others (list)', !(await call('GET', '/service-offers?limit=50', { token: R2 })).body.items.some((o) => o._id === o1.body._id));
 check('pending hidden from others (detail 404)', (await call('GET', `/service-offers/${o1.body._id}`, { token: R2 })).status === 404);
-check('owner sees own pending detail', (await call('GET', `/service-offers/${o1.body._id}`, { token: R1 })).status === 200);
-
+check('owner sees own pending detail', (await call('GET', `/service-offers/${o1.body._id}`, { token: VEN })).status === 200);
 const o3 = await call('POST', '/service-offers', { token: R3, body: { ...offerBody, title: 'Electrician — wiring, fans, MCB', priceType: 'on_quote', pricePaise: 50000, contactPhone: P3, city: 'Kolkata' } });
-check('independent provider offer → pending, no society, "on request" drops price', o3.status === 201 && o3.body.moderationStatus === 'pending' && !o3.body.society && o3.body.pricePaise == null, o3.body);
-check('society admin cannot moderate an independent offer (404)', (await call('POST', `/society/listings/service/${o3.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } })).status === 404);
+check('"on request" drops the price', o3.status === 201 && o3.body.pricePaise == null, o3.body);
+check('society admin cannot moderate a vendor offer (404)', (await call('POST', `/society/listings/service/${o1.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } })).status === 404);
 check('resident cannot moderate (403)', (await call('POST', `/society/listings/service/${o1.body._id}/moderate`, { token: R2, body: { decision: 'approved' } })).status === 403);
-const sq = await call('GET', '/society/listings?kind=service&status=pending', { token: ADM });
-check('society review queue lists member offer with provider + category', sq.body.items?.some((o) => o._id === o1.body._id && o.provider?.name && o.category?.name) && !sq.body.items.some((o) => o._id === o3.body._id), sq.body.items);
-const ov = await call('GET', '/society/overview', { token: ADM });
-check('pending services counted in society overview', ov.body.counts?.pendingListings >= 1, ov.body.counts);
-check('society admin approves member offer', (await call('POST', `/society/listings/service/${o1.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } })).status === 200);
 const pq = await call('GET', '/platform/listings?kind=service&status=pending', { token: SA });
-check('platform queue lists independent offer', pq.body.items?.some((o) => o._id === o3.body._id), pq.body.items?.length);
-check('platform owner approves independent offer', (await call('POST', `/platform/listings/service/${o3.body._id}/moderate`, { token: SA, body: { decision: 'approved', note: 'Verified' } })).status === 200);
+check('platform queue lists both vendor offers', pq.body.items?.some((o) => o._id === o1.body._id) && pq.body.items?.some((o) => o._id === o3.body._id), pq.body.items?.length);
+const apr1 = await call('POST', `/platform/listings/service/${o1.body._id}/moderate`, { token: SA, body: { decision: 'approved' } });
+const apr3 = await call('POST', `/platform/listings/service/${o3.body._id}/moderate`, { token: SA, body: { decision: 'approved', note: 'Verified' } });
+check('platform owner approves offers', apr1.status === 200 && apr3.status === 200);
 const n3 = await call('GET', '/notifications', { token: R3 });
-check('provider notified with MyServices route', n3.body.items?.some((n) => n.data?.route === 'MyServices'), n3.body.items?.map((n) => n.data?.route));
+check('vendor notified with MyServices route', n3.body.items?.some((n) => n.data?.route === 'MyServices'), n3.body.items?.map((n) => n.data?.route));
 
 const b1 = await call('GET', `/service-offers?categoryId=${catId}&q=leak&city=Kol&limit=50`, { token: R2 });
 const seen = b1.body.items?.find((o) => o._id === o1.body._id);
-check('browse by category + text + city', !!seen && seen.mine === false && seen.postedBy && seen.category?.name && seen.photos?.[0]?.url && seen.contactPhone === P1, seen);
+check('browse by category + text + city', !!seen && seen.mine === false && seen.postedBy && seen.category?.name && seen.photos?.[0]?.url && seen.contactPhone === P4, seen);
 check('browse never leaks reportCount / provider id', seen && !('reportCount' in seen) && !('provider' in seen), seen && Object.keys(seen));
-const mineSoc = await call('GET', '/service-offers?mySociety=true&limit=50', { token: R2 });
-check('"My society" filter: member offer in, independent out', mineSoc.body.items.some((o) => o._id === o1.body._id) && !mineSoc.body.items.some((o) => o._id === o3.body._id));
-check('"My society" for a non-member → empty', (await call('GET', '/service-offers?mySociety=true', { token: R3 })).body.total === 0);
 
-const o2 = await call('POST', '/service-offers', { token: R1, body: { ...offerBody, title: 'Home tuition — maths & science', priceType: 'per_hour', pricePaise: 40000, visibility: 'society' } });
-await call('POST', `/society/listings/service/${o2.body._id}/moderate`, { token: ADM, body: { decision: 'approved' } });
-check('society-only offer visible to a neighbour', (await call('GET', `/service-offers/${o2.body._id}`, { token: R2 })).status === 200);
-check('society-only offer hidden from outsiders (detail 404)', (await call('GET', `/service-offers/${o2.body._id}`, { token: R3 })).status === 404);
-check('society-only offer hidden from outsiders (list)', !(await call('GET', '/service-offers?limit=50', { token: R3 })).body.items.some((o) => o._id === o2.body._id));
+const bookBody = { preferredDate: ymd(1), preferredTime: '11:00', address: 'Block A-12, QA Green Valley', note: 'Kitchen tap leaking' };
+const svcBk = await call('POST', `/service-offers/${o1.body._id}/bookings`, { token: R1, body: bookBody });
+check('member books a vendor service → requested', svcBk.status === 201 && svcBk.body.status === 'requested' && svcBk.body.vendor?.phone === P4, svcBk.body);
+check('vendor cannot book a service → 403', (await call('POST', `/service-offers/${o3.body._id}/bookings`, { token: VEN, body: bookBody })).status === 403);
+const vb = await call('GET', '/vendor/bookings?status=open', { token: VEN });
+check('vendor sees the booking with customer phone', vb.body.items?.some((b) => b._id === svcBk.body._id && b.customer?.phone === P1), vb.body.items);
+const acc = await call('POST', `/vendor/bookings/${svcBk.body._id}/accept`, { token: VEN, body: {} });
+const done = await call('POST', `/vendor/bookings/${svcBk.body._id}/complete`, { token: VEN, body: {} });
+const cash = await call('POST', `/vendor/bookings/${svcBk.body._id}/mark-paid`, { token: VEN, body: { amountPaise: 29900 } });
+check('vendor accepts → completes → marks cash paid', acc.body?.status === 'accepted' && done.body?.status === 'completed' && cash.body?.payment?.status === 'paid', cash.body);
+const myB = await call('GET', '/service-bookings', { token: R1 });
+check('member sees booking paid in cash', myB.body.items?.some((b) => b._id === svcBk.body._id && b.payment?.method === 'cash' && b.payment.amountPaise === 29900));
+const nb = await call('GET', '/notifications', { token: R1 });
+check('member notified (MyServiceBookings route)', nb.body.items?.some((n) => n.data?.route === 'MyServiceBookings'), nb.body.items?.map((n) => n.data?.route));
 
-check('report a service', (await call('POST', `/service-offers/${o1.body._id}/report`, { token: R3, body: { reason: 'Phone number does not work' } })).status === 201);
-check('duplicate report → 409', (await call('POST', `/service-offers/${o1.body._id}/report`, { token: R3, body: { reason: 'Again' } })).status === 409);
+check('report a service', (await call('POST', `/service-offers/${o1.body._id}/report`, { token: R2, body: { reason: 'Phone number does not work' } })).status === 201);
+check('duplicate report → 409', (await call('POST', `/service-offers/${o1.body._id}/report`, { token: R2, body: { reason: 'Again' } })).status === 409);
 const repSvc = await call('GET', '/platform/listings?kind=service&status=approved&reported=true', { token: SA });
 check('platform sees reported services', repSvc.body.items?.some((o) => o._id === o1.body._id), repSvc.body.items?.length);
 
 check('non-owner cannot edit (404)', (await call('PATCH', `/service-offers/${o1.body._id}`, { token: R2, body: { title: 'Hacked title' } })).status === 404);
-check('non-owner cannot delete (404)', (await call('DELETE', `/service-offers/${o1.body._id}`, { token: R2 })).status === 404);
+check('non-owner cannot delete (404)', (await call('DELETE', `/service-offers/${o1.body._id}`, { token: R3 })).status === 404);
 check('switching to fixed without a price → 400', (await call('PATCH', `/service-offers/${o3.body._id}`, { token: R3, body: { priceType: 'fixed' } })).status === 400);
-const paused = await call('PATCH', `/service-offers/${o1.body._id}`, { token: R1, body: { status: 'paused' } });
+const paused = await call('PATCH', `/service-offers/${o1.body._id}`, { token: VEN, body: { status: 'paused' } });
 check('pause keeps approval and photos', paused.status === 200 && paused.body.status === 'paused' && paused.body.moderationStatus === 'approved' && paused.body.photos?.length === 1, paused.body);
 check('paused offer hidden from browse', !(await call('GET', '/service-offers?limit=50', { token: R2 })).body.items.some((o) => o._id === o1.body._id));
-const edited = await call('PATCH', `/service-offers/${o1.body._id}`, { token: R1, body: { status: 'active', pricePaise: 34900 } });
+const edited = await call('PATCH', `/service-offers/${o1.body._id}`, { token: VEN, body: { status: 'active', pricePaise: 34900 } });
 check('content edit goes back to review', edited.status === 200 && edited.body.moderationStatus === 'pending' && edited.body.pricePaise === 34900, edited.body);
 
 for (let i = 0; i < 9; i += 1) await call('POST', '/service-offers', { token: R3, body: { ...offerBody, title: `Extra service number ${i + 1}`, contactPhone: P3 } });
 const over = await call('POST', '/service-offers', { token: R3, body: { ...offerBody, title: 'One too many services', contactPhone: P3 } });
 check('11th live service → 409 OFFER_LIMIT', over.status === 409 && over.body?.error?.code === 'OFFER_LIMIT', over.body);
-check('provider deletes a service', (await call('DELETE', `/service-offers/${o3.body._id}`, { token: R3 })).status === 200);
+check('vendor deletes a service', (await call('DELETE', `/service-offers/${o3.body._id}`, { token: R3 })).status === 200);
 check('deleted service gone for others (404)', (await call('GET', `/service-offers/${o3.body._id}`, { token: R2 })).status === 404);
 check('deleting twice → 404', (await call('DELETE', `/service-offers/${o3.body._id}`, { token: R3 })).status === 404);
 check('after delete, a new service is allowed again', (await call('POST', '/service-offers', { token: R3, body: { ...offerBody, title: 'Fan installation service', contactPhone: P3 } })).status === 201);

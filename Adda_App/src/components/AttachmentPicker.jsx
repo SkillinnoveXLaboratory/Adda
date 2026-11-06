@@ -79,8 +79,8 @@ export function AttachmentPicker({ value, onChange, purpose, max = 6, allowPdf =
   return (
     <View style={{ gap: 10 }}>
       <Pressable onPress={choose} disabled={remaining <= 0} accessibilityRole="button" accessibilityLabel={label} style={[styles.upload, remaining <= 0 && { opacity: 0.5 }]}>
-        <Ionicons name="image-outline" size={20} color="#0b1a30" />
-        <T weight="bold" size={13} color="#0b1a30" style={{ flex: 1 }}>
+        <Ionicons name="image-outline" size={20} color="#07162c" />
+        <T weight="bold" size={13} color="#07162c" style={{ flex: 1 }}>
           {label}
         </T>
         <T size={12} color="#334155">
@@ -123,5 +123,5 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   thumb: { width: 78, height: 78 },
   thumbImg: { width: 78, height: 78, borderRadius: 12, backgroundColor: '#f1f5f9' },
-  remove: { position: 'absolute', top: -6, right: -6, width: 24, height: 24, borderRadius: 12, backgroundColor: '#0b1a30', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.white },
+  remove: { position: 'absolute', top: -6, right: -6, width: 24, height: 24, borderRadius: 12, backgroundColor: '#07162c', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.white },
 });

@@ -77,11 +77,11 @@ export default function FacilityBooking() {
     >
       {facility ? (
         <LinearGradient colors={['#f1f5f9', '#e2e8f0']} style={{ borderRadius: 18, padding: 18, alignItems: 'center', gap: 4 }}>
-          <Ionicons name={facilityIcon(facility)} size={36} color="#0b1a30" />
+          <Ionicons name={facilityIcon(facility)} size={36} color="#07162c" />
           <T weight="extrabold" size={19}>
             {facility.name}
           </T>
-          <T weight="bold" size={13} color="#0b1a30">
+          <T weight="bold" size={13} color="#07162c">
             {facility.feePaise ? `${money(facility.feePaise)} per ${facility.slotMinutes}-min slot` : 'Free for residents'}
           </T>
         </LinearGradient>

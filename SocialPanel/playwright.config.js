@@ -4,9 +4,10 @@ import { defineConfig } from '@playwright/test';
 // (that one proxies to the live server) and never point at production.
 const API_TARGET = process.env.API_BASE || 'http://127.0.0.1:3013';
 if (API_TARGET.includes('skillinnovex.in') || API_TARGET.includes('mongodb.net')) throw new Error('Refusing to run UI tests against production.');
+const PORT = Number(process.env.E2E_PORT || 5183);
 
 /**
- * End-to-end UI tests against a dedicated Vite dev server (5183) and a LOCAL backend (3013).
+ * End-to-end UI tests against a dedicated Vite dev server (5183, or E2E_PORT) and a LOCAL backend (3013).
  * Never point this at production. Run: npm run e2e
  */
 export default defineConfig({
@@ -18,7 +19,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:5183',
+    baseURL: `http://localhost:${PORT}`,
     browserName: 'chromium',
     headless: true,
     viewport: { width: 1366, height: 860 },
@@ -26,5 +27,5 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     acceptDownloads: true,
   },
-  webServer: { command: 'npx vite --port 5183 --strictPort', url: 'http://localhost:5183', reuseExistingServer: false, timeout: 60_000, env: { DEV_PROXY_TARGET: API_TARGET } },
+  webServer: { command: `npx vite --port ${PORT} --strictPort`, url: `http://localhost:${PORT}`, reuseExistingServer: false, timeout: 60_000, env: { DEV_PROXY_TARGET: API_TARGET, VITE_API_BASE_URL: '/' } },
 });

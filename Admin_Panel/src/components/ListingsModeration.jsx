@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { api, mediaHref } from '../lib/api.js';
 import { useAction, usePaged } from '../lib/hooks.js';
 import { formatDateTime, formatINR, formatNumber, formatPhone, formatRelative, humanize, plural } from '../lib/format.js';
@@ -11,7 +12,7 @@ import { useToast } from './Toast.jsx';
 const KIND_ICON = { property: 'fa-solid fa-house', marketplace: 'fa-solid fa-tag', service: 'fa-solid fa-screwdriver-wrench' };
 const PRICE_SUFFIX = { starting_from: 'from', per_hour: '/hour', per_visit: '/visit' };
 /** Listing price as the owner set it (services can be "on request" or per hour / visit). */
-const priceText = (l, kind, whole = true) => {
+export const priceText = (l, kind, whole = true) => {
   if (kind === 'service') {
     if (l.priceType === 'on_quote' || !(l.pricePaise > 0)) return 'On request';
     const p = formatINR(l.pricePaise, { whole });
@@ -67,7 +68,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
     },
     { key: 'price', header: 'Price', align: 'right', render: (l) => <span className="font-semibold text-gray-700">{priceText(l, kind)}{kind === 'property' && l.listingType === 'rent' ? <span className="text-[10px] font-normal text-gray-400">/mo</span> : null}</span> },
     ...(platform ? [{ key: 'society', header: 'Society', render: (l) => l.society?.name || <span className="text-gray-400">Independent</span> }] : []),
-    { key: 'owner', header: { property: 'Owner', marketplace: 'Seller', service: 'Provider' }[kind], render: (l) => owner(l)?.name || '—' },
+    { key: 'owner', header: { property: 'Vendor', marketplace: 'Seller', service: 'Vendor' }[kind], render: (l) => owner(l)?.name || '—' },
     { key: 'created', header: 'Posted', render: (l) => formatRelative(l.createdAt) },
     { key: 'status', header: 'Status', render: (l) => <Badge status={l.moderationStatus} /> },
     {
@@ -87,7 +88,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
   const v = view;
   return (
     <div>
-      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property, marketplace and service listings across adda' : 'Property, marketplace and service listings from your residents'} />
+      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property and service listings from verified vendors, and marketplace listings from members, across adda' : 'Listings linked to your society'} />
       <Tabs
         className="mb-4"
         tabs={[
@@ -162,7 +163,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
                 kind === 'service' && ['Experience', v.experienceYears ? `${v.experienceYears} years` : null],
                 kind === 'service' && ['Availability', v.availabilityNote],
                 ['Contact', [v.contactName, formatPhone(v.contactPhone)].filter((x) => x && x !== '—').join(' · ')],
-                ['Posted by', owner(v)?.name],
+                ['Posted by', platform && kind !== 'marketplace' && owner(v)?._id ? <Link className="link" to={`/admin/vendors/${owner(v)._id}`}>{owner(v).name || 'Vendor'}</Link> : owner(v)?.name],
                 ['Reports', String(v.reportCount || 0)],
                 v.moderationNote && ['Moderator note', v.moderationNote],
               ]
@@ -177,7 +178,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
           </div>
         )}
       </Drawer>
-      <ReasonDialog open={Boolean(act)} onClose={() => setAct(null)} onSubmit={(n) => run(n)} busy={busy} required={false} tone={act?.decision === 'approved' ? 'primary' : 'danger'} label="Note to the owner" title={`${DECISION[act?.decision]?.[0] || ''} ${kind === 'service' ? 'service' : 'listing'}`} confirmLabel={DECISION[act?.decision]?.[0]} message={`“${act?.item?.title}” will be ${act?.decision}. The owner is notified.`} />
+      <ReasonDialog open={Boolean(act)} onClose={() => setAct(null)} onSubmit={(n) => run(n)} busy={busy} required={false} tone={act?.decision === 'approved' ? 'primary' : 'danger'} label={kind === 'marketplace' ? 'Note to the seller' : 'Note to the vendor'} title={`${DECISION[act?.decision]?.[0] || ''} ${kind === 'service' ? 'service' : 'listing'}`} confirmLabel={DECISION[act?.decision]?.[0]} message={`“${act?.item?.title}” will be ${act?.decision}. The ${kind === 'marketplace' ? 'seller' : 'vendor'} is notified.`} />
     </div>
   );
 }

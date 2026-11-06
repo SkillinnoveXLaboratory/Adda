@@ -96,13 +96,14 @@ export function BellButton({ unread = 0, onPress, color = colors.white }) {
   );
 }
 
-/** Navy tab-screen header (prototype: title bar; optional subtitle line, bell and extra content below). */
-export function Hero({ title, subtitle, unread = 0, onBell, right, children }) {
+/** Navy tab-screen header (templates: optional back arrow + title; optional subtitle line, bell and extra content below). */
+export function Hero({ title, subtitle, unread = 0, onBell, onBack, right, children }) {
   const insets = useSafeAreaInsets();
   return (
     <View style={[styles.hero, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
       <View style={styles.heroTop}>
+        {onBack ? <IconButton icon="arrow-back" label="Go back" color={colors.white} onPress={onBack} style={{ marginLeft: -10, marginRight: 2 }} /> : null}
         <View style={{ flex: 1, paddingRight: 12 }}>
           <T weight="bold" size={16} color={colors.white} numberOfLines={1} accessibilityRole="header">
             {title}
@@ -159,6 +160,8 @@ export function Button({ title, onPress, variant = 'primary', icon, loading, dis
 }
 const BUTTON_VARIANTS = {
   primary: { box: { backgroundColor: colors.gold, ...shadow.gold }, fg: '#0f172a' },
+  // Template "Book Now" / "View Details" gold pills; dark text keeps contrast readable (white on this gold is ~2.4:1).
+  gold: { box: { backgroundColor: colors.gold, borderRadius: 999, ...shadow.gold }, fg: colors.navy },
   brand: { box: { backgroundColor: colors.navy, ...shadow.button }, fg: colors.white },
   alt: { box: { backgroundColor: colors.white, borderWidth: 1, borderColor: '#cbd5e1' }, fg: '#334155' },
   outline: { box: { backgroundColor: colors.white, borderWidth: 1.5, borderColor: colors.navy }, fg: colors.navy },

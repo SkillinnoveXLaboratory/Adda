@@ -2,7 +2,8 @@
 /**
  * Live contract check for the Master Admin console: owner sign-in, society workspace bridge
  * (/platform/societies/:sid/manage/*), masking + logged reveal, members directory, member profile and
- * owner actions. Seeds its own society, flats and residents. LOCAL backend only (default http://127.0.0.1:3013).
+ * owner actions, vendors (KYC review + logged reveal), vendor-only listings and ads (boost) review.
+ * Seeds its own society, flats, residents and a vendor. LOCAL backend only (default http://127.0.0.1:3013).
  *
  *   npm run api-check
  *   API_BASE=http://127.0.0.1:3013 SA_EMAIL=… SA_PASSWORD=… node scripts/api-check.mjs
@@ -59,6 +60,190 @@ async function expect(name, status, method, path, opts) {
 const randPhone = () => `9${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}`;
 const isMasked = (v) => typeof v === 'string' && v.includes('•');
 const isPaged = (j) => j && Array.isArray(j.items) && ['page', 'limit', 'total', 'pages'].every((k) => typeof j[k] === 'number');
+
+// 1×1 PNG (the server sniffs magic bytes, so this is a real image upload).
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+async function upload(token, purpose) {
+  const form = new FormData();
+  form.append('purpose', purpose);
+  form.append('file', new Blob([PNG], { type: 'image/png' }), `${purpose}.png`);
+  const res = await fetch(`${API}/uploads`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+  return { status: res.status, json: await res.json().catch(() => null) };
+}
+// Verhoeff check digit → valid test Aadhaar numbers (12 digits, not starting with 0/1).
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const VINV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+const withVerhoeff = (base11) => base11 + VINV[base11.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
+
+/** Vendor accounts, KYC review + logged reveal, vendor-only listings and ad (boost) review — everything the Vendors / Ads screens use. */
+async function vendorsAndAds(T, { AT, MT }) {
+  head('Vendors: accounts & KYC review');
+  const ov0 = await expect('overview', 200, 'GET', '/platform/overview', { token: T });
+  ok('overview counts include vendors, pendingKyc, pendingAds', ['vendors', 'pendingKyc', 'pendingAds'].every((k) => typeof ov0?.counts?.[k] === 'number'), ov0?.counts);
+  const vPhone = randPhone();
+  const vName = `Vendor ${RUN}`;
+  const business = `Sharma Cooling ${RUN}`;
+  const vReg = await expect('register vendor', 201, 'POST', '/auth/resident/register', { body: { phone: vPhone, name: vName, password: PASSWORD, accountType: 'vendor' } });
+  const V = vReg.accessToken;
+  const vId = vReg.user?._id;
+  ok('vendor account type + KYC not submitted', vReg.user?.accountType === 'vendor' && vReg.vendor?.kycStatus === 'not_submitted', { user: vReg.user, vendor: vReg.vendor });
+
+  const vt = await expect('accounts filter: vendors', 200, 'GET', `/platform/users?accountType=vendor&q=${vPhone}`, { token: T });
+  ok('accountType=vendor finds the vendor (with accountType, masked phone)', vt.total === 1 && vt.items[0].accountType === 'vendor' && isMasked(vt.items[0].phone), vt.items?.[0]);
+  const mt = await expect('accounts filter: members', 200, 'GET', `/platform/users?accountType=member&q=${vPhone}`, { token: T });
+  ok('accountType=member excludes the vendor', mt.total === 0, mt.total);
+  const memberRow = await expect('', 200, 'GET', `/platform/users?accountType=member&limit=5`, { token: T });
+  ok('member rows are accountType member', memberRow.items.length > 0 && memberRow.items.every((u) => (u.accountType || 'member') === 'member'), memberRow.items.map((u) => u.accountType));
+
+  const ns = await expect('vendors: not submitted', 200, 'GET', `/platform/vendors?kycStatus=not_submitted&q=${encodeURIComponent(vName)}`, { token: T });
+  const nsRow = ns.items?.find((x) => x._id === vId);
+  ok('list item shape (user id, masked phone, kycStatus)', isPaged(ns) && nsRow && ['profileId', 'name', 'phone', 'status', 'businessName', 'city', 'kycStatus', 'submittedAt', 'createdAt'].every((k) => k in nsRow) && isMasked(nsRow.phone) && nsRow.kycStatus === 'not_submitted', nsRow);
+  const d0 = await expect('vendor detail', 200, 'GET', `/platform/vendors/${vId}`, { token: T });
+  ok('detail: user + profile + counts + kycAvailable', d0?.user?._id === vId && isMasked(d0.user.phone) && d0.profile?.kycStatus === 'not_submitted' && ['properties', 'services', 'bookings', 'ads'].every((k) => d0.counts?.[k] === 0) && d0.kycAvailable === true, d0);
+  ok('detail: no documents before KYC', d0?.profile?.documents && Object.values(d0.profile.documents).every((x) => x === null), d0?.profile?.documents);
+  await expect('reveal before KYC', 404, 'POST', `/platform/vendors/${vId}/reveal`, { token: T, body: { reason: 'Check before submission' } });
+  await expect('approve without submission', 409, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'approved' } });
+  await expect('member id is not a vendor', 404, 'GET', `/platform/vendors/${(await call('GET', '/me', { token: MT })).json?.user?._id}`, { token: T });
+  await expect('unknown vendor', 404, 'GET', '/platform/vendors/5f0000000000000000000000', { token: T });
+  await expect('society admin → vendors', 403, 'GET', '/platform/vendors', { token: AT });
+  await expect('member → vendors', 403, 'GET', '/platform/vendors', { token: MT });
+
+  const docs = [];
+  for (let i = 0; i < 3; i++) docs.push((await upload(V, 'kyc')).json?._id);
+  ok('vendor uploads 3 KYC photos', docs.every(Boolean), docs);
+  const AADHAAR = withVerhoeff(`2${String(Date.now()).slice(-10)}`);
+  const PAN = `ABCDE${String(Date.now()).slice(-4)}F`;
+  const ACCOUNT = `5001${String(Date.now()).slice(-8)}`;
+  const kyc = { businessName: business, businessType: 'business', city: 'Kolkata', address: '12 Market Road', pan: PAN, aadhaar: AADHAAR, bankAccountHolder: vName, bankAccountNumber: ACCOUNT, bankIfsc: 'SBIN0001234', bankName: 'SBI', panPhoto: docs[0], aadhaarFront: docs[1], aadhaarBack: docs[2], consent: true };
+  const sub = await expect('submit KYC', 200, 'PUT', '/vendor/kyc', { token: V, body: kyc });
+  ok('KYC pending', sub?.kycStatus === 'pending', sub);
+  const ov1 = await expect('', 200, 'GET', '/platform/overview', { token: T });
+  ok('pendingKyc badge +1 and vendors +1', ov1.counts.pendingKyc === ov0.counts.pendingKyc + 1 && ov1.counts.vendors === ov0.counts.vendors + 1, { before: ov0.counts, after: ov1.counts });
+  const pend = await expect('vendors: pending', 200, 'GET', '/platform/vendors?kycStatus=pending&limit=100', { token: T });
+  ok('pending tab lists the vendor with submittedAt + business', pend.items?.some((x) => x._id === vId && x.submittedAt && x.businessName === business && x.city === 'Kolkata'), pend.items?.length);
+  ok('pending tab has only pending', pend.items?.every((x) => x.kycStatus === 'pending'), pend.items?.map((x) => x.kycStatus));
+  const byBiz = await expect('search by business', 200, 'GET', `/platform/vendors?q=${encodeURIComponent(business)}`, { token: T });
+  ok('search by business name', byBiz.total === 1 && byBiz.items[0]._id === vId, byBiz.total);
+  const byPhone = await expect('search by mobile', 200, 'GET', `/platform/vendors?q=${vPhone}`, { token: T });
+  ok('search by mobile', byPhone.total === 1 && byPhone.items[0]._id === vId, byPhone.total);
+  const all = await expect('vendors: all', 200, 'GET', `/platform/vendors?q=${encodeURIComponent(vName)}`, { token: T });
+  ok('no status = all', all.items?.some((x) => x._id === vId), all.total);
+
+  const d1 = await expect('vendor detail after KYC', 200, 'GET', `/platform/vendors/${vId}`, { token: T });
+  const p1 = d1?.profile || {};
+  const d1txt = JSON.stringify(d1 || {});
+  ok('KYC masked in detail', p1.pan?.endsWith(PAN.slice(-4)) && p1.pan.includes('•') && p1.aadhaar === `XXXX XXXX ${AADHAAR.slice(-4)}` && p1.bankAccount?.endsWith(ACCOUNT.slice(-4)) && !d1txt.includes(PAN) && !d1txt.includes(AADHAAR) && !d1txt.includes(ACCOUNT) && !d1txt.includes(vPhone), p1);
+  ok('business + bank fields', p1.businessName === business && p1.businessType === 'business' && p1.address && p1.bankIfsc === 'SBIN0001234' && p1.bankName === 'SBI' && p1.bankAccountHolder === vName && p1.submittedAt && p1.consentAt, p1);
+  const docLinks = ['panPhoto', 'aadhaarFront', 'aadhaarBack'].map((k) => p1.documents?.[k]);
+  ok('3 documents as signed links with mimeType', docLinks.every((x) => x?.url?.includes('sig=') && x.mimeType === 'image/png'), docLinks);
+  const docRes = await fetch(docLinks[0].url.replace(/^https?:\/\/[^/]+/, BASE));
+  ok('signed document link opens', docRes.status === 200, docRes.status);
+  const unsigned = await fetch(`${BASE}${new URL(docLinks[0].url).pathname}`);
+  ok('document is private without the signature', unsigned.status === 403, unsigned.status);
+
+  await expect('reveal needs a reason', 400, 'POST', `/platform/vendors/${vId}/reveal`, { token: T, body: {} });
+  const rev = await expect('reveal', 200, 'POST', `/platform/vendors/${vId}/reveal`, { token: T, body: { reason: 'Match PAN against the card photo' } });
+  ok('reveal returns decrypted PAN / Aadhaar / account / phone', rev?.pan === PAN && rev.aadhaar === AADHAAR && rev.bankAccountNumber === ACCOUNT && rev.phone === vPhone, rev && Object.keys(rev));
+  const log = await expect('', 200, 'GET', '/platform/audit-logs?limit=20', { token: T });
+  ok('reveal audited with the reason (privacy.kyc_reveal)', log.items?.some((a) => a.action === 'privacy.kyc_reveal' && a.targetId === vId && /PAN against/.test(a.summary || '')), log.items?.slice(0, 3).map((a) => a.action));
+
+  await expect('reject needs a note', 400, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'rejected' } });
+  await expect('bad decision', 400, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'maybe' } });
+  const rej = await expect('reject', 200, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'rejected', note: 'Aadhaar back photo is blurred' } });
+  ok('rejected with note + reviewedAt', rej?.kycStatus === 'rejected' && rej.kycNote === 'Aadhaar back photo is blurred' && rej.reviewedAt, rej);
+  await expect('reject twice', 409, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'rejected', note: 'again' } });
+  const rejList = await expect('vendors: rejected', 200, 'GET', '/platform/vendors?kycStatus=rejected&limit=100', { token: T });
+  ok('rejected tab lists the vendor', rejList.items?.some((x) => x._id === vId), rejList.total);
+  const ovR = await expect('', 200, 'GET', '/platform/overview', { token: T });
+  ok('pendingKyc badge back down after the decision', ovR.counts.pendingKyc === ov0.counts.pendingKyc, ovR.counts);
+  const propBody = { listingType: 'rent', propertyType: 'apartment', title: `2BHK near lake ${RUN}`, description: 'Sunny flat, 2 balconies', pricePaise: 2500000, bedrooms: 2, bathrooms: 2, areaSqft: 950, city: 'Kolkata', locality: 'Salt Lake', contactPhone: vPhone };
+  const early = await call('POST', '/properties', { token: V, body: propBody });
+  ok('rejected vendor cannot list (403 KYC_REQUIRED)', early.status === 403 && early.json?.error?.code === 'KYC_REQUIRED', early);
+  const memberList = await call('POST', '/properties', { token: MT, body: propBody });
+  ok('member cannot list a property (403 VENDOR_ONLY)', memberList.status === 403 && memberList.json?.error?.code === 'VENDOR_ONLY', memberList);
+  const appr = await expect('approve after rejection', 200, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'approved', note: 'New photo is clear' } });
+  ok('KYC approved', appr?.kycStatus === 'approved', appr);
+  await expect('approve twice', 409, 'POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'approved' } });
+  const apprList = await expect('vendors: approved', 200, 'GET', '/platform/vendors?kycStatus=approved&limit=100', { token: T });
+  ok('approved tab lists the vendor', apprList.items?.some((x) => x._id === vId), apprList.total);
+
+  head('Vendor listings (platform-moderated)');
+  const photo = (await upload(V, 'property')).json?._id;
+  const prop = await expect('vendor lists a property', 201, 'POST', '/properties', { token: V, body: { ...propBody, photos: [photo] } });
+  ok('vendor property has no society', prop && !prop.society, prop?.society);
+  const cats = await expect('', 200, 'GET', '/service-offers/categories', { token: V });
+  const svcBody = { categoryId: cats.items?.[0]?._id, title: `AC Service & Repair ${RUN}`, description: 'Split and window AC', priceType: 'starting_from', pricePaise: 49900, experienceYears: 6, serviceArea: 'Salt Lake', city: 'Kolkata', contactPhone: vPhone };
+  const svc = await expect('vendor lists a service', 201, 'POST', '/service-offers', { token: V, body: svcBody });
+  if (prop?.moderationStatus === 'pending') {
+    const q = await expect('', 200, 'GET', '/platform/listings?kind=property&status=pending&scope=independent&limit=100', { token: T });
+    ok('vendor property waits in platform moderation', q.items?.some((l) => l._id === prop._id && !l.society), q.total);
+    await expect('approve property', 200, 'POST', `/platform/listings/property/${prop._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  }
+  if (svc?.moderationStatus === 'pending') await expect('approve service', 200, 'POST', `/platform/listings/service/${svc._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  const d2 = await expect('', 200, 'GET', `/platform/vendors/${vId}`, { token: T });
+  ok('vendor counts: 1 property, 1 service', d2.counts?.properties === 1 && d2.counts?.services === 1, d2.counts);
+
+  head('Ads (boosts) review');
+  await expect('boost for a duration the admin does not offer → 400', 400, 'POST', '/vendor/ads', { token: V, body: { kind: 'property', listingId: prop._id, city: 'Kolkata', days: 5 } });
+  const ad1 = await expect('vendor requests a property boost', 201, 'POST', '/vendor/ads', { token: V, body: { kind: 'property', listingId: prop._id, city: 'Kolkata', area: 'Salt Lake', days: 7 } });
+  const ovA = await expect('', 200, 'GET', '/platform/overview', { token: T });
+  ok('pendingAds badge +1', ovA.counts.pendingAds === ov0.counts.pendingAds + 1, ovA.counts);
+  const pendAds = await expect('ads: default = pending', 200, 'GET', '/platform/ads?limit=100', { token: T });
+  const row = pendAds.items?.find((a) => a._id === ad1._id);
+  ok('pending list item: listing photo + title, vendor, location, days', isPaged(pendAds) && row && row.kind === 'property' && row.listing?.title === propBody.title && row.listing?.photo?.url && row.vendor?._id === vId && row.vendor?.name === vName && row.city === 'Kolkata' && row.area === 'Salt Lake' && row.days === 7 && row.status === 'pending' && row.createdAt && row.startsAt === null, row);
+  const svcOnly = await expect('ads: kind=service', 200, 'GET', '/platform/ads?status=pending&kind=service&limit=100', { token: T });
+  ok('kind filter excludes the property ad', !svcOnly.items?.some((a) => a._id === ad1._id) && svcOnly.items.every((a) => a.kind === 'service'), svcOnly.items?.length);
+  const det = await expect('ad detail', 200, 'GET', `/platform/ads/${ad1._id}`, { token: T });
+  ok('detail: full listing with photos and fields', det?.listingDetail?.title === propBody.title && det.listingDetail.photos?.[0]?.url && det.listingDetail.description === propBody.description && det.listingDetail.pricePaise === propBody.pricePaise && det.listingDetail.bedrooms === 2, det?.listingDetail);
+  ok('detail: vendor with KYC status + masked phone + business', det?.vendor?.kycStatus === 'approved' && isMasked(det.vendor.phone) && det.vendor.businessName === business && det.vendor._id === vId, det?.vendor);
+  ok('detail: no unmasked vendor phone anywhere except listing contact', !JSON.stringify(det.vendor).includes(vPhone), det?.vendor);
+  await expect('unknown ad', 404, 'GET', '/platform/ads/5f0000000000000000000000', { token: T });
+  await expect('member → ads', 403, 'GET', '/platform/ads', { token: MT });
+  await expect('reject needs a note', 400, 'POST', `/platform/ads/${ad1._id}/review`, { token: T, body: { decision: 'rejected' } });
+  const okAd = await expect('approve ad', 200, 'POST', `/platform/ads/${ad1._id}/review`, { token: T, body: { decision: 'approved' } });
+  ok('approved ad is active for exactly 7 days from now', okAd?.status === 'active' && Math.round((new Date(okAd.endsAt) - new Date(okAd.startsAt)) / 86_400_000) === 7 && Math.abs(new Date(okAd.startsAt) - Date.now()) < 60_000, okAd);
+  await expect('approve twice', 409, 'POST', `/platform/ads/${ad1._id}/review`, { token: T, body: { decision: 'approved' } });
+  const act = await expect('ads: active', 200, 'GET', '/platform/ads?status=active&limit=100', { token: T });
+  ok('active tab lists it with start/end', act.items?.some((a) => a._id === ad1._id && a.startsAt && a.endsAt), act.total);
+  const pend2 = await expect('', 200, 'GET', '/platform/ads?status=pending&limit=100', { token: T });
+  ok('no longer pending', !pend2.items?.some((a) => a._id === ad1._id), pend2.total);
+  const browse = await expect('', 200, 'GET', '/properties?city=Kolkata', { token: MT });
+  const at = browse.items?.findIndex((l) => l._id === prop._id) ?? -1;
+  const firstOrganic = browse.items?.findIndex((l) => !l.sponsored) ?? -1;
+  ok('approved ad is in the sponsored block at the top, marked sponsored', at >= 0 && browse.items[at].sponsored === true && (firstOrganic === -1 || at < firstOrganic) && browse.sponsoredCount >= 1, browse.items?.slice(0, 4).map((l) => [l.title, l.sponsored]));
+
+  const ad2 = await expect('vendor requests a service boost', 201, 'POST', '/vendor/ads', { token: V, body: { kind: 'service', listingId: svc._id, city: 'Kolkata', days: 3 } });
+  const svcPend = await expect('', 200, 'GET', '/platform/ads?status=pending&kind=service&limit=100', { token: T });
+  ok('kind=service lists the service ad', svcPend.items?.some((a) => a._id === ad2._id && a.kind === 'service' && a.area === null), svcPend.total);
+  const det2 = await expect('service ad detail', 200, 'GET', `/platform/ads/${ad2._id}`, { token: T });
+  ok('service detail has category + pricing', det2?.listingDetail?.category?.name && det2.listingDetail.priceType === 'starting_from', det2?.listingDetail);
+  const rj = await expect('reject ad with note', 200, 'POST', `/platform/ads/${ad2._id}/review`, { token: T, body: { decision: 'rejected', note: 'Add a photo of your work' } });
+  ok('rejected with review note', rj?.status === 'rejected' && rj.reviewNote === 'Add a photo of your work', rj);
+  await expect('decide a rejected ad', 409, 'POST', `/platform/ads/${ad2._id}/review`, { token: T, body: { decision: 'approved' } });
+  const rjList = await expect('ads: rejected', 200, 'GET', '/platform/ads?status=rejected&limit=100', { token: T });
+  ok('rejected tab lists it with the note', rjList.items?.some((a) => a._id === ad2._id && a.reviewNote), rjList.total);
+
+  const ad3 = await expect('boost again after rejection', 201, 'POST', '/vendor/ads', { token: V, body: { kind: 'service', listingId: svc._id, city: 'Kolkata', days: 15 } });
+  await expect('vendor pauses the service', 200, 'PATCH', `/service-offers/${svc._id}`, { token: V, body: { status: 'paused' } });
+  const notLive = await call('POST', `/platform/ads/${ad3._id}/review`, { token: T, body: { decision: 'approved' } });
+  ok('approving an ad whose listing went off-line → 409 LISTING_NOT_LIVE', notLive.status === 409 && notLive.json?.error?.code === 'LISTING_NOT_LIVE', notLive);
+  await expect('reject it instead', 200, 'POST', `/platform/ads/${ad3._id}/review`, { token: T, body: { decision: 'rejected', note: 'Service is paused' } });
+
+  await expect('vendor stops the running ad', 200, 'POST', `/vendor/ads/${ad1._id}/cancel`, { token: V });
+  const can = await expect('ads: cancelled', 200, 'GET', '/platform/ads?status=cancelled&limit=100', { token: T });
+  ok('cancelled tab lists the stopped ad', can.items?.some((a) => a._id === ad1._id && a.status === 'cancelled'), can.total);
+  const allAds = await expect('ads: all', 200, 'GET', '/platform/ads?status=all&limit=100', { token: T });
+  ok('all tab lists every ad of this run with its status', [ad1._id, ad2._id, ad3._id].every((id) => allAds.items?.some((a) => a._id === id)) && allAds.items.every((a) => ['pending', 'active', 'expired', 'rejected', 'cancelled'].includes(a.status)), allAds.total);
+  const exp = await expect('ads: expired', 200, 'GET', '/platform/ads?status=expired&limit=100', { token: T });
+  ok('expired tab is a paged list of expired ads (stopped ads are cancelled, not expired)', isPaged(exp) && !exp.items.some((a) => a._id === ad1._id) && exp.items.every((a) => a.status === 'expired'), exp.items?.map((a) => a.status));
+  const ovZ = await expect('', 200, 'GET', '/platform/overview', { token: T });
+  ok('pendingAds badge back to where it started', ovZ.counts.pendingAds === ov0.counts.pendingAds, ovZ.counts);
+  const d3 = await expect('', 200, 'GET', `/platform/vendors/${vId}`, { token: T });
+  ok('vendor detail counts 3 ads', d3.counts?.ads === 3, d3.counts);
+  const log2 = await expect('', 200, 'GET', '/platform/audit-logs?limit=40', { token: T });
+  ok('KYC and ad decisions audited', ['platform.vendor_kyc_approved', 'platform.vendor_kyc_rejected', 'platform.ad_approved', 'platform.ad_rejected'].every((a) => log2.items?.some((x) => x.action === a)), log2.items?.map((a) => a.action).slice(0, 12));
+}
 
 async function main() {
   console.log(`Master Admin API check against ${API} (run ${RUN})`);
@@ -213,6 +398,8 @@ async function main() {
   await expect('cannot target own account', 403, 'POST', `/platform/users/${ownerId}/password`, { token: T, body: { password: 'Another2026x', reason: 'test' } });
   await expect('decide via bridge: suspend needs reason (body)', 400, 'POST', `${M}/memberships/${m2._id}/suspend`, { token: T, body: {}, reason: 'header only' });
   await expect('suspend via bridge', 200, 'POST', `${M}/memberships/${m2._id}/suspend`, { token: T, body: { reason: 'Unpaid dues dispute' }, reason: 'Unpaid dues dispute' });
+
+  await vendorsAndAds(T, { AT, MT: r2.accessToken });
 
   // ------------------------------------------------------------------ insights
   head('Dashboard insights');

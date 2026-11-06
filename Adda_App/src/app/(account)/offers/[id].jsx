@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Dimensions, Image, Linking, Pressable, ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { SERVICE_ICONS } from '../../../components/OfferCard';
+import { CategoryIcon } from '../../../components/CategoryIcon';
 import { AsyncView, Badge, Button, Card, DetailHeader, Hint, KeyValue, LoadingList, Screen, T, useGoBack } from '../../../components/ui';
+import { useAuth } from '../../../context/auth';
 import { useToast } from '../../../context/toast';
 import { useApi } from '../../../hooks/useApi';
 import { api } from '../../../lib/api';
@@ -15,6 +15,9 @@ const REASONS = ['Fraud or scam', 'Phone number does not work', 'Wrong or mislea
 
 function OfferDetail({ item, onChanged }) {
   const toast = useToast();
+  const { isVendor } = useAuth();
+  // Members book; vendors only manage their own listings.
+  const canBook = !isVendor && item.moderationStatus === 'approved' && item.status === 'active';
   const back = useGoBack('/offers');
   const [reporting, setReporting] = useState(false);
   const width = Dimensions.get('window').width - 32;
@@ -65,13 +68,15 @@ function OfferDetail({ item, onChanged }) {
         </ScrollView>
       ) : (
         <View style={{ height: 120, borderRadius: 16, backgroundColor: colors.goldLight, alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name={SERVICE_ICONS[item.category?.name] || 'construct-outline'} size={44} color={colors.goldDark} />
+          <CategoryIcon icon={item.category?.icon} name={item.category?.name} size={60} />
         </View>
       )}
 
       <View style={{ gap: 6 }}>
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+          {item.sponsored ? <Badge label="Sponsored" tone="warning" /> : null}
           {item.category?.name ? <Badge label={item.category.name} tone="info" /> : null}
+          {item.verifiedVendor ? <Badge label="Verified vendor" tone="success" /> : null}
           {item.visibility === 'society' ? <Badge label="My society only" tone="neutral" /> : null}
           {item.mine && item.moderationStatus !== 'approved' ? <Badge status={item.moderationStatus} label={item.moderationStatus === 'pending' ? 'In review' : undefined} /> : null}
           {item.mine && item.status === 'paused' ? <Badge label="Paused" tone="neutral" /> : null}
@@ -112,12 +117,16 @@ function OfferDetail({ item, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
+          {item.moderationStatus === 'approved' && item.status === 'active' ? (
+            <Button title="Boost this service" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'service', id: item._id } })} />
+          ) : null}
           <Button title="Edit service" icon="create-outline" onPress={() => router.push({ pathname: '/offers/edit', params: { id: item._id } })} />
           {item.status === 'active' ? <Button title="Pause (hide for now)" variant="alt" onPress={() => setStatus('paused')} /> : <Button title="Resume — show again" variant="alt" onPress={() => setStatus('active')} />}
           <Button title="Delete service" variant="danger" onPress={remove} />
         </View>
       ) : (
         <>
+          {canBook ? <Button title="Book Now" icon="calendar-outline" variant="gold" onPress={() => router.push({ pathname: '/offers/book', params: { id: item._id } })} /> : null}
           <Card style={{ gap: 10 }}>
             <T weight="bold" size={14}>
               Contact {item.contactName || item.postedBy || 'the provider'}
@@ -127,7 +136,9 @@ function OfferDetail({ item, onChanged }) {
               {item.whatsappAvailable ? <Button title="WhatsApp" icon="logo-whatsapp" variant="alt" onPress={whatsapp} style={{ flex: 1 }} /> : null}
             </View>
             <T size={11.5} color={colors.muted} style={{ lineHeight: 17 }}>
-              Agree on the price before work starts and pay only after the job is done. NIVASA lists providers but does not verify, employ or guarantee them.
+              {item.verifiedVendor
+                ? 'This vendor’s identity (PAN and Aadhaar) was checked by NIVASA. Agree on the price before work starts and pay only after the job is done.'
+                : 'Agree on the price before work starts and pay only after the job is done. NIVASA lists providers but does not employ or guarantee them.'}
             </T>
           </Card>
           {reporting ? (

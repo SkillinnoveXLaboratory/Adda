@@ -16,6 +16,7 @@
  * Screenshots → qa-screenshots/<width>/<screen>.png (gitignored).
  */
 import { spawnSync } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -50,6 +51,22 @@ async function call(method, p, { token, body } = {}) {
   if (!res.ok) throw new Error(`${method} ${p} → ${res.status} ${JSON.stringify(json?.error || json)}`);
   return json;
 }
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+async function uploadPng(token, purpose) {
+  const form = new FormData();
+  form.append('purpose', purpose);
+  form.append('file', new Blob([PNG], { type: 'image/png' }), `${purpose}.png`);
+  const res = await fetch(`${API}/uploads`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`upload ${purpose} → ${res.status} ${JSON.stringify(json?.error || json)}`);
+  return json;
+}
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const validAadhaar = () => {
+  const base = `2${String(Date.now()).slice(-10)}`;
+  return base + [0, 4, 3, 2, 1, 5, 6, 7, 8, 9][base.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
+};
 const randPhone = () => `9${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}`;
 const istDay = (d = 0) => new Date(Date.now() + 330 * 60000 + d * 86400000).toISOString().slice(0, 10);
 
@@ -78,13 +95,27 @@ async function seed() {
   await call('POST', '/society/invoices/generate', { token: A, body: { period, dueDate: istDay(10) } });
   await call('POST', '/society/announcements', { token: A, body: { title: 'Water tank cleaning on Sunday', body: 'Water supply will be off from 10 AM to 1 PM.', category: 'maintenance', important: true } });
   await call('POST', '/society/facilities', { token: A, body: { name: 'Clubhouse', description: 'Party hall', icon: 'home', feePaise: 50000, openTime: '09:00', closeTime: '21:00', slotMinutes: 60, maxAdvanceDays: 30, requiresApproval: false, active: true } });
-  const prop = await call('POST', '/properties', { token: r.accessToken, body: { listingType: 'sale', propertyType: 'apartment', title: 'Spacious 2 BHK near metro', description: 'Close to schools and hospitals.', pricePaise: 950000000, areaSqft: 1100, bedrooms: 2, bathrooms: 2, city: 'Pune', locality: 'Kothrud', contactPhone: phone } });
+  // Properties and services come from a KYC-approved vendor (members can't list them).
+  const vendorPhone = randPhone();
+  const v = await call('POST', '/auth/resident/register', { body: { phone: vendorPhone, name: 'Ravi Sharma', password: PASSWORD, accountType: 'vendor' } });
+  const V = v.accessToken;
+  const docs = [];
+  for (let i = 0; i < 3; i += 1) docs.push((await uploadPng(V, 'kyc'))._id);
+  await call('PUT', '/vendor/kyc', { token: V, body: { businessName: 'Sharma Home Services', businessType: 'business', city: 'Pune', pan: 'ABCDE1234F', aadhaar: validAadhaar(), bankAccountHolder: 'Ravi Sharma', bankAccountNumber: '50100123456789', bankIfsc: 'HDFC0001234', panPhoto: docs[0], aadhaarFront: docs[1], aadhaarBack: docs[2], consent: true } });
+  await call('POST', `/platform/vendors/${v.user._id}/kyc`, { token: T, body: { decision: 'approved' } });
+  const prop = await call('POST', '/properties', { token: V, body: { listingType: 'sale', propertyType: 'apartment', title: 'Spacious 2 BHK near metro', description: 'Close to schools and hospitals.', pricePaise: 950000000, areaSqft: 1100, bedrooms: 2, bathrooms: 2, city: 'Pune', locality: 'Kothrud', contactPhone: vendorPhone } });
   await call('POST', `/platform/listings/property/${prop._id}/moderate`, { token: T, body: { decision: 'approved' } }).catch(() => {});
-  const ocats = await call('GET', '/service-offers/categories', { token: r.accessToken });
-  const offer = await call('POST', '/service-offers', { token: r.accessToken, body: { categoryId: ocats.items[0]._id, title: 'Leak repair & bathroom fittings', description: 'Taps, flush tanks and pipe leaks fixed the same day.', priceType: 'starting_from', pricePaise: 29900, experienceYears: 8, serviceArea: 'Baner, Aundh', city: 'Pune', availabilityNote: 'Mon–Sat, 9 AM–7 PM', contactPhone: phone } });
-  await call('POST', `/society/listings/service/${offer._id}/moderate`, { token: A, body: { decision: 'approved' } });
+  const ocats = await call('GET', '/service-offers/categories', { token: V });
+  const plumber = ocats.items.find((c) => /plumb/i.test(c.name)) || ocats.items[0];
+  const offer = await call('POST', '/service-offers', { token: V, body: { categoryId: plumber._id, title: 'Leak repair & bathroom fittings', description: 'Taps, flush tanks and pipe leaks fixed the same day.', priceType: 'starting_from', pricePaise: 29900, experienceYears: 8, serviceArea: 'Baner, Aundh', city: 'Pune', availabilityNote: 'Mon–Sat, 9 AM–7 PM', contactPhone: vendorPhone } });
+  await call('POST', `/platform/listings/service/${offer._id}/moderate`, { token: T, body: { decision: 'approved' } }).catch(() => {});
+  // A running boost (Sponsored) on the property, and a member booking for the vendor to act on.
+  const ad = await call('POST', '/vendor/ads', { token: V, body: { kind: 'property', listingId: prop._id, city: 'Pune', area: 'Kothrud', days: 7 } });
+  await call('POST', `/platform/ads/${ad._id}/review`, { token: T, body: { decision: 'approved' } });
+  await call('PATCH', '/me', { token: r.accessToken, body: { city: 'Pune' } });
+  await call('POST', `/service-offers/${offer._id}/bookings`, { token: r.accessToken, body: { preferredDate: istDay(2), preferredTime: '11:00', address: 'A-101, Green Valley Residency, Baner', note: 'Kitchen tap leaking' } });
   const inv = await call('GET', '/resident/invoices', { token: r.accessToken });
-  return { phone, invoiceId: inv.items?.[0]?._id, propertyId: prop._id, offerId: offer._id };
+  return { phone, vendorPhone, invoiceId: inv.items?.[0]?._id, propertyId: prop._id, offerId: offer._id };
 }
 
 function build() {
@@ -157,11 +188,18 @@ async function inspect(page) {
   });
 }
 
+/** Full page loads restart the web app: wait until the branded splash has finished before checking anything. */
+async function go(page, url) {
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-testid="custom-splash"]', { state: 'detached', timeout: 15000 }).catch(() => {});
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 async function check(page, w, name, url) {
   const errs = [];
   const onErr = (e) => errs.push(e.message);
   page.on('pageerror', onErr);
-  if (url) await page.goto(`http://localhost:${PORT}${url}`, { waitUntil: 'networkidle' });
+  if (url) await go(page, `http://localhost:${PORT}${url}`);
   await page.waitForTimeout(500);
   const r = await inspect(page);
   page.off('pageerror', onErr);
@@ -198,10 +236,16 @@ async function main() {
     ['bills', '/bills'], ['community', '/community'], ['notices', '/notices'], ['complaints', '/complaints'], ['complaint-new', '/complaints/new'],
     ['amenities', '/facilities'], ['bookings', '/bookings'], ['payments', '/payments'], ['service-requests', '/service-requests'],
     ['notifications', '/notifications'], ['marketplace', '/marketplace'], ['properties', '/properties'], ['my-listings', '/my-listings'],
-    ['memberships', '/memberships'], ['edit-profile', '/edit-profile'], ['change-password', '/change-password'], ['property-new', '/properties/edit'],
+    ['memberships', '/memberships'], ['edit-profile', '/edit-profile'], ['change-password', '/change-password'], ['service-bookings', '/service-bookings'],
     ...(data.invoiceId ? [['invoice', `/invoice/${data.invoiceId}`]] : []),
     ['property-detail', `/properties/${data.propertyId}`],
-    ['services-list', '/offers'], ['service-detail', `/offers/${data.offerId}`], ['service-new', '/offers/edit'], ['service-edit', `/offers/edit?id=${data.offerId}`], ['my-services', '/my-listings?tab=service'],
+    ['services-list', '/offers'], ['service-detail', `/offers/${data.offerId}`], ['service-book', `/offers/book?id=${data.offerId}`], ['my-services', '/my-listings?tab=service'],
+  ];
+  // Vendor area (signed in through the Member / Vendor switch on the login screen).
+  const vendorScreens = [
+    ['v-dashboard', '/dashboard'], ['v-listings', '/vendor-listings'], ['v-listings-services', '/vendor-listings?tab=service'], ['v-bookings', '/vendor-bookings'], ['v-ads', '/ads'], ['v-profile', '/vendor-profile'],
+    ['v-kyc', '/kyc'], ['v-boost', `/boost?kind=property&id=${data.propertyId}`], ['v-property-new', '/properties/edit'], ['v-property-edit', `/properties/edit?id=${data.propertyId}`],
+    ['v-service-new', '/offers/edit'], ['v-service-edit', `/offers/edit?id=${data.offerId}`], ['v-property-detail', `/properties/${data.propertyId}`], ['v-service-detail', `/offers/${data.offerId}`], ['v-notifications', '/notifications'],
   ];
   try {
     for (const w of WIDTHS) {
@@ -210,7 +254,7 @@ async function main() {
       page.on('console', (m) => m.type() === 'error' && !/Failed to load resource|401|404/.test(m.text()) && warn(w, 'console', m.text().slice(0, 160)));
       process.stdout.write(`\n${w}px: `);
 
-      await page.goto(`http://localhost:${PORT}/welcome`, { waitUntil: 'networkidle' });
+      await go(page, `http://localhost:${PORT}/welcome`);
       await check(page, w, 'welcome');
       await check(page, w, 'register', '/register');
       await check(page, w, 'login', '/login');
@@ -225,23 +269,52 @@ async function main() {
       }
 
       // workflows: tabs, home modules, society tiles
-      await page.goto(`http://localhost:${PORT}/home`, { waitUntil: 'networkidle' });
+      await go(page, `http://localhost:${PORT}/home`);
       for (const [tab, re] of [['manage', /\/manage$/], ['explore', /\/explore$/], ['services', /\/services$/], ['profile', /\/profile$/], ['home', /\/home$/]]) {
         await expectRoute(page, w, `tab ${tab}`, () => page.getByTestId(`tab-${tab}`).click(), re);
       }
       for (const [id, re] of [['home-society', /\/manage$/], ['home-properties', /\/explore$/], ['home-services', /\/services$/], ['home-community', /\/community$/]]) {
-        await page.goto(`http://localhost:${PORT}/home`, { waitUntil: 'networkidle' });
+        await go(page, `http://localhost:${PORT}/home`);
         await expectRoute(page, w, `home card ${id}`, () => page.getByTestId(id).click(), re);
       }
-      await page.goto(`http://localhost:${PORT}/services`, { waitUntil: 'networkidle' });
-      await expectRoute(page, w, 'services → offer your service', () => page.getByRole('button', { name: 'Offer your service' }).click(), /\/offers\/edit$/);
-      await page.goto(`http://localhost:${PORT}/services`, { waitUntil: 'networkidle' });
+      await go(page, `http://localhost:${PORT}/services`);
+      await expectRoute(page, w, 'services → first category tile', () => page.locator('[data-testid^="service-cat-"]').first().click(), /\/offers/);
+      await go(page, `http://localhost:${PORT}/services`);
+      await expectRoute(page, w, 'services → Book Now', () => page.getByRole('button', { name: /^Book Leak repair/ }).first().click(), /\/offers\/book/);
+      await go(page, `http://localhost:${PORT}/explore`);
+      // Inactive tabs stay mounted (hidden), so only count the visible tag.
+      const sponsoredShown = await page.locator('text=Sponsored >> visible=true').first().waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
+      if (!sponsoredShown) fail(w, 'properties', 'boosted property is not marked Sponsored');
+      if (await page.getByText('Sell', { exact: true }).isVisible().catch(() => false)) fail(w, 'properties', 'members must not see the Sell tab');
+      await go(page, `http://localhost:${PORT}/services`);
       await expectRoute(page, w, 'services → provider card', () => page.getByRole('button', { name: /Leak repair/ }).first().click(), /\/offers\/[a-f0-9]{24}$/);
       for (const href of ['bills', 'payments', 'complaints', 'notices', 'community', 'facilities', 'bookings', 'service-requests', 'marketplace']) {
-        await page.goto(`http://localhost:${PORT}/manage`, { waitUntil: 'networkidle' });
+        await go(page, `http://localhost:${PORT}/manage`);
         await expectRoute(page, w, `society tile ${href}`, () => page.getByTestId(`module-${href}`).click(), new RegExp(`/${href}$`));
       }
       await ctx.close();
+
+      const vctx = await browser.newContext({ viewport: { width: w, height: Math.round(w * 2.05) }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      const vpage = await vctx.newPage();
+      vpage.on('console', (m) => m.type() === 'error' && !/Failed to load resource|401|404/.test(m.text()) && warn(w, 'console', m.text().slice(0, 160)));
+      await go(vpage, `http://localhost:${PORT}/login`);
+      await vpage.getByTestId('login-as-vendor').click();
+      await vpage.getByLabel('Mobile number').fill(data.vendorPhone);
+      await vpage.getByLabel('Password', { exact: true }).fill(PASSWORD);
+      await vpage.getByRole('button', { name: 'Login', exact: true }).click();
+      await vpage.waitForURL(/\/dashboard$/, { timeout: 15000 });
+      for (const [name, url] of vendorScreens) {
+        await check(vpage, w, name, url);
+        process.stdout.write('v');
+      }
+      await go(vpage, `http://localhost:${PORT}/dashboard`);
+      for (const [tab, re] of [['vendor-listings', /\/vendor-listings$/], ['vendor-bookings', /\/vendor-bookings$/], ['ads', /\/ads$/], ['vendor-profile', /\/vendor-profile$/], ['dashboard', /\/dashboard$/]]) {
+        await expectRoute(vpage, w, `vendor tab ${tab}`, () => vpage.getByTestId(`tab-${tab}`).click(), re);
+      }
+      // Vendors never reach society screens.
+      await go(vpage, `http://localhost:${PORT}/manage`);
+      if (/\/manage$/.test(new URL(vpage.url()).pathname)) fail(w, 'vendor', 'vendor could open the society hub');
+      await vctx.close();
     }
   } finally {
     await browser.close();

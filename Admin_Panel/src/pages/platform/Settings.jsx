@@ -7,8 +7,13 @@ import { Field, Input, Toggle } from '../../components/Form.jsx';
 import { useToast } from '../../components/Toast.jsx';
 
 const META = {
-  'listings.requireApproval': { label: 'Independent listings need approval', description: 'Property and marketplace listings not linked to a society wait for platform moderation before they are visible.' },
+  'listings.requireApproval': { label: 'Independent listings need approval', description: 'Vendor property and service listings, and marketplace listings not linked to a society, wait for platform moderation before they are visible.' },
   'support.email': { label: 'Support email', description: 'Shown to users who need help.', validate: (v) => (!v || isEmail(v) ? null : 'Enter a valid email address'), placeholder: 'support@example.com' },
+  'ads.dayOptions': { label: 'Boost (ad) durations', description: 'Day options vendors can choose when boosting a post — 1 to 6 numbers from 1 to 30, separated by commas.', validate: (v) => {
+      const days = String(v || '').split(',').map((d) => d.trim());
+      const ok = days.length >= 1 && days.length <= 6 && days.every((d) => /^\d{1,2}$/.test(d) && +d >= 1 && +d <= 30) && new Set(days.map(Number)).size === days.length;
+      return ok ? null : 'Use 1–6 different numbers from 1 to 30, separated by commas, e.g. 3,7,15,30';
+    }, placeholder: '3,7,15,30' },
   'support.phone': { label: 'Support phone', description: 'Shown to users who need help (10-digit Indian mobile).', validate: (v) => (!v || isIndianMobile(v) ? null : 'Enter a valid 10-digit mobile number'), normalize: normalizePhone, placeholder: '98765 43210' },
 };
 

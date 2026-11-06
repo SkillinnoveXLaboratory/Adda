@@ -1,12 +1,16 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Image, ImageBackground, Pressable, StyleSheet, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
-import { BRAND, LogoMark, TAGLINE } from '../../components/Logo';
+import { BRAND, TAGLINE } from '../../components/Logo';
 import { T } from '../../components/Text';
 import { colors, shadow } from '../../theme';
+
+// Same building photo and gold mark as the branded splash, so the hand-over is seamless.
+const BG = require('../../../assets/images/splash-bg.jpg');
+const MARK = require('../../../assets/images/logo-gold.png');
 
 const POINTS = [
   ['business-outline', 'Society management', 'Bills, complaints, notices & amenities'],
@@ -18,20 +22,17 @@ const POINTS = [
 export default function Welcome() {
   const insets = useSafeAreaInsets();
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 20 }]}>
+    <ImageBackground source={BG} resizeMode="cover" style={[styles.screen, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 20 }]} imageStyle={styles.photo} testID="welcome-bg">
       <StatusBar style="light" />
-      <Svg style={StyleSheet.absoluteFill} viewBox="0 0 400 800" preserveAspectRatio="none" pointerEvents="none" opacity={0.2}>
-        <Path d="M-50 200 C 100 300, 200 100, 450 300" stroke={colors.gold} strokeWidth={2} fill="none" />
-        <Path d="M-50 250 C 120 350, 220 150, 450 350" stroke={colors.gold} strokeWidth={1.5} fill="none" />
-        <Path d="M-50 600 C 150 500, 250 700, 450 550" stroke={colors.gold} strokeWidth={2} fill="none" />
-      </Svg>
+      {/* Navy fade over the lower half keeps the card and buttons readable on the photo. */}
+      <LinearGradient colors={['rgba(7,22,44,0)', 'rgba(7,22,44,0.55)', 'rgba(7,22,44,0.95)']} locations={[0.35, 0.6, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
 
       <View style={styles.brand}>
-        <LogoMark size={96} />
-        <T weight="extrabold" size={30} color={colors.white} style={{ letterSpacing: 3, marginTop: 16 }}>
+        <Image source={MARK} style={{ width: 104, height: 104 }} resizeMode="contain" accessibilityLabel={`${BRAND} logo`} />
+        <T weight="bold" size={34} color={colors.gold} style={{ letterSpacing: 7, marginTop: 12, paddingLeft: 7 }}>
           {BRAND}
         </T>
-        <T weight="medium" size={12} color="#cbd5e1" style={{ letterSpacing: 0.4, marginTop: 4, textAlign: 'center' }}>
+        <T weight="semibold" size={13} color={colors.white} style={{ letterSpacing: 0.3, marginTop: 4, textAlign: 'center' }}>
           {TAGLINE}
         </T>
       </View>
@@ -65,17 +66,19 @@ export default function Welcome() {
           </T>
         </Pressable>
       </View>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.navy, paddingHorizontal: 24, justifyContent: 'space-between' },
+  // overflow + a full-size photo keep the picture inside the screen (on web it otherwise renders at its natural size).
+  screen: { flex: 1, backgroundColor: colors.navy, paddingHorizontal: 24, justifyContent: 'space-between', overflow: 'hidden' },
+  photo: { width: '100%', height: '100%' },
   brand: { alignItems: 'center', paddingTop: 40 },
   bottom: { width: '100%', maxWidth: 440, alignSelf: 'center', gap: 14 },
-  card: { borderRadius: 16, borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)', backgroundColor: 'rgba(30,41,59,0.6)', paddingHorizontal: 14, ...shadow.button },
+  card: { borderRadius: 16, borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)', backgroundColor: 'rgba(7,22,44,0.72)', paddingHorizontal: 14, ...shadow.button },
   point: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
   pointLine: { borderBottomWidth: 1, borderBottomColor: 'rgba(148,163,184,0.18)' },
-  pointIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(212,175,55,0.12)', alignItems: 'center', justifyContent: 'center' },
+  pointIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(202,158,59,0.16)', alignItems: 'center', justifyContent: 'center' },
   cta: { backgroundColor: colors.gold, borderRadius: 12, minHeight: 50, alignItems: 'center', justifyContent: 'center', ...shadow.gold },
 });

@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ListingCard } from './ListingCard';
 import { Button, Chips, EmptyState, ErrorState, Field, IconButton, LoadingList, PillToggle, Screen, SearchBar, T } from './ui';
+import { useAuth } from '../context/auth';
 import { useApi } from '../hooks/useApi';
 import { toPaise } from '../lib/format';
 import { colors, shadow } from '../theme';
@@ -50,19 +51,23 @@ export function PropertyBrowser({ header, inTab = false, showFilters, setShowFil
     const t = setTimeout(() => setDebounced(q.trim()), 350);
     return () => clearTimeout(t);
   }, [q]);
+  const { isVendor } = useAuth();
+  // Only verified vendors list properties; members browse (Buy / Rent).
+  const modes = isVendor ? MODES : MODES.filter((m) => m.value !== 'sell');
   const browsing = mode !== 'sell';
   const list = useApi('/properties', { query: { q: debounced, listingType: browsing ? mode : '', propertyType, bedrooms, city: city.trim(), maxPrice: Number(maxPrice) > 0 ? toPaise(maxPrice) : '', limit: 50 } });
+  const sponsored = list.data?.sponsoredCount || 0;
 
-  const actions = (
+  const actions = isVendor ? (
     <View style={{ flexDirection: 'row', gap: 10 }}>
-      <Button title="My listings" variant="alt" onPress={() => router.push('/my-listings')} style={{ flex: 1 }} />
+      <Button title="My listings" variant="alt" onPress={() => router.push({ pathname: '/vendor-listings', params: { tab: 'property' } })} style={{ flex: 1 }} />
       <Button title="List property" icon="add" onPress={() => router.push('/properties/edit')} style={{ flex: 1.3 }} />
     </View>
-  );
+  ) : null;
 
   return (
-    <Screen header={header} refreshing={list.refreshing} onRefresh={list.refresh} footer={inTab || !browsing ? undefined : actions}>
-      <PillToggle options={MODES} value={mode} onChange={setMode} />
+    <Screen header={header} refreshing={list.refreshing} onRefresh={list.refresh} footer={inTab || !browsing || !actions ? undefined : actions}>
+      <PillToggle options={modes} value={mode} onChange={setMode} />
 
       {browsing ? (
         <>
@@ -87,11 +92,18 @@ export function PropertyBrowser({ header, inTab = false, showFilters, setShowFil
           ) : list.error && !list.data ? (
             <ErrorState error={list.error} onRetry={list.reload} />
           ) : !list.data.items.length ? (
-            <EmptyState icon="business-outline" title={mode === 'rent' ? 'No homes for rent yet' : 'No homes for sale yet'} message="Try other filters, or list your own flat." action="List your property" onAction={() => router.push('/properties/edit')} />
+            <EmptyState
+              icon="business-outline"
+              title={mode === 'rent' ? 'No homes for rent yet' : 'No homes for sale yet'}
+              message={isVendor ? 'Try other filters, or list a property.' : 'Try other filters. Verified vendors list new homes here regularly.'}
+              action={isVendor ? 'List a property' : undefined}
+              onAction={isVendor ? () => router.push('/properties/edit') : undefined}
+            />
           ) : (
             <View style={{ gap: 12 }}>
               <T size={12} color={colors.muted}>
-                {list.data.total} listing{list.data.total === 1 ? '' : 's'}
+                {list.data.total + sponsored} listing{list.data.total + sponsored === 1 ? '' : 's'}
+                {sponsored ? ` · ${sponsored} sponsored` : ''}
               </T>
               {list.data.items.map((p) => (
                 <ListingCard key={p._id} item={p} kind="property" onPress={() => router.push(`/properties/${p._id}`)} />
@@ -113,7 +125,7 @@ export function PropertyBrowser({ header, inTab = false, showFilters, setShowFil
               Add photos, price and contact details. Your listing appears here once it’s approved.
             </T>
             <Button title="List your property" icon="add" onPress={() => router.push('/properties/edit')} style={{ alignSelf: 'stretch', marginTop: 4 }} />
-            <Button title="Manage my listings" variant="alt" onPress={() => router.push('/my-listings')} style={{ alignSelf: 'stretch' }} />
+            <Button title="Manage my listings" variant="alt" onPress={() => router.push({ pathname: '/vendor-listings', params: { tab: 'property' } })} style={{ alignSelf: 'stretch' }} />
           </View>
         </View>
       )}

@@ -68,7 +68,7 @@ export default function SocietySearch() {
       }
     >
       {pending ? (
-        <Card onPress={() => router.push('/membership')} accessibilityLabel="View membership request status" style={{ backgroundColor: '#f9f3dd', borderColor: '#e7cf7d' }}>
+        <Card onPress={() => router.push('/membership')} accessibilityLabel="View membership request status" style={{ backgroundColor: '#f4ecd8', borderColor: '#e7cf7d' }}>
           <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
             <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: colors.amberBg, alignItems: 'center', justifyContent: 'center' }}>
               <Ionicons name="hourglass-outline" size={22} color={colors.amber} />

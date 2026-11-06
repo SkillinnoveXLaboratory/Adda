@@ -52,5 +52,5 @@ export const useToast = () => useContext(ToastContext);
 
 const styles = StyleSheet.create({
   wrap: { position: 'absolute', left: 16, right: 16, alignItems: 'center', zIndex: 100 },
-  toast: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#0b1a30', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 22, maxWidth: '100%' },
+  toast: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#07162c', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 22, maxWidth: '100%' },
 });

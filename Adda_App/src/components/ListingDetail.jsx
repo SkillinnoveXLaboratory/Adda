@@ -80,7 +80,9 @@ export function ListingDetailView({ item, kind, onChanged }) {
 
       <View style={{ gap: 6 }}>
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+          {item.sponsored ? <Badge label="Sponsored" tone="warning" /> : null}
           <Badge label={kind === 'property' ? (item.listingType === 'rent' ? 'For rent' : 'For sale') : item.category?.name} tone="info" />
+          {item.verifiedVendor ? <Badge label="Verified vendor" tone="success" /> : null}
           {item.mine && item.moderationStatus !== 'approved' ? <Badge status={item.moderationStatus} label={item.moderationStatus === 'pending' ? 'In review' : undefined} /> : null}
           {kind === 'property' && item.availability !== 'available' ? <Badge status={item.availability} /> : null}
           {kind === 'marketplace' && item.status !== 'active' ? <Badge status={item.status} /> : null}
@@ -88,7 +90,7 @@ export function ListingDetailView({ item, kind, onChanged }) {
         <T weight="extrabold" size={22} style={{ lineHeight: 29 }}>
           {item.title}
         </T>
-        <T weight="extrabold" size={20} color="#b89428">
+        <T weight="extrabold" size={20} color="#b38a2e">
           {price}
           {kind === 'marketplace' && item.negotiable ? (
             <T size={13} color={colors.muted}>
@@ -137,6 +139,9 @@ export function ListingDetailView({ item, kind, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
+          {kind === 'property' && item.verifiedVendor && item.moderationStatus === 'approved' && item.availability === 'available' ? (
+            <Button title="Boost this property" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'property', id: item._id } })} />
+          ) : null}
           <Button title="Edit listing" icon="create-outline" onPress={() => router.push({ pathname: `${base}/edit`, params: { id: item._id } })} />
           {kind === 'property' ? (
             item.availability === 'available' ? (

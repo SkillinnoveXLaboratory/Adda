@@ -19,6 +19,9 @@ const PMembers = page(() => import('./pages/platform/Members.jsx'));
 const PMemberProfile = page(() => import('./pages/platform/MemberProfile.jsx'));
 const PUsers = page(() => import('./pages/platform/Users.jsx'));
 const PListings = page(() => import('./pages/platform/Listings.jsx'));
+const PVendors = page(() => import('./pages/platform/Vendors.jsx'));
+const PVendorDetail = page(() => import('./pages/platform/VendorDetail.jsx'));
+const PAds = page(() => import('./pages/platform/Ads.jsx'));
 const PReports = page(() => import('./pages/platform/ContentReports.jsx'));
 const PPayments = page(() => import('./pages/platform/Payments.jsx'));
 const PCategories = page(() => import('./pages/platform/Categories.jsx'));
@@ -68,7 +71,10 @@ const platformRoutes = [
   ['members', PMembers],
   ['members/:id', PMemberProfile],
   ['users', PUsers],
+  ['vendors', PVendors],
+  ['vendors/:id', PVendorDetail],
   ['listings', PListings],
+  ['ads', PAds],
   ['reports', PReports],
   ['payments', PPayments],
   ['categories', PCategories],

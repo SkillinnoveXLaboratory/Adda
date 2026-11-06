@@ -9,12 +9,17 @@ import { api } from '../../lib/api';
 import { timeAgo } from '../../lib/format';
 import { colors } from '../../theme';
 
-const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', system: 'information-circle' };
+const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', system: 'information-circle', vendor: 'shield-checkmark', ad: 'rocket' };
 
 /** Maps the server's notification route hint to an app screen. */
-function hrefFor(n, isMember) {
+function hrefFor(n, isMember, isVendor) {
   const id = n.data?.id;
   const r = n.data?.route;
+  if (isVendor) {
+    const vendorRoutes = { MyProperties: '/vendor-listings?tab=property', MyServices: '/vendor-listings?tab=service', VendorBookings: '/vendor-bookings', VendorAds: '/ads', VendorKyc: '/kyc' };
+    return vendorRoutes[r] || null;
+  }
+  if (r === 'MyServiceBookings') return '/service-bookings';
   if (!isMember && !['MyProperties', 'MyMarketplace', 'MyServices'].includes(r)) return null;
   switch (r) {
     case 'Invoice':
@@ -49,7 +54,7 @@ function hrefFor(n, isMember) {
 }
 
 export default function Notifications() {
-  const { isMember, refreshProfile } = useAuth();
+  const { isMember, isVendor, refreshProfile } = useAuth();
   const toast = useToast();
   const [state, setState] = useState({ items: [], unread: 0, page: 0, pages: 1, loading: true, refreshing: false, more: false, error: null });
   const pageRef = useRef(0);
@@ -79,7 +84,9 @@ export default function Notifications() {
       await refreshProfile().catch(() => {});
       return router.replace('/');
     }
-    const href = hrefFor(n, isMember);
+    // A KYC decision changes what a vendor can do — refresh the profile first.
+    if (n.type === 'vendor') await refreshProfile().catch(() => {});
+    const href = hrefFor(n, isMember, isVendor);
     if (href) router.push(href);
   };
 
@@ -108,7 +115,7 @@ export default function Notifications() {
           renderItem={({ item: n }) => (
             <Pressable onPress={() => open(n)} accessibilityRole="button" accessibilityLabel={`${n.title}${n.readAt ? '' : ', unread'}`} style={({ pressed }) => [{ flexDirection: 'row', gap: 12, alignItems: 'center', padding: 14, backgroundColor: n.readAt ? colors.white : '#f1f5f9', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' }, pressed && { opacity: 0.85 }]}>
               <View style={{ width: 40, height: 40, borderRadius: 13, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name={`${ICON[n.type] || 'notifications'}-outline`} size={19} color="#0b1a30" />
+                <Ionicons name={`${ICON[n.type] || 'notifications'}-outline`} size={19} color="#07162c" />
               </View>
               <View style={{ flex: 1 }}>
                 <T weight={n.readAt ? 'semibold' : 'extrabold'} size={14}>
@@ -123,7 +130,7 @@ export default function Notifications() {
                   {timeAgo(n.createdAt)}
                 </T>
               </View>
-              {!n.readAt ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#b89428' }} /> : null}
+              {!n.readAt ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#b38a2e' }} /> : null}
             </Pressable>
           )}
           ListEmptyComponent={<EmptyState icon="notifications-off-outline" title="No notifications yet" message="Bills, approvals, complaint updates and notices will show up here." />}

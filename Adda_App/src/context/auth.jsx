@@ -6,7 +6,7 @@ const AuthContext = createContext(null);
 
 /**
  * Session + profile state. status: 'booting' | 'signedOut' | 'signedIn' | 'offline'.
- * The approved membership decides whether the resident area is unlocked.
+ * Members: an approved membership unlocks the society area. Vendors (accountType vendor) get the vendor area and never a society.
  */
 export function AuthProvider({ children, onSessionExpired }) {
   const [status, setStatus] = useState('booting');
@@ -76,23 +76,34 @@ export function AuthProvider({ children, onSessionExpired }) {
   const finishSignIn = useCallback(
     async (result) => {
       await session.save(result);
-      await applyProfile({ user: result.user, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
+      await applyProfile({ user: result.user, vendor: result.vendor, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
       setStatus('signedIn');
     },
     [applyProfile],
   );
 
   const signIn = useCallback(
-    async (phone, password) => {
+    async (phone, password, expectedType) => {
       const result = await api('/auth/resident/login', { method: 'POST', auth: false, body: { phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
+      const actual = result.user?.accountType || 'member';
+      if (expectedType && actual !== expectedType) {
+        // Signed in to the wrong kind of account: end that new session on the server, keep nothing locally.
+        await session.save(result);
+        await api('/auth/logout', { method: 'POST' }).catch(() => {});
+        await session.clear();
+        const err = new Error(actual === 'vendor' ? 'This number is registered as a vendor account. Switch to Vendor to sign in.' : 'This number is registered as a member account. Switch to Member to sign in.');
+        err.code = 'WRONG_ACCOUNT_TYPE';
+        err.accountType = actual;
+        throw err;
+      }
       await finishSignIn(result);
     },
     [finishSignIn],
   );
 
   const register = useCallback(
-    async ({ name, phone, password }) => {
-      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body: { name: name.trim(), phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
+    async ({ name, phone, password, accountType = 'member' }) => {
+      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body: { name: name.trim(), phone: normalizePhone(phone), password, accountType, deviceName: 'NIVASA app' } });
       await finishSignIn(result);
     },
     [finishSignIn],
@@ -112,7 +123,8 @@ export function AuthProvider({ children, onSessionExpired }) {
   const value = useMemo(() => {
     const memberships = profile?.memberships || [];
     const approved = memberships.filter((m) => m.status === 'approved' && m.society?.status !== 'suspended');
-    const active = approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
+    const isVendor = profile?.user?.accountType === 'vendor';
+    const active = isVendor ? null : approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
     return {
       status,
       bootError,
@@ -121,6 +133,9 @@ export function AuthProvider({ children, onSessionExpired }) {
       memberships,
       activeMembership: active,
       isMember: !!active,
+      isVendor,
+      accountType: profile?.user?.accountType || 'member',
+      vendor: profile?.vendor || null,
       pendingMembership: memberships.find((m) => m.status === 'pending') || null,
       signIn,
       register,

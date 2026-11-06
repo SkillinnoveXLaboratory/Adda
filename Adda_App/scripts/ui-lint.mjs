@@ -84,6 +84,24 @@ for (const f of files) {
   }
 }
 
+// E5 — the service-category icon set is shared: app, Master Admin and SocialPanel copies must be identical, and the
+// backend's allow-list (SERVICE_ICON_KEYS) must name exactly the same icons, or admins could pick icons the app can't draw.
+{
+  const REPO = path.resolve(ROOT, '..');
+  const appIcons = path.join(SRC, 'lib', 'serviceIcons.json');
+  const canonical = fs.readFileSync(appIcons, 'utf8');
+  for (const copy of ['Admin_Panel/src/lib/serviceIcons.json', 'SocialPanel/src/lib/serviceIcons.json']) {
+    const p = path.join(REPO, copy);
+    if (!fs.existsSync(p)) add(errors, rel(appIcons), 1, 'E5', `missing copy ${copy}`);
+    else if (fs.readFileSync(p, 'utf8') !== canonical) add(errors, rel(appIcons), 1, 'E5', `${copy} differs — copy src/lib/serviceIcons.json over it`);
+  }
+  const keys = JSON.parse(canonical).icons.map((i) => i.key);
+  const server = path.join(REPO, 'Backend', 'server.js');
+  const m = fs.existsSync(server) && fs.readFileSync(server, 'utf8').match(/const SERVICE_ICON_KEYS = (\[[^\]]*\]);/);
+  if (!m) add(errors, rel(appIcons), 1, 'E5', 'Backend/server.js has no SERVICE_ICON_KEYS list');
+  else if (JSON.stringify(JSON.parse(m[1])) !== JSON.stringify(keys)) add(errors, rel(appIcons), 1, 'E5', 'Backend SERVICE_ICON_KEYS does not match serviceIcons.json');
+}
+
 const show = (title, list, color) => {
   if (!list.length) return;
   console.log(`\n\x1b[${color}m${title} (${list.length})\x1b[0m`);

@@ -10,7 +10,8 @@
     "api-check": "node scripts/api-check.mjs",
     "doctor": "npx expo-doctor",
     "ui-lint": "node scripts/ui-lint.mjs",
-    "ui-audit": "node scripts/ui-audit.mjs"
+    "ui-audit": "node scripts/ui-audit.mjs",
+    "vendor-check": "node scripts/vendor-check.mjs http://localhost:3013"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

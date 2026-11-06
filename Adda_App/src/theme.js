@@ -1,46 +1,48 @@
 /**
- * NIVASA design tokens (navy + gold, slate neutrals, Plus Jakarta Sans), from the NIVASA mobile prototype.
+ * NIVASA design tokens (navy + gold, Plus Jakarta Sans) from the NIVASA screen templates (_templates_.txt).
  * Token names are kept stable so every screen picks the theme up from here.
  */
 export const colors = {
   // brand
-  navy: '#0b1a30',
-  navyDark: '#071222',
-  navySoft: '#1e293b',
-  gold: '#d4af37',
-  goldDark: '#b89428',
-  goldLight: '#f9f3dd',
-  goldText: '#8a6d12',
+  navy: '#07162c',
+  navyDark: '#040e1d',
+  navySoft: '#12315b',
+  navyMid: '#0c2445',
+  gold: '#ca9e3b',
+  goldDark: '#b38a2e',
+  goldLight: '#f4ecd8',
+  goldText: '#8a6a1f',
   logoBg: '#032143',
 
-  primary: '#0b1a30',
-  blue: '#0b1a30',
+  primary: '#07162c',
+  blue: '#07162c',
   link: '#2563eb',
-  heroFrom: '#0b1a30',
-  heroTo: '#1e293b',
-  balanceFrom: '#0b1a30',
-  balanceTo: '#1e293b',
-  coral: '#d4af37',
-  coralFrom: '#0b1a30',
-  coralTo: '#1e293b',
-  coralText: '#0b1a30',
+  heroFrom: '#07162c',
+  heroTo: '#12315b',
+  balanceFrom: '#07162c',
+  balanceTo: '#12315b',
+  coral: '#ca9e3b',
+  coralFrom: '#07162c',
+  coralTo: '#12315b',
+  coralText: '#07162c',
 
   // surfaces & text (slate)
-  bg: '#f4f6f9',
+  bg: '#f4f6fb',
+  searchBg: '#f1f4f9',
   card: '#ffffff',
   text: '#1e293b',
   textSoft: '#334155',
-  muted: '#64748b',
+  muted: '#637381',
   subtle: '#94a3b8',
-  border: '#e2e8f0',
+  border: '#eef2f7',
   inputBorder: '#e2e8f0',
   inputBg: '#f8fafc',
   divider: '#f1f5f9',
   chip: '#e2e8f0',
   chipText: '#475569',
-  chipOn: '#0b1a30',
-  iconBg: '#f9f3dd',
-  iconFg: '#0b1a30',
+  chipOn: '#07162c',
+  iconBg: '#f4ecd8',
+  iconFg: '#07162c',
   hint: '#f1f5f9',
   hintText: '#475569',
 
@@ -77,10 +79,10 @@ export const radius = { sm: 8, md: 12, lg: 12, xl: 16, xxl: 20, pill: 999 };
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };
 
 export const shadow = {
-  card: { shadowColor: '#0b1a30', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  button: { shadowColor: '#0b1a30', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  gold: { shadowColor: '#b89428', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
-  coral: { shadowColor: '#0b1a30', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  card: { shadowColor: '#07162c', shadowOpacity: 0.04, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
+  button: { shadowColor: '#07162c', shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  gold: { shadowColor: '#b38a2e', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
+  coral: { shadowColor: '#07162c', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
 };
 
 /** Status → badge colours (prototype pills: emerald / amber / blue / red / slate). */
@@ -122,5 +124,9 @@ const STATUS_TONE = {
   sold: 'neutral',
   rented: 'neutral',
   inactive: 'neutral',
+  declined: 'danger',
+  expired: 'neutral',
+  not_submitted: 'warning',
+  sponsored: 'warning',
 };
 export const toneFor = (status) => STATUS_TONE[status] || 'neutral';

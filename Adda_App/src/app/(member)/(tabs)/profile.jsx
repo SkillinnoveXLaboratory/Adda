@@ -11,7 +11,8 @@ import { titleCase } from '../../../lib/format';
 import { colors } from '../../../theme';
 
 const OPTIONS = [
-  ['My Properties', 'home-outline', '/my-listings'],
+  ['My Service Bookings', 'calendar-number-outline', '/service-bookings'],
+  ['My Listings', 'pricetags-outline', '/my-listings'],
   ['My Society', 'business-outline', '/memberships'],
   ['My Bookings', 'calendar-outline', '/bookings'],
   ['Payment History', 'card-outline', '/payments'],

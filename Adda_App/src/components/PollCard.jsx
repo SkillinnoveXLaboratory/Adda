@@ -33,7 +33,7 @@ export function PollCard({ poll, onVoted }) {
   return (
     <View style={styles.poll}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <T weight="extrabold" size={11.5} color="#0b1a30" style={{ letterSpacing: 0.5 }}>
+        <T weight="extrabold" size={11.5} color="#07162c" style={{ letterSpacing: 0.5 }}>
           COMMUNITY POLL
         </T>
         <T size={11.5} color={colors.muted}>

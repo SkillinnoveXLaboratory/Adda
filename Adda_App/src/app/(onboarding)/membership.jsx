@@ -64,7 +64,7 @@ export default function MembershipStatus() {
     <Screen header={<DetailHeader title="Membership status" fallback="/society" />} refreshing={refreshing} onRefresh={refresh}>
       <View style={{ alignItems: 'center', gap: 10, paddingVertical: 10 }}>
         <View style={{ width: 84, height: 84, borderRadius: 42, backgroundColor: rejected ? colors.dangerBg : '#f1f5f9', alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name={rejected ? 'close-circle-outline' : 'time-outline'} size={40} color={rejected ? colors.danger : '#0b1a30'} />
+          <Ionicons name={rejected ? 'close-circle-outline' : 'time-outline'} size={40} color={rejected ? colors.danger : '#07162c'} />
         </View>
         <T weight="extrabold" size={22} style={{ textAlign: 'center' }}>
           {rejected ? `Request ${m.status}` : 'Membership pending'}

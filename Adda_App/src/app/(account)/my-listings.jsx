@@ -1,27 +1,33 @@
 import { useState } from 'react';
 import { View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { ListingCard } from '../../components/ListingCard';
 import { OfferCard } from '../../components/OfferCard';
 import { AsyncView, Button, DetailHeader, PillToggle, Screen } from '../../components/ui';
+import { useAuth } from '../../context/auth';
 import { useApi } from '../../hooks/useApi';
 
+/**
+ * A member's own listings. Members sell items in the marketplace; property and service listings come from
+ * verified vendors now, so those tabs only show what the member listed before (to edit, pause or delete).
+ */
 const KINDS = {
-  property: { label: 'Properties', path: '/properties/mine', add: ['List a property', '/properties/edit'], open: '/properties', icon: 'business-outline', empty: 'List your flat for rent or sale.' },
-  marketplace: { label: 'Items', path: '/marketplace/mine', add: ['Sell an item', '/marketplace/edit'], open: '/marketplace', icon: 'bag-handle-outline', empty: 'Sell things you no longer need.' },
-  service: { label: 'Services', path: '/service-offers/mine', add: ['Offer your service', '/offers/edit'], open: '/offers', icon: 'construct-outline', empty: 'Offer your skills — plumbing, tuition, cooking — to neighbours.' },
+  marketplace: { label: 'Items', path: '/marketplace/mine', add: ['Sell an item', '/marketplace/edit'], open: '/marketplace', icon: 'bag-handle-outline', empty: 'Sell things you no longer need to your neighbours.' },
+  property: { label: 'Properties', path: '/properties/mine', open: '/properties', icon: 'business-outline', empty: 'Properties are listed by verified vendors. Browse homes under Properties.' },
+  service: { label: 'Services', path: '/service-offers/mine', open: '/offers', icon: 'construct-outline', empty: 'Services are listed by verified vendors. Book one from Home Maintenance.' },
 };
 
-/** Everything the user has listed: properties, marketplace items and services (?tab=service). */
 export default function MyListings() {
   const { tab } = useLocalSearchParams();
-  const [kind, setKind] = useState(KINDS[tab] ? tab : 'property');
+  const { isVendor } = useAuth();
+  const [kind, setKind] = useState(KINDS[tab] ? tab : 'marketplace');
   const k = KINDS[kind];
-  const list = useApi(k.path, { query: { limit: 50 } });
+  const list = useApi(isVendor ? null : k.path, { query: { limit: 50 } });
+  if (isVendor) return <Redirect href={{ pathname: '/vendor-listings', params: tab ? { tab } : {} }} />;
   return (
-    <Screen header={<DetailHeader title="My listings" fallback="/" />} refreshing={list.refreshing} onRefresh={list.refresh} footer={<Button title={k.add[0]} icon="add" onPress={() => router.push(k.add[1])} />}>
+    <Screen header={<DetailHeader title="My listings" fallback="/" />} refreshing={list.refreshing} onRefresh={list.refresh} footer={k.add ? <Button title={k.add[0]} icon="add" onPress={() => router.push(k.add[1])} /> : undefined}>
       <PillToggle options={Object.entries(KINDS).map(([value, v]) => ({ value, label: v.label }))} value={kind} onChange={setKind} />
-      <AsyncView state={list} empty={{ when: (d) => !d.items.length, icon: k.icon, title: kind === 'service' ? 'No services yet' : 'No listings yet', message: k.empty }}>
+      <AsyncView state={list} empty={{ when: (d) => !d.items.length, icon: k.icon, title: kind === 'marketplace' ? 'No items yet' : 'Nothing listed', message: k.empty }}>
         {(d) => (
           <View style={{ gap: 10 }}>
             {d.items.map((p) =>

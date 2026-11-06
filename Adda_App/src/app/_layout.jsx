@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -15,9 +15,13 @@ import { AuthProvider, useAuth } from '../context/auth';
 import { ToastProvider, useToast } from '../context/toast';
 import { Button, EmptyState, ErrorState } from '../components/ui';
 import { Logo } from '../components/Logo';
+import { CustomSplash } from '../components/CustomSplash';
 import { colors } from '../theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+/** The branded splash stays at least this long so it never just flickers. */
+const SPLASH_MIN_MS = 1800;
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -44,10 +48,11 @@ function SessionAwareAuth({ children }) {
 }
 
 function Gate({ fontsReady }) {
-  const { status, isMember, bootError, retryBoot, activeMembership } = useAuth();
+  const { status, isMember, isVendor, bootError, retryBoot, activeMembership } = useAuth();
   const toast = useToast();
   const ready = fontsReady && status !== 'booting';
   const wasMember = useRef(null);
+  const [minElapsed, setMinElapsed] = useState(false);
 
   useEffect(() => {
     if (status !== 'signedIn') {
@@ -58,11 +63,16 @@ function Gate({ fontsReady }) {
     wasMember.current = isMember;
   }, [status, isMember, activeMembership, toast]);
 
+  // The native splash is plain white; once fonts are in, hand over to the branded splash for SPLASH_MIN_MS.
   useEffect(() => {
-    if (ready) SplashScreen.hideAsync().catch(() => {});
-  }, [ready]);
+    if (!fontsReady) return undefined;
+    SplashScreen.hideAsync().catch(() => {});
+    const t = setTimeout(() => setMinElapsed(true), SPLASH_MIN_MS);
+    return () => clearTimeout(t);
+  }, [fontsReady]);
 
-  if (!ready) return <View style={{ flex: 1, backgroundColor: colors.logoBg }} />;
+  if (!fontsReady) return <View style={{ flex: 1, backgroundColor: colors.white }} />;
+  if (!ready || !minElapsed) return <CustomSplash />;
 
   if (status === 'offline') {
     return (
@@ -80,11 +90,15 @@ function Gate({ fontsReady }) {
       <Stack.Protected guard={!signedIn} redirectTo="/">
         <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
       </Stack.Protected>
-      <Stack.Protected guard={signedIn && !isMember} redirectTo="/">
+      <Stack.Protected guard={signedIn && !isMember && !isVendor} redirectTo="/">
         <Stack.Screen name="(onboarding)" options={{ animation: 'fade' }} />
       </Stack.Protected>
-      <Stack.Protected guard={signedIn && isMember} redirectTo="/">
+      <Stack.Protected guard={signedIn && isMember && !isVendor} redirectTo="/">
         <Stack.Screen name="(member)" options={{ animation: 'fade' }} />
+      </Stack.Protected>
+      {/* Vendors: their own area only — never society onboarding or member screens. */}
+      <Stack.Protected guard={signedIn && isVendor} redirectTo="/">
+        <Stack.Screen name="(vendor)" options={{ animation: 'fade' }} />
       </Stack.Protected>
       <Stack.Protected guard={signedIn} redirectTo="/">
         <Stack.Screen name="(account)" />

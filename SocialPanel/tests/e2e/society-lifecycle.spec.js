@@ -249,22 +249,32 @@ test('approve a resident and handle their complaint end to end', async () => {
   await expect(detail).toContainText('Bulb and holder replaced.');
   await page.keyboard.press('Escape');
 
-  // The approved resident offers a service; the society admin reviews it in Listings → Services.
-  const ocats = await apiCall('GET', '/service-offers/categories', { token: resident.accessToken });
-  const offer = await apiCall('POST', '/service-offers', { token: resident.accessToken, body: { categoryId: ocats.items[0]._id, title: 'Home tuition — maths for class 6 to 10', priceType: 'per_hour', pricePaise: 45000, city: 'Pune', serviceArea: 'Tower A', contactPhone: randPhone() } });
-  expect(offer.moderationStatus).toBe('pending');
+  // Residents can no longer list properties or services (vendor-only); they still sell to neighbours in the marketplace.
+  // The approved resident lists a society-only item; the society admin reviews it in Listings → Marketplace (default tab).
+  const mcats = await apiCall('GET', '/marketplace/categories', { token: resident.accessToken });
+  const item = await apiCall('POST', '/marketplace', { token: resident.accessToken, body: { categoryId: mcats.items[0]._id, title: 'Study table with chair', description: 'Solid wood, 2 years old', pricePaise: 450000, condition: 'good', city: 'Pune', contactPhone: randPhone(), visibility: 'society' } });
+  expect(item.moderationStatus).toBe('pending');
   await page.goto('/society/listings');
-  await page.getByRole('tab', { name: /Services/ }).click();
+  await expect(page.getByRole('tab', { name: /Marketplace/ })).toHaveAttribute('aria-selected', 'true');
+  const navBadge = page.getByRole('link', { name: /Listings/ }).locator('.sidebar-badge');
+  await expect(navBadge).toHaveText('1'); // sidebar badge = what the page shows
+  await expect(page.getByRole('tab', { name: /Marketplace/ })).toContainText('1');
   const table = page.getByTestId('listings-table');
-  await expect(table).toContainText('Home tuition — maths for class 6 to 10');
-  await expect(table).toContainText('₹450 /hour');
+  await expect(table).toContainText('Study table with chair');
+  await expect(table).toContainText('₹4,500');
   await expect(table).toContainText('Meena Kulkarni');
+  // Property / Services tabs explain that new vendor listings are reviewed by the platform.
+  await page.getByRole('tab', { name: /Services/ }).click();
+  await expect(page.getByText('New property and service listings come from verified vendors and are reviewed by the platform.')).toBeVisible();
+  await page.getByRole('tab', { name: /Marketplace/ }).click();
+  await expect(page.getByText(/come from verified vendors/)).toHaveCount(0);
   await table.getByTestId('listing-approved').first().click();
   await dialog(page).getByRole('button', { name: 'Approve' }).click();
   await expectToast(page, 'Listing approved');
-  await expect(table).not.toContainText('Home tuition — maths for class 6 to 10');
-  const visible = await apiCall('GET', '/service-offers?q=tuition', { token: resident.accessToken });
-  expect(visible.items.some((o) => o._id === offer._id)).toBe(true);
+  await expect(table).not.toContainText('Study table with chair');
+  await expect(navBadge).toHaveCount(0);
+  const visible = await apiCall('GET', `/marketplace/${item._id}`, { token: resident.accessToken });
+  expect(visible.moderationStatus).toBe('approved');
 });
 
 test('dashboard reflects the real data', async () => {

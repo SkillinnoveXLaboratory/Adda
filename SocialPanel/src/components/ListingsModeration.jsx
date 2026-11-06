@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { api, mediaHref } from '../lib/api.js';
-import { useAction, usePaged } from '../lib/hooks.js';
+import { useAction, usePaged, useQuery } from '../lib/hooks.js';
 import { formatDateTime, formatINR, formatNumber, formatPhone, formatRelative, humanize, plural } from '../lib/format.js';
-import { Badge, Button, cx, EmptyState, Icon, PageHeader, Tabs } from './ui.jsx';
+import { Alert, Badge, Button, cx, EmptyState, Icon, PageHeader, Tabs } from './ui.jsx';
 import { DataTable, Pagination, Toolbar } from './DataTable.jsx';
 import { Checkbox, Select } from './Form.jsx';
 import { Drawer, ReasonDialog } from './Modal.jsx';
@@ -22,25 +22,31 @@ const priceText = (l, kind, whole = true) => {
 
 const DECISION = { approved: ['Approve', 'success-outline', 'fa-solid fa-check'], rejected: ['Reject', 'danger-outline', 'fa-solid fa-xmark'], removed: ['Remove', 'danger-outline', 'fa-regular fa-trash-can'] };
 
+const KINDS = ['marketplace', 'property', 'service'];
+
 /**
- * Property / marketplace / service-offer moderation queue.
+ * Marketplace / property / service-offer moderation queue.
  * society: GET /society/listings, POST /society/listings/:kind/:id/moderate
+ *   Marketplace is the main queue. New property and service listings come from KYC-verified vendors, have no society
+ *   and are moderated by the platform; the Property and Services tabs only hold older listings linked to the society.
  * platform: GET /platform/listings (+scope, reported), POST /platform/listings/:kind/:id/moderate
  */
 export function ListingsModeration({ platform = false, onChanged }) {
   const toast = useToast();
   const base = platform ? '/platform/listings' : '/society/listings';
-  const [kind, setKind] = useState('property');
+  const [kind, setKind] = useState('marketplace');
   const [status, setStatus] = useState('pending');
   const [scope, setScope] = useState('');
   const [reported, setReported] = useState(false);
   const list = usePaged((p) => api.get(base, { ...p, sort: reported ? '-reportCount' : '-createdAt', kind, reported: reported ? 'true' : undefined, scope: scope || undefined }), { kind, status, scope, reported });
+  // Pending count per tab — together they equal the sidebar's pendingListings badge (same society-scoped queue).
+  const pending = useQuery(() => Promise.all(KINDS.map((k) => api.get(base, { kind: k, status: 'pending', page: 1, limit: 1 }).then((r) => r.total))).then((n) => Object.fromEntries(KINDS.map((k, i) => [k, n[i]]))), [base]);
   const [act, setAct] = useState(null); // { item, decision }
   const [view, setView] = useState(null);
   const [run, busy] = useAction((note) => api.post(`${base}/${kind}/${act.item._id}/moderate`, { decision: act.decision, note: note || undefined }), {
     toast,
     success: () => `Listing ${act.decision}`,
-    onDone: () => (setAct(null), setView(null), list.reload(), onChanged?.()),
+    onDone: () => (setAct(null), setView(null), list.reload(), pending.reload(), onChanged?.()),
   });
 
   const owner = (l) => l.owner || l.seller || l.provider;
@@ -87,17 +93,22 @@ export function ListingsModeration({ platform = false, onChanged }) {
   const v = view;
   return (
     <div>
-      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property, marketplace and service listings across adda' : 'Property, marketplace and service listings from your residents'} />
+      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property, marketplace and service listings across adda' : 'Marketplace items your residents sell to neighbours'} />
       <Tabs
         className="mb-4"
         tabs={[
-          { value: 'property', label: 'Property', icon: 'fa-solid fa-house' },
-          { value: 'marketplace', label: 'Marketplace', icon: 'fa-solid fa-tag' },
-          { value: 'service', label: 'Services', icon: KIND_ICON.service },
+          { value: 'marketplace', label: 'Marketplace', icon: KIND_ICON.marketplace, count: pending.data?.marketplace || undefined },
+          { value: 'property', label: 'Property', icon: KIND_ICON.property, count: pending.data?.property || undefined },
+          { value: 'service', label: 'Services', icon: KIND_ICON.service, count: pending.data?.service || undefined },
         ]}
         value={kind}
         onChange={setKind}
       />
+      {!platform && kind !== 'marketplace' && (
+        <Alert tone="info" className="mb-4">
+          New property and service listings come from verified vendors and are reviewed by the platform. This tab only shows older {kind === 'service' ? 'services' : 'property listings'} posted by your residents.
+        </Alert>
+      )}
       <div className="card">
         <Toolbar right={list.data && <span className="text-[11px] text-azea-muted">{plural(list.data.total, 'listing', 'listings')}</span>}>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Moderation status" className="sm:w-40">
@@ -115,7 +126,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
           )}
           {platform && <Checkbox checked={reported} onChange={setReported} label="Reported only" />}
         </Toolbar>
-        <DataTable testId="listings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={setView} empty={<EmptyState compact icon={KIND_ICON[kind]} title={`No ${status} ${kind === 'service' ? 'services' : `${kind} listings`}`} message={status === 'pending' ? 'New listings that need review appear here.' : undefined} />} />
+        <DataTable testId="listings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={setView} empty={<EmptyState compact icon={KIND_ICON[kind]} title={`No ${status} ${kind === 'service' ? 'services' : `${kind} listings`}`} message={status === 'pending' ? (platform || kind === 'marketplace' ? 'New listings that need review appear here.' : 'Vendor listings are reviewed by the platform, not here.') : undefined} />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
 

@@ -42,7 +42,22 @@ const head = (s) => {
   console.log(`\n\x1b[1m${s}\x1b[0m`);
 };
 
+// The backend allows 300 requests / minute per IP; this run makes more than that, so pace to stay under it.
+const WINDOW_MS = 60_000;
+const WINDOW_MAX = 280;
+const sent = [];
+async function throttle() {
+  for (;;) {
+    const now = Date.now();
+    while (sent.length && now - sent[0] >= WINDOW_MS) sent.shift();
+    if (sent.length < WINDOW_MAX) break;
+    await new Promise((r) => setTimeout(r, WINDOW_MS - (now - sent[0]) + 50));
+  }
+  sent.push(Date.now());
+}
+
 async function call(method, path, { token, body, form, society, raw = false, root = false } = {}) {
+  await throttle();
   const headers = { Accept: raw ? '*/*' : 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (society) headers['X-Society-Id'] = society;
@@ -97,6 +112,18 @@ const pngForm = (extra = {}) => {
   for (const [k, v] of Object.entries(extra)) fd.append(k, v);
   return fd;
 };
+/** POST /uploads body (purpose first, then the file). */
+const uploadForm = (purpose) => {
+  const fd = new FormData();
+  fd.append('purpose', purpose);
+  fd.append('file', new Blob([PNG], { type: 'image/png' }), `${purpose}.png`);
+  return fd;
+};
+// Verhoeff check digit, to build a valid test Aadhaar number for vendor KYC.
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const VINV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+const withVerhoeff = (base11) => base11 + VINV[base11.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
 
 function summary() {
   const failed = results.filter((r) => !r.pass);
@@ -166,6 +193,7 @@ async function main() {
   const regDetail = await expect('', 200, 'GET', `/platform/society-registrations/${regRow._id}`, { token: saT });
   ok('detail has representative + documents[url]', regDetail?.representative?.email === repEmail && regDetail?.documents?.[0]?.url, regDetail?.documents);
   if (regDetail?.documents?.[0]?.url) {
+    await throttle();
     const d = await fetch(regDetail.documents[0].url);
     ok('signed document url loads (200)', d.status === 200, d.status);
   }
@@ -486,30 +514,97 @@ async function main() {
   await expect('schedule', 200, 'POST', `/society/service-requests/${sr._id}/status`, { token: T, body: { status: 'scheduled', scheduledFor: new Date(Date.now() + 86400000).toISOString(), note: 'Tomorrow 11am' } });
   await expect('invalid transition', 400, 'POST', `/society/service-requests/${sr._id}/status`, { token: T, body: { status: 'accepted' } });
 
-  head('Listings moderation');
-  const prop = await expect('property', 201, 'POST', '/properties', { token: R1, body: { listingType: 'rent', propertyType: 'apartment', title: '2BHK in Tower A for rent', description: 'Sunny 2BHK with balcony', pricePaise: 2500000, areaSqft: 950, bedrooms: 2, bathrooms: 2, furnishing: 'semi_furnished', city: 'Pune', locality: 'Baner', contactPhone: randPhone(), linkToMySociety: true } });
-  ok('society property listing pending', prop?.moderationStatus === 'pending', prop?.moderationStatus);
+  head('Listings moderation (society marketplace)');
+  // Property and service listings are vendor-only now: residents (members) browse and book, but cannot list them.
+  const propBody = { listingType: 'rent', propertyType: 'apartment', title: `2BHK near the park ${RUN}`, description: 'Sunny 2BHK with balcony', pricePaise: 2500000, areaSqft: 950, bedrooms: 2, bathrooms: 2, furnishing: 'semi_furnished', city: 'Pune', locality: 'Baner', contactPhone: randPhone() };
+  const rProp = await expect('resident lists a property', 403, 'POST', '/properties', { token: R1, body: propBody });
+  ok('resident property → VENDOR_ONLY', rProp?.error?.code === 'VENDOR_ONLY', rProp?.error);
+  const ocats = await expect('offer categories', 200, 'GET', '/service-offers/categories', { token: R1 });
+  const offerBody = { categoryId: ocats.items[0]._id, title: `Home tuition for class 6-10 ${RUN}`, priceType: 'per_hour', pricePaise: 50000, experienceYears: 5, serviceArea: 'Baner, Aundh', city: 'Pune', availabilityNote: 'Evenings', contactPhone: randPhone() };
+  const rOffer = await expect('resident offers a service', 403, 'POST', '/service-offers', { token: R1, body: offerBody });
+  ok('resident service → VENDOR_ONLY', rOffer?.error?.code === 'VENDOR_ONLY', rOffer?.error);
+  await expect('resident cannot upload property photos', 403, 'POST', '/uploads', { token: R1, form: uploadForm('property') });
+  // Marketplace items stay with the society (listingsRequireApproval is on → pending).
   const mcats = await expect('', 200, 'GET', '/marketplace/categories', { token: R2 });
   const mk = await expect('marketplace', 201, 'POST', '/marketplace', { token: R2, body: { categoryId: mcats.items[0]._id, title: 'Kids bicycle', description: 'Hardly used', pricePaise: 350000, condition: 'like_new', city: 'Pune', contactPhone: randPhone(), visibility: 'society' } });
-  const sl = await expect('', 200, 'GET', '/society/listings?kind=property&status=pending', { token: T });
-  ok('society listings pending contains property (owner populated)', sl.items.some((l) => l._id === prop._id && l.owner?.name), sl.items[0]);
-  await expect('approve property', 200, 'POST', `/society/listings/property/${prop._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  ok('society marketplace item pending, linked to the society', mk?.moderationStatus === 'pending' && mk?.society === societyId, { status: mk?.moderationStatus, society: mk?.society });
+  const mk2 = await expect('marketplace 2', 201, 'POST', '/marketplace', { token: R1, body: { categoryId: mcats.items[0]._id, title: 'Study table', pricePaise: 120000, condition: 'good', city: 'Pune', contactPhone: randPhone() } });
   const slm = await expect('', 200, 'GET', '/society/listings?kind=marketplace&status=pending', { token: T });
-  ok('marketplace listing visible for society (seller populated)', slm.items.some((l) => l._id === mk._id) || mk.moderationStatus === 'approved', { status: mk.moderationStatus, n: slm.items.length });
-  const pl = await expect('', 200, 'GET', '/platform/listings?kind=property&status=approved', { token: saT });
-  ok('platform listings with society populated', pl.items.some((l) => l._id === prop._id && l.society?.name), pl.items[0]);
-  await expect('platform remove', 200, 'POST', `/platform/listings/property/${prop._id}/moderate`, { token: saT, body: { decision: 'removed', note: 'Duplicate ad' } });
-  const ocats = await expect('offer categories', 200, 'GET', '/service-offers/categories', { token: R1 });
-  const offer = await expect('resident offers a service', 201, 'POST', '/service-offers', { token: R1, body: { categoryId: ocats.items[0]._id, title: 'Home tuition for class 6-10', priceType: 'per_hour', pricePaise: 50000, experienceYears: 5, serviceArea: 'Tower A, Tower B', city: 'Pune', availabilityNote: 'Evenings', contactPhone: randPhone() } });
-  ok('service offer pending, linked to society', offer?.moderationStatus === 'pending' && offer?.society === societyId, offer);
-  const so = await expect('', 200, 'GET', '/society/listings?kind=service&status=pending', { token: T });
-  const soRow = so.items?.find((l) => l._id === offer._id);
-  ok('services queue row: provider, category, price type, area (panel columns)', soRow?.provider?.name && soRow?.category?.name && soRow?.priceType === 'per_hour' && soRow?.serviceArea && soRow?.experienceYears === 5, soRow);
-  await expect('treasurer cannot moderate services', 403, 'POST', `/society/listings/service/${offer._id}/moderate`, { token: TT, body: { decision: 'approved' } });
-  await expect('approve service', 200, 'POST', `/society/listings/service/${offer._id}/moderate`, { token: T, body: { decision: 'approved', note: 'Welcome!' } });
-  const pso = await expect('', 200, 'GET', '/platform/listings?kind=service&status=approved', { token: saT });
-  ok('platform services list with society + provider', pso.items?.some((l) => l._id === offer._id && l.society?.name && l.provider?.name), pso.items?.[0]);
-  await expect('platform rejects a service', 200, 'POST', `/platform/listings/service/${offer._id}/moderate`, { token: saT, body: { decision: 'rejected', note: 'Add a clearer title' } });
+  const slmRow = slm.items?.find((l) => l._id === mk._id);
+  ok('marketplace queue row: seller + category + condition (panel columns)', slmRow?.seller?.name === 'Priya Nair' && slmRow?.category?.name && slmRow?.condition === 'like_new', slmRow);
+  ok('marketplace queue has both items', slm.items.some((l) => l._id === mk2._id), slm.items.map((l) => l.title));
+  const pendingByKind = async () => {
+    const n = {};
+    for (const k of ['marketplace', 'property', 'service']) n[k] = (await expect(`pending ${k}`, 200, 'GET', `/society/listings?kind=${k}&status=pending&limit=1`, { token: T }))?.total;
+    return n;
+  };
+  let pk = await pendingByKind();
+  ov = await expect('', 200, 'GET', '/society/overview', { token: T });
+  ok('sidebar badge (overview pendingListings) = sum of the three tabs', ov.counts.pendingListings === pk.marketplace + pk.property + pk.service && pk.marketplace === 2, { badge: ov.counts.pendingListings, tabs: pk });
+  await expect('treasurer cannot moderate marketplace', 403, 'POST', `/society/listings/marketplace/${mk._id}/moderate`, { token: TT, body: { decision: 'approved' } });
+  await expect('bad decision', 400, 'POST', `/society/listings/marketplace/${mk._id}/moderate`, { token: T, body: { decision: 'maybe' } });
+  await expect('approve marketplace', 200, 'POST', `/society/listings/marketplace/${mk._id}/moderate`, { token: T, body: { decision: 'approved', note: 'Looks good' } });
+  await expect('reject marketplace', 200, 'POST', `/society/listings/marketplace/${mk2._id}/moderate`, { token: T, body: { decision: 'rejected', note: 'Add a photo' } });
+  const sla = await expect('', 200, 'GET', '/society/listings?kind=marketplace&status=approved', { token: T });
+  ok('approved marketplace item moves to Approved', sla.items.some((l) => l._id === mk._id && l.moderationNote === 'Looks good'), sla.items.map((l) => l.title));
+  const slr = await expect('', 200, 'GET', '/society/listings?kind=marketplace&status=rejected', { token: T });
+  ok('rejected marketplace item moves to Rejected', slr.items.some((l) => l._id === mk2._id), slr.items.map((l) => l.title));
+  const mkPublic = await expect('resident sees approved item', 200, 'GET', `/marketplace/${mk._id}`, { token: R1 });
+  ok('approved society item visible to a neighbour', mkPublic?._id === mk._id, mkPublic);
+  ov = await expect('', 200, 'GET', '/society/overview', { token: T });
+  ok('badge drops to 0 after moderation', ov.counts.pendingListings === 0, ov.counts.pendingListings);
+
+  head('Vendor accounts (no society access, platform-moderated listings)');
+  const vReg = await expect('vendor register', 201, 'POST', '/auth/resident/register', { body: { phone: randPhone(), name: `Sharma Services ${RUN}`, password: PASSWORD, accountType: 'vendor' } });
+  ok('account type vendor, KYC not submitted', vReg?.user?.accountType === 'vendor' && vReg?.vendor?.kycStatus === 'not_submitted', { user: vReg?.user, vendor: vReg?.vendor });
+  const V = vReg.accessToken;
+  const vJoin = await expect('vendor requests membership', 403, 'POST', '/memberships', { token: V, body: { societyId, buildingId: bA._id, flatNumber: 'A-201', residentType: 'owner' } });
+  ok('membership → VENDOR_NO_SOCIETY', vJoin?.error?.code === 'VENDOR_NO_SOCIETY', vJoin?.error);
+  const vHome = await expect('vendor resident home', 403, 'GET', '/resident/home', { token: V });
+  ok('/resident/home → VENDOR_NO_SOCIETY', vHome?.error?.code === 'VENDOR_NO_SOCIETY', vHome?.error);
+  const vSoc = await expect('vendor society API', 403, 'GET', '/society/overview', { token: V });
+  warn('vendor on /society/* → VENDOR_NO_SOCIETY as API.md says (an app session is refused earlier with FORBIDDEN)', vSoc?.error?.code === 'VENDOR_NO_SOCIETY', vSoc?.error);
+  const pendingMembersNow = (await expect('', 200, 'GET', '/society/memberships?status=pending', { token: T }))?.total;
+  ok('vendor did not create a membership request', pendingMembersNow === 1, pendingMembersNow);
+  const vEarly = await expect('vendor lists before KYC', 403, 'POST', '/properties', { token: V, body: propBody });
+  ok('before KYC → KYC_REQUIRED', vEarly?.error?.code === 'KYC_REQUIRED', vEarly?.error);
+  // KYC: three photos + a Verhoeff-valid Aadhaar, approved by the platform owner.
+  const kycDocs = [];
+  for (let i = 0; i < 3; i++) kycDocs.push((await expect(`kyc photo ${i + 1}`, 201, 'POST', '/uploads', { token: V, form: uploadForm('kyc') }))?._id);
+  const kyc = await expect('submit KYC', 200, 'PUT', '/vendor/kyc', { token: V, body: { businessName: `Sharma Services ${RUN}`, businessType: 'business', city: 'Pune', address: '12 Market Road', pan: `ABCDE${String(Date.now()).slice(-4)}F`, aadhaar: withVerhoeff(`2${String(Date.now()).slice(-10)}`), bankAccountHolder: 'Ravi Sharma', bankAccountNumber: `5001${String(Date.now()).slice(-8)}`, bankIfsc: 'SBIN0001234', bankName: 'SBI', panPhoto: kycDocs[0], aadhaarFront: kycDocs[1], aadhaarBack: kycDocs[2], consent: true } });
+  ok('KYC pending', kyc?.kycStatus === 'pending', kyc);
+  await expect('society admin cannot review vendors', 403, 'POST', `/platform/vendors/${vReg.user._id}/kyc`, { token: T, body: { decision: 'approved' } });
+  const kycOk = await expect('owner approves KYC', 200, 'POST', `/platform/vendors/${vReg.user._id}/kyc`, { token: saT, body: { decision: 'approved' } });
+  ok('KYC approved', kycOk?.kycStatus === 'approved', kycOk);
+  const vPhoto = await expect('vendor property photo', 201, 'POST', '/uploads', { token: V, form: uploadForm('property') });
+  const vProp = await expect('vendor lists a property', 201, 'POST', '/properties', { token: V, body: { ...propBody, photos: [vPhoto._id] } });
+  ok('vendor property has no society', vProp && !vProp.society, vProp?.society);
+  const vOffer = await expect('vendor lists a service', 201, 'POST', '/service-offers', { token: V, body: offerBody });
+  ok('vendor service has no society', vOffer && !vOffer.society, vOffer?.society);
+  for (const st of ['pending', 'approved', 'rejected', 'removed']) {
+    const sp = await expect(`society property ${st}`, 200, 'GET', `/society/listings?kind=property&status=${st}&limit=100`, { token: T });
+    const ss = await expect(`society service ${st}`, 200, 'GET', `/society/listings?kind=service&status=${st}&limit=100`, { token: T });
+    ok(`vendor listings never in /society/listings (${st})`, !sp.items.some((l) => l._id === vProp._id) && !ss.items.some((l) => l._id === vOffer._id), { property: sp.items.map((l) => l._id), service: ss.items.map((l) => l._id) });
+  }
+  pk = await pendingByKind();
+  ov = await expect('', 200, 'GET', '/society/overview', { token: T });
+  ok('vendor listings do not raise the society badge', ov.counts.pendingListings === 0 && pk.property === 0 && pk.service === 0, { badge: ov.counts.pendingListings, tabs: pk });
+  const modP = await expect('society admin moderates vendor property', 404, 'POST', `/society/listings/property/${vProp._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  ok('vendor property → 404 NOT_FOUND', modP?.error?.code === 'NOT_FOUND', modP?.error);
+  const modS = await expect('society admin moderates vendor service', 404, 'POST', `/society/listings/service/${vOffer._id}/moderate`, { token: T, body: { decision: 'removed' } });
+  ok('vendor service → 404 NOT_FOUND', modS?.error?.code === 'NOT_FOUND', modS?.error);
+  // The platform owner moderates vendor listings.
+  const pl = await expect('', 200, 'GET', '/platform/listings?kind=property&status=pending&scope=independent&limit=100', { token: saT });
+  ok('platform queue has the vendor property (independent, owner populated)', pl.items.some((l) => l._id === vProp._id && !l.society && l.owner?.name), pl.items[0]);
+  await expect('platform approves property', 200, 'POST', `/platform/listings/property/${vProp._id}/moderate`, { token: saT, body: { decision: 'approved' } });
+  const pso = await expect('', 200, 'GET', '/platform/listings?kind=service&status=pending&scope=independent&limit=100', { token: saT });
+  ok('platform queue has the vendor service (provider populated)', pso.items?.some((l) => l._id === vOffer._id && l.provider?.name), pso.items?.[0]);
+  await expect('platform approves service', 200, 'POST', `/platform/listings/service/${vOffer._id}/moderate`, { token: saT, body: { decision: 'approved', note: 'Welcome!' } });
+  const spa = await expect('', 200, 'GET', '/society/listings?kind=property&status=approved&limit=100', { token: T });
+  ok('approved vendor property still not in the society queue', !spa.items.some((l) => l._id === vProp._id), spa.items.length);
+  const browse = await expect('resident browses services', 200, 'GET', `/service-offers?q=${encodeURIComponent('Home tuition')}`, { token: R1 });
+  ok('residents still browse the approved vendor service', browse.items?.some((o) => o._id === vOffer._id), browse.items?.length);
+  await expect('platform rejects a service', 200, 'POST', `/platform/listings/service/${vOffer._id}/moderate`, { token: saT, body: { decision: 'rejected', note: 'Add a clearer title' } });
 
   head('Categories');
   const sc = await expect('society cats', 200, 'GET', '/society/categories?kind=complaint', { token: T });

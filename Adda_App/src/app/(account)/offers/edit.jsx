@@ -15,12 +15,12 @@ const MAX_PRICE_RUPEES = 1000000; // mirrors the API limit (₹10,00,000)
 /** Create or edit a service offer (?id= to edit). Anyone signed in can offer a service; it is reviewed first. */
 export default function OfferForm() {
   const { id } = useLocalSearchParams();
-  const { user, isMember } = useAuth();
+  const { user } = useAuth();
   const toast = useToast();
   const cats = useApi('/service-offers/categories', { refetchOnFocus: false });
   const [loading, setLoading] = useState(!!id);
   const [loadError, setLoadError] = useState(null);
-  const [f, setF] = useState({ categoryId: '', title: '', description: '', priceType: 'starting_from', price: '', experience: '', serviceArea: '', city: user?.city || '', availabilityNote: '', contactName: user?.name || '', contactPhone: user?.phone || '', whatsappAvailable: true, societyOnly: false });
+  const [f, setF] = useState({ categoryId: '', title: '', description: '', priceType: 'starting_from', price: '', experience: '', serviceArea: '', city: user?.city || '', availabilityNote: '', contactName: user?.name || '', contactPhone: user?.phone || '', whatsappAvailable: true });
   const [photos, setPhotos] = useState([]);
   const [errors, setErrors] = useState({});
   const set = (k) => (v) => {
@@ -42,7 +42,6 @@ export default function OfferForm() {
       contactName: d.contactName || '',
       contactPhone: d.contactPhone || '',
       whatsappAvailable: d.whatsappAvailable !== false,
-      societyOnly: d.visibility === 'society',
     });
     setPhotos(d.photos || []);
     setLoading(false);
@@ -93,7 +92,6 @@ export default function OfferForm() {
       contactPhone: normalizePhone(f.contactPhone),
       whatsappAvailable: f.whatsappAvailable,
       photos: photos.map((p) => p._id),
-      visibility: f.societyOnly ? 'society' : 'public',
     };
     try {
       const saved = await api(id ? `/service-offers/${id}` : '/service-offers', { method: id ? 'PATCH' : 'POST', body });
@@ -150,7 +148,6 @@ export default function OfferForm() {
       <Field label="Name shown to customers" value={f.contactName} onChangeText={set('contactName')} maxLength={120} />
       <Field label="Contact mobile" prefix="+91" value={f.contactPhone} onChangeText={(v) => set('contactPhone')(phoneInput(v))} keyboardType="number-pad" maxLength={PHONE_INPUT_MAX} error={errors.contactPhone} />
       <ToggleRow label="Available on WhatsApp" value={f.whatsappAvailable} onChange={set('whatsappAvailable')} />
-      {isMember ? <ToggleRow label="Only show to my society" value={f.societyOnly} onChange={set('societyOnly')} /> : null}
       <Hint>Your phone number is shown to everyone who can see this service. Services are reviewed before they appear. You can list up to 10.</Hint>
     </Screen>
   );

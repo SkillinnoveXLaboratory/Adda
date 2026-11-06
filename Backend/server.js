@@ -42,6 +42,8 @@ const schema = z.object({
   PUBLIC_API_BASE_URL: z.string().default('http://localhost:3015'),
   PANEL_BASE_URL: z.string().default('http://localhost:5173'),
   TRUST_PROXY: z.string().optional(),
+  // 32-byte key (64 hex chars or base64) that encrypts vendor PAN / Aadhaar / bank account numbers at rest.
+  KYC_ENCRYPTION_KEY: z.string().optional(),
   LOG_LEVEL: z.string().optional(),
 
   OTP_PROVIDER: z.enum(['none', 'test', 'msg91', 'twilio']).default('none'),
@@ -104,6 +106,17 @@ env.otpHashSecret = env.OTP_HASH_SECRET || env.JWT_REFRESH_SECRET;
 if (env.isProd && env.OTP_PROVIDER === 'test') {
   console.error('OTP_PROVIDER=test is forbidden in production.');
   process.exit(1);
+}
+
+env.kycKey = null;
+if (env.KYC_ENCRYPTION_KEY) {
+  const raw = env.KYC_ENCRYPTION_KEY.trim();
+  const key = /^[0-9a-f]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
+  if (key.length !== 32) {
+    console.error('KYC_ENCRYPTION_KEY must be 32 bytes: 64 hex characters or base64 of 32 bytes.');
+    process.exit(1);
+  }
+  env.kycKey = key;
 }
 
 env.paymentsConfigured = env.PAYMENT_PROVIDER === 'razorpay' && !!env.RAZORPAY_KEY_ID && !!env.PAYMENT_SECRET_KEY;
@@ -175,6 +188,8 @@ const userSchema = new Schema$6(
     passwordHash: { type: String, select: false },
     // Platform role only. Society-level roles live in SocietyStaff / SocietyMembership.
     platformRole: { type: String, enum: ['user', 'super_admin'], default: 'user' },
+    // member: residents & customers (societies, bookings). vendor: lists properties/services, never joins a society.
+    accountType: { type: String, enum: ['member', 'vendor'], default: 'member' },
     status: { type: String, enum: ['active', 'pending_setup', 'disabled'], default: 'active' },
     disabledReason: String,
     city: { type: String, trim: true, maxlength: 80 },
@@ -689,6 +704,111 @@ serviceOfferSchema.index({ provider: 1, createdAt: -1 });
 serviceOfferSchema.index({ society: 1, moderationStatus: 1 });
 const ServiceOffer = model$3('ServiceOffer', serviceOfferSchema);
 
+/**
+ * Vendor KYC. PAN, Aadhaar and bank account numbers are stored AES-256-GCM encrypted (KYC_ENCRYPTION_KEY) with only
+ * the last 4 characters in clear for display. Document photos are private uploads (purpose "kyc").
+ */
+const KYC_STATUSES = ['not_submitted', 'pending', 'approved', 'rejected'];
+const vendorProfileSchema = new Schema$3(
+  {
+    user: { type: ObjectId$3, ref: 'User', required: true, unique: true },
+    businessName: { type: String, trim: true, maxlength: 120 },
+    businessType: { type: String, enum: ['individual', 'business'], default: 'individual' },
+    city: { type: String, trim: true, maxlength: 80 },
+    address: { type: String, trim: true, maxlength: 300 },
+    panEnc: { type: String, select: false },
+    panLast4: String,
+    aadhaarEnc: { type: String, select: false },
+    aadhaarLast4: String,
+    bankAccountHolder: { type: String, trim: true, maxlength: 120 },
+    bankAccountEnc: { type: String, select: false },
+    bankAccountLast4: String,
+    bankIfsc: { type: String, trim: true, maxlength: 11 },
+    bankName: { type: String, trim: true, maxlength: 120 },
+    panPhoto: { type: ObjectId$3, ref: 'UploadedMedia' },
+    aadhaarFront: { type: ObjectId$3, ref: 'UploadedMedia' },
+    aadhaarBack: { type: ObjectId$3, ref: 'UploadedMedia' },
+    consentAt: Date,
+    kycStatus: { type: String, enum: KYC_STATUSES, default: 'not_submitted' },
+    kycNote: { type: String, maxlength: 500 },
+    submittedAt: Date,
+    reviewedBy: { type: ObjectId$3, ref: 'User' },
+    reviewedAt: Date,
+  },
+  { timestamps: true },
+);
+vendorProfileSchema.index({ kycStatus: 1, submittedAt: -1 });
+const VendorProfile = model$3('VendorProfile', vendorProfileSchema);
+
+/** A member books a vendor's service. Cash collected in person is recorded by the vendor ("mark as paid"). */
+const BOOKING_TRANSITIONS = {
+  requested: ['accepted', 'declined', 'cancelled'],
+  accepted: ['completed', 'cancelled'],
+  declined: [],
+  cancelled: [],
+  completed: [],
+};
+const serviceBookingSchema = new Schema$3(
+  {
+    offer: { type: ObjectId$3, ref: 'ServiceOffer', required: true },
+    vendor: { type: ObjectId$3, ref: 'User', required: true },
+    customer: { type: ObjectId$3, ref: 'User', required: true },
+    // Snapshots: what was offered at the time of booking.
+    offerTitle: { type: String, required: true, maxlength: 140 },
+    priceType: { type: String, enum: OFFER_PRICE_TYPES },
+    pricePaise: Number,
+    preferredDate: { type: String, required: true },
+    preferredTime: String,
+    address: { type: String, required: true, trim: true, maxlength: 300 },
+    note: { type: String, trim: true, maxlength: 500 },
+    customerName: { type: String, maxlength: 120 },
+    customerPhone: { type: String, match: /^[6-9]\d{9}$/ },
+    status: { type: String, enum: Object.keys(BOOKING_TRANSITIONS), default: 'requested' },
+    timeline: [{ status: String, note: String, by: { type: ObjectId$3, ref: 'User' }, at: { type: Date, default: Date.now } }],
+    payment: {
+      status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
+      method: { type: String, enum: ['cash'] },
+      amountPaise: { type: Number, min: 0, validate: { validator: (v) => v === undefined || v === null || Number.isInteger(v), message: 'Amount must be whole paise' } },
+      paidAt: Date,
+      markedBy: { type: ObjectId$3, ref: 'User' },
+      note: { type: String, maxlength: 300 },
+    },
+  },
+  { timestamps: true },
+);
+serviceBookingSchema.index({ vendor: 1, status: 1, createdAt: -1 });
+serviceBookingSchema.index({ customer: 1, createdAt: -1 });
+serviceBookingSchema.index({ offer: 1, customer: 1, status: 1 });
+const ServiceBooking = model$3('ServiceBooking', serviceBookingSchema);
+
+/**
+ * "Boost" a property or service: the vendor picks a location and a number of days; the platform reviews it.
+ * Approved campaigns run from approval for `days` and show first (marked Sponsored) in that category and city.
+ */
+const AD_KINDS = ['property', 'service'];
+const adCampaignSchema = new Schema$3(
+  {
+    vendor: { type: ObjectId$3, ref: 'User', required: true },
+    kind: { type: String, enum: AD_KINDS, required: true },
+    listing: { type: ObjectId$3, required: true },
+    listingTitle: { type: String, maxlength: 140 },
+    city: { type: String, required: true, trim: true, maxlength: 80 },
+    area: { type: String, trim: true, maxlength: 120 },
+    days: { type: Number, required: true, min: 1, max: 30 },
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'cancelled'], default: 'pending' },
+    reviewNote: { type: String, maxlength: 500 },
+    reviewedBy: { type: ObjectId$3, ref: 'User' },
+    reviewedAt: Date,
+    startsAt: Date,
+    endsAt: Date,
+  },
+  { timestamps: true },
+);
+adCampaignSchema.index({ status: 1, kind: 1, endsAt: 1 });
+adCampaignSchema.index({ vendor: 1, createdAt: -1 });
+adCampaignSchema.index({ listing: 1, status: 1 });
+const AdCampaign = model$3('AdCampaign', adCampaignSchema);
+
 const { Schema: Schema$2, model: model$2 } = mongoose;
 const ObjectId$2 = Schema$2.Types.ObjectId;
 
@@ -990,7 +1110,7 @@ const notificationSchema = new Schema(
     society: { type: ObjectId, ref: 'Society' },
     type: {
       type: String,
-      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system'],
+      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad'],
       required: true,
     },
     title: { type: String, required: true, maxlength: 160 },
@@ -1030,7 +1150,7 @@ const mediaSchema = new Schema(
   {
     owner: { type: ObjectId, ref: 'User' },
     society: { type: ObjectId, ref: 'Society' },
-    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'registration', 'expense', 'announcement', 'avatar'], required: true },
+    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'registration', 'expense', 'announcement', 'avatar', 'kyc'], required: true },
     visibility: { type: String, enum: ['public', 'society', 'private'], required: true },
     storageKey: { type: String, required: true, unique: true },
     mimeType: { type: String, required: true },
@@ -1066,6 +1186,7 @@ const PlatformSetting = model('PlatformSetting', settingSchema);
 
 const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   __proto__: null,
+  AdCampaign,
   Announcement,
   AuditLog,
   Building,
@@ -1100,6 +1221,7 @@ const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   Receipt,
   SERVICE_REQUEST_TRANSITIONS,
   ServiceCategory,
+  ServiceBooking,
   ServiceRequest,
   Society,
   SocietyMembership,
@@ -1108,6 +1230,7 @@ const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   UploadedMedia,
   User,
   UserSession,
+  VendorProfile,
   immutablePlugin
 }, Symbol.toStringTag, { value: 'Module' }));
 
@@ -1409,11 +1532,13 @@ function assertResidentPasswordLogin() {
 }
 
 /** Interim resident registration (phone + password). Never takes over an existing account. */
-async function registerResidentWithPassword(phone, name, password) {
+async function registerResidentWithPassword(phone, name, password, accountType = 'member') {
   assertResidentPasswordLogin();
   validatePasswordStrength(password);
   if (await User.exists({ phone })) throw conflict('An account with this mobile number already exists. Sign in instead.', 'ACCOUNT_EXISTS');
-  return User.create({ phone, name, passwordHash: await hashPassword(password) });
+  const user = await User.create({ phone, name, accountType, passwordHash: await hashPassword(password) });
+  if (accountType === 'vendor') await VendorProfile.create({ user: user._id, businessName: name });
+  return user;
 }
 
 async function residentPasswordLogin(phone, password) {
@@ -1573,6 +1698,7 @@ const PURPOSE_VISIBILITY = {
   expense: 'private',
   registration: 'private',
   avatar: 'public',
+  kyc: 'private',
 };
 
 async function storeUpload(file, { owner, society, purpose }) {
@@ -1645,8 +1771,11 @@ async function profilePayload(user) {
     SocietyStaff.find({ user: user._id, status: 'active' }).populate('society', 'name code city status').lean(),
   ]);
   const u = user.toJSON ? user.toJSON() : user;
+  const accountType = u.accountType || 'member';
+  const vendor = accountType === 'vendor' ? await VendorProfile.findOne({ user: u._id }).select('businessName kycStatus kycNote submittedAt reviewedAt').lean() : null;
   return {
-    user: { _id: u._id, name: u.name, phone: u.phone, email: u.email, city: u.city, platformRole: u.platformRole, status: u.status, settings: u.settings, createdAt: u.createdAt },
+    user: { _id: u._id, name: u.name, phone: u.phone, email: u.email, city: u.city, platformRole: u.platformRole, accountType, status: u.status, settings: u.settings, createdAt: u.createdAt },
+    vendor: accountType === 'vendor' ? { businessName: vendor?.businessName || null, kycStatus: vendor?.kycStatus || 'not_submitted', kycNote: vendor?.kycNote || null, submittedAt: vendor?.submittedAt || null, reviewedAt: vendor?.reviewedAt || null, kycAvailable: !!env.kycKey } : null,
     needsProfile: !u.name,
     memberships: memberships.map((m) => ({ _id: m._id, status: m.status, residentType: m.residentType, decisionReason: m.decisionReason, society: m.society, building: m.building, flat: m.flat, createdAt: m.createdAt, decidedAt: m.decidedAt })),
     staffRoles: staff.map((s) => ({ _id: s._id, role: s.role, title: s.title, society: s.society })),
@@ -1684,8 +1813,8 @@ async function logoutAll(req, res) {
 
 /** Interim resident sign-up / sign-in without SMS (enabled by RESIDENT_PASSWORD_LOGIN). */
 async function residentRegister(req, res) {
-  const { phone, name, password, deviceName } = req.valid.body;
-  const user = await registerResidentWithPassword(phone, name, password);
+  const { phone, name, password, accountType, deviceName } = req.valid.body;
+  const user = await registerResidentWithPassword(phone, name, password, accountType);
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.status(201).json({ ...tokens, isNewUser: true, ...(await profilePayload(user)) });
 }
@@ -2470,6 +2599,7 @@ logger.debug({ configured: env.paymentsConfigured }, 'Payment gateway configurat
 
 /** Non-secret runtime capabilities the clients use to show accurate availability states. */
 async function config(_req, res) {
+  const dayOptions = await adDayOptions();
   res.json({
     apiVersion: 'v1',
     environment: env.NODE_ENV,
@@ -2477,6 +2607,7 @@ async function config(_req, res) {
     passwordLogin: { available: env.RESIDENT_PASSWORD_LOGIN },
     payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: env.paymentsConfigured ? 'razorpay' : null },
     uploads: { maxMb: env.MAX_UPLOAD_MB, types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] },
+    ads: { dayOptions },
   });
 }
 
@@ -2630,10 +2761,14 @@ async function serveMedia(req, res) {
   fs$1.createReadStream(full).pipe(res);
 }
 
-const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'expense', 'announcement', 'avatar'];
+const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'expense', 'announcement', 'avatar', 'kyc'];
 async function uploadMedia(req, res) {
   const purpose = req.body?.purpose;
   if (!UPLOAD_PURPOSES.includes(purpose)) throw badRequest(`purpose must be one of ${UPLOAD_PURPOSES.join(', ')}`);
+  // Property / service photos and KYC documents belong to vendor accounts only.
+  if (['property', 'service', 'kyc'].includes(purpose) && req.user.accountType !== 'vendor') {
+    throw new AppError(403, 'VENDOR_ONLY', 'Only vendor accounts can upload these files');
+  }
   // Society-scoped uploads are tagged with the caller's verified society (resident or staff), never a client value.
   let society;
   if (['complaint', 'post'].includes(purpose)) {
@@ -3022,6 +3157,7 @@ async function categoriesFor(kind, societyId) {
 
 // ======================= Membership =======================
 async function requestMembership(req, res) {
+  if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts are not part of any society. Use a member account to join your society.', 'VENDOR_NO_SOCIETY');
   const { societyId, buildingId, flatNumber, residentType, name, note } = req.valid.body;
   const society = await Society.findOne({ _id: societyId, status: 'active' }).lean();
   if (!society) throw notFound('Society');
@@ -3485,6 +3621,7 @@ function requireSuperAdmin(req, _res, next) {
  * The X-Society-Id header only selects among the caller's own memberships; it never grants access.
  */
 async function requireMembership(req, _res, next) {
+  if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts have no society access.', 'VENDOR_NO_SOCIETY');
   const requested = req.get('x-society-id');
   const filter = { user: req.user._id, status: 'approved' };
   if (requested) {
@@ -3522,6 +3659,7 @@ function requireStaff(permission = 'society.read') {
   return async (req, _res, next) => {
     // Platform owner acting on a society: context was set (and authorised) by loadPlatformSociety.
     if (req.platformSociety === true && req.user?.platformRole === 'super_admin') return next();
+    if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts have no society access.', 'VENDOR_NO_SOCIETY');
     if (req.client !== 'panel') throw forbidden('Use the SocialPanel to access management features');
     const requested = req.get('x-society-id');
     const filter = { user: req.user._id, status: 'active' };
@@ -3691,7 +3829,7 @@ const otpVerify = z.object({ phone, challengeId: objectId, code: z.string().rege
 const refresh = z.object({ refreshToken: z.string().min(20).max(200) });
 const adminLogin = z.object({ email, password: z.string().min(1).max(200) });
 const changePasswordBody = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(10).max(200) });
-const residentRegisterBody = z.object({ phone, name: text(120, 2), password: z.string().min(10).max(200), deviceName: optText(120) });
+const residentRegisterBody = z.object({ phone, name: text(120, 2), password: z.string().min(10).max(200), accountType: z.enum(['member', 'vendor']).default('member'), deviceName: optText(120) });
 const residentLoginBody = z.object({ phone, password: z.string().min(1).max(200), deviceName: optText(120) });
 const passwordSetup = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(200) });
 const passwordResetRequest = z.object({ email });
@@ -3758,7 +3896,6 @@ const propertyCreate = z.object({
   city: text(80, 2),
   address: optText(300),
   photos: mediaIds,
-  linkToMySociety: z.boolean().default(false),
   ...listingContact,
 });
 const propertyUpdate = patchOf(propertyCreate).extend({ availability: z.enum(['available', 'sold', 'rented', 'inactive']).optional() });
@@ -3799,7 +3936,6 @@ const offerFields = {
   city: text(80, 2),
   availabilityNote: optText(120),
   photos: mediaIds,
-  visibility: z.enum(['public', 'society']).default('public'),
   ...listingContact,
 };
 /** A price is required unless the provider quotes on request. */
@@ -3885,6 +4021,29 @@ const reportQuery = z.object({ format: z.enum(['json', 'pdf', 'xlsx']).default('
 const paymentConfirm = z.object({ orderId: z.string().min(5).max(60), paymentId: z.string().min(5).max(60), signature: z.string().min(10).max(200) });
 
 // ---------- platform ----------
+/**
+ * Keys of the NIVASA service-category icon set. The drawings live in serviceIcons.json (Adda_App, Admin_Panel and
+ * SocialPanel keep identical copies; ui-lint checks this list matches them). Admins pick one per service category.
+ */
+const SERVICE_ICON_KEYS = ["plumbing","electrical","cleaning","ac","appliance","carpentry","painting","pest-control","gardening","salon","laundry","cook","driver","security","movers","cctv","water-purifier","interior","tutor","childcare","eldercare","petcare","car-wash","computer","mobile","masonry","waterproofing","locksmith","solar","inverter","geyser","tv","fitness","events","photography","tailoring","medical","legal","glass","home-repair","others"];
+const SERVICE_ICON_SET = new Set(SERVICE_ICON_KEYS);
+function assertServiceIcon(kind, icon) {
+  if (kind === 'service' && icon && !SERVICE_ICON_SET.has(icon)) throw badRequest('Choose an icon from the NIVASA icon list');
+}
+/** Best-guess icon for a service category name (used to upgrade categories created before icons were selectable). */
+const SERVICE_ICON_GUESS = [
+  [/plumb|pipe|tap|drain/i, 'plumbing'], [/electric|wiring/i, 'electrical'], [/clean|housekeep|maid/i, 'cleaning'], [/\bac\b|air ?con/i, 'ac'],
+  [/appliance|fridge|washing/i, 'appliance'], [/carpent|wood/i, 'carpentry'], [/paint/i, 'painting'], [/pest|termite/i, 'pest-control'],
+  [/garden|plant|lawn/i, 'gardening'], [/salon|beauty|spa|hair/i, 'salon'], [/laundry|iron/i, 'laundry'], [/cook|chef|tiffin/i, 'cook'],
+  [/driver/i, 'driver'], [/security|guard/i, 'security'], [/pack|mover|shift/i, 'movers'], [/cctv|camera/i, 'cctv'], [/\bro\b|purifier/i, 'water-purifier'],
+  [/interior|decor/i, 'interior'], [/tutor|tuition|teach/i, 'tutor'], [/baby|child|nanny/i, 'childcare'], [/elder|nurs/i, 'eldercare'], [/pet|dog|vet/i, 'petcare'],
+  [/car|vehicle/i, 'car-wash'], [/computer|laptop/i, 'computer'], [/mobile|phone/i, 'mobile'], [/mason|civil|tile/i, 'masonry'], [/waterproof|seepage/i, 'waterproofing'],
+  [/lock/i, 'locksmith'], [/solar/i, 'solar'], [/inverter|battery/i, 'inverter'], [/geyser|heater/i, 'geyser'], [/\btv\b|television/i, 'tv'], [/fitness|yoga|gym/i, 'fitness'],
+  [/event|party|wedding/i, 'events'], [/photo/i, 'photography'], [/tailor|stitch/i, 'tailoring'], [/doctor|medical|health/i, 'medical'], [/legal|lawyer|document/i, 'legal'],
+  [/glass|alumin|weld|grill/i, 'glass'], [/handyman|repair/i, 'home-repair'],
+];
+const guessServiceIcon = (name = '') => SERVICE_ICON_GUESS.find(([rx]) => rx.test(name))?.[1] || 'others';
+
 const categoryUpsert = z.object({ kind: z.enum(['complaint', 'service', 'marketplace']), name: text(80, 2), icon: optText(60), description: optText(300), active: z.boolean().default(true), sortOrder: z.number().int().min(0).max(1000).default(0) });
 const societyPayments = z.object({ onlineEnabled: z.boolean(), settlementMode: z.enum(['none', 'razorpay_route', 'society_merchant']), linkedAccountId: z.string().trim().max(60).optional() });
 const platformSetting$1 = z.object({ value: z.union([z.boolean(), z.number(), z.string().max(500)]) });
@@ -3966,6 +4125,8 @@ const presentListing = (l, userId) => ({
   seller: undefined,
   provider: undefined,
   postedBy: l.owner?.name || l.seller?.name || l.provider?.name || undefined,
+  // Listed by a vendor account (only KYC-approved vendors can create property and service listings).
+  verifiedVendor: (l.owner || l.provider)?.accountType === 'vendor',
   society: l.society?.name ? { _id: l.society._id, name: l.society.name } : l.society,
   reportCount: undefined,
 });
@@ -3981,8 +4142,13 @@ async function browseProperties(req, res) {
   if (q.bedrooms !== undefined) filter.bedrooms = { $gte: q.bedrooms };
   if (q.minPrice !== undefined || q.maxPrice !== undefined) filter.pricePaise = { ...(q.minPrice !== undefined && { $gte: q.minPrice }), ...(q.maxPrice !== undefined && { $lte: q.maxPrice }) };
   if (q.q) filter.$or = [{ title: new RegExp(escapeRegex(q.q), 'i') }, { locality: new RegExp(escapeRegex(q.q), 'i') }, { city: new RegExp(escapeRegex(q.q), 'i') }];
-  const page = await pagedFind(PropertyListing, filter, q, { sortable: ['createdAt', 'pricePaise'], populate: [{ path: 'photos' }, { path: 'society', select: 'name' }, { path: 'owner', select: 'name' }] });
-  res.json({ ...page, items: page.items.map((l) => presentListing(l, req.user._id)) });
+  const populate = [{ path: 'photos' }, { path: 'society', select: 'name' }, { path: 'owner', select: 'name accountType' }];
+  // Boosted listings for this location come first on page 1 (marked sponsored) and are not repeated below.
+  const sponsored = await sponsoredMatches(PropertyListing, 'property', filter, q.city || req.user.city, populate);
+  if (sponsored.length) filter._id = { $nin: sponsored.map((l) => l._id) };
+  const page = await pagedFind(PropertyListing, filter, q, { sortable: ['createdAt', 'pricePaise'], populate });
+  const top = (q.page || 1) === 1 ? sponsored.map((l) => ({ ...presentListing(l, req.user._id), sponsored: true })) : [];
+  res.json({ ...page, sponsoredCount: top.length, items: [...top, ...page.items.map((l) => presentListing(l, req.user._id))] });
 }
 
 async function myProperties(req, res) {
@@ -3991,20 +4157,28 @@ async function myProperties(req, res) {
 }
 
 async function getProperty(req, res) {
-  const l = await PropertyListing.findById(req.valid.params.id).populate('photos').populate('society', 'name city').populate('owner', 'name').lean();
+  const l = await PropertyListing.findById(req.valid.params.id).populate('photos').populate('society', 'name city').populate('owner', 'name accountType').lean();
   const mine = l && String(l.owner?._id) === String(req.user._id);
   if (!l || (!mine && (l.moderationStatus !== 'approved' || l.availability === 'inactive'))) throw notFound('Listing');
   res.json(presentListing(l, req.user._id));
 }
 
+/** New property and service listings come only from vendors whose KYC the platform has approved. */
+async function assertListingVendor(user) {
+  if (user.accountType !== 'vendor') throw new AppError(403, 'VENDOR_ONLY', 'Only vendor accounts can list properties and services. Members can browse and book them.');
+  const p = await VendorProfile.findOne({ user: user._id }).select('kycStatus').lean();
+  if (p?.kycStatus !== 'approved') {
+    throw new AppError(403, 'KYC_REQUIRED', p?.kycStatus === 'pending' ? 'Your KYC is under review. You can start listing once it is approved.' : 'Complete your KYC (PAN, Aadhaar and bank details) to start listing.');
+  }
+}
+
 async function createProperty(req, res) {
-  const { linkToMySociety, photos, ...data } = req.valid.body;
-  const society = linkToMySociety ? await approvedSocietyOf(req.user._id) : null;
-  if (linkToMySociety && !society) throw badRequest('You need an approved society membership to link this listing to your society');
+  await assertListingVendor(req.user);
+  const { photos, ...data } = req.valid.body;
   const photoIds = await claimMedia(photos, { owner: req.user._id, purpose: 'property', max: 10 });
-  const approval = await needsApproval(society);
-  const listing = await PropertyListing.create({ ...data, photos: photoIds, owner: req.user._id, society, contactName: data.contactName || req.user.name, moderationStatus: approval ? 'pending' : 'approved' });
-  if (approval) alertModerators(society, data.title);
+  // Vendors are outside every society, so their listings follow the platform's moderation rule.
+  const approval = await needsApproval(null);
+  const listing = await PropertyListing.create({ ...data, photos: photoIds, owner: req.user._id, contactName: data.contactName || req.user.name, moderationStatus: approval ? 'pending' : 'approved' });
   res.status(201).json(listing);
 }
 
@@ -4099,7 +4273,7 @@ async function deleteMarketplaceItem(req, res) {
 // ======================= Service offers =======================
 /** Max live (not removed) offers per person — keeps the directory useful and limits spam. */
 const OFFER_LIMIT = 10;
-const offerPopulate = [{ path: 'photos' }, { path: 'category', select: 'name icon' }, { path: 'provider', select: 'name' }, { path: 'society', select: 'name' }];
+const offerPopulate = [{ path: 'photos' }, { path: 'category', select: 'name icon' }, { path: 'provider', select: 'name accountType' }, { path: 'society', select: 'name' }];
 
 /** Platform service categories, plus the provider's own society categories when they are an approved member. */
 async function offerCategory(categoryId, society) {
@@ -4125,8 +4299,11 @@ async function browseOffers(req, res) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     and.push({ $or: [{ title: rx }, { serviceArea: rx }, { description: rx }] });
   }
+  const sponsored = q.mySociety === 'true' ? [] : await sponsoredMatches(ServiceOffer, 'service', filter, q.city || req.user.city, offerPopulate);
+  if (sponsored.length) filter._id = { $nin: sponsored.map((l) => l._id) };
   const page = await pagedFind(ServiceOffer, filter, q, { sortable: ['createdAt', 'pricePaise'], populate: offerPopulate });
-  res.json({ ...page, items: page.items.map((l) => presentListing(l, req.user._id)) });
+  const top = (q.page || 1) === 1 ? sponsored.map((l) => ({ ...presentListing(l, req.user._id), sponsored: true })) : [];
+  res.json({ ...page, sponsoredCount: top.length, items: [...top, ...page.items.map((l) => presentListing(l, req.user._id))] });
 }
 
 async function myOffers(req, res) {
@@ -4147,26 +4324,23 @@ async function getOffer(req, res) {
 }
 
 async function createOffer(req, res) {
-  const { categoryId, photos, visibility, ...data } = req.valid.body;
-  const society = await approvedSocietyOf(req.user._id);
-  if (visibility === 'society' && !society) throw badRequest('Society-only services need an approved society membership');
+  await assertListingVendor(req.user);
+  const { categoryId, photos, ...data } = req.valid.body;
   const live = await ServiceOffer.countDocuments({ provider: req.user._id, moderationStatus: { $ne: 'removed' } });
   if (live >= OFFER_LIMIT) throw new AppError(409, 'OFFER_LIMIT', `You can have up to ${OFFER_LIMIT} services listed. Delete one you no longer offer first.`);
-  const category = await offerCategory(categoryId, society);
+  const category = await offerCategory(categoryId, null);
   const photoIds = await claimMedia(photos, { owner: req.user._id, purpose: 'service', max: 6 });
-  const approval = await needsApproval(society);
+  const approval = await needsApproval(null);
   const offer = await ServiceOffer.create({
     ...data,
     pricePaise: data.priceType === 'on_quote' ? undefined : data.pricePaise,
     category: category._id,
-    visibility,
+    visibility: 'public',
     photos: photoIds,
     provider: req.user._id,
-    society,
     contactName: data.contactName || req.user.name,
     moderationStatus: approval ? 'pending' : 'approved',
   });
-  if (approval) alertModerators(society, `Service: ${data.title}`);
   res.status(201).json(offer);
 }
 
@@ -4215,6 +4389,544 @@ const reportListing = (kind) => async (req, res) => {
   await Model.updateOne({ _id: l._id }, { $inc: { reportCount: 1 } });
   res.status(201).json({ ok: true, message: 'Thanks — moderators will review this listing.' });
 };
+
+// ======================= Vendors: KYC, bookings, ads =======================
+/** AES-256-GCM with KYC_ENCRYPTION_KEY. Format: v1.<iv>.<tag>.<ciphertext> (base64url). */
+function encryptKyc(value) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', env.kycKey, iv);
+  const ct = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), ct.toString('base64url')].join('.');
+}
+
+function decryptKyc(blob) {
+  if (!blob) return null;
+  const [v, iv, tag, ct] = String(blob).split('.');
+  if (v !== 'v1' || !env.kycKey) throw unavailable('KYC details cannot be decrypted on this server.', 'KYC_UNAVAILABLE');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', env.kycKey, Buffer.from(iv, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+  return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8');
+}
+
+// Verhoeff checksum: every genuine Aadhaar number passes it, so typos are caught before review.
+const VERHOEFF_D = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VERHOEFF_P = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const verhoeffValid = (num) => num.split('').reverse().reduce((c, d, i) => VERHOEFF_D[c][VERHOEFF_P[i % 8][Number(d)]], 0) === 0;
+
+const PAN_RX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const IFSC_RX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const digitsOnly = (v) => String(v ?? '').replace(/[\s-]/g, '');
+const kycSubmit = z
+  .object({
+    businessName: text(120, 2),
+    businessType: z.enum(['individual', 'business']).default('individual'),
+    city: text(80, 2),
+    address: optText(300),
+    pan: z.string().trim().toUpperCase().regex(PAN_RX, 'Enter a valid PAN, e.g. ABCDE1234F'),
+    aadhaar: z.string().transform(digitsOnly).refine((v) => /^[2-9]\d{11}$/.test(v) && verhoeffValid(v), 'Enter a valid 12-digit Aadhaar number'),
+    bankAccountHolder: text(120, 2),
+    bankAccountNumber: z.string().transform(digitsOnly).refine((v) => /^\d{9,18}$/.test(v), 'Enter a valid bank account number (9 to 18 digits)'),
+    bankIfsc: z.string().trim().toUpperCase().regex(IFSC_RX, 'Enter a valid IFSC, e.g. SBIN0001234'),
+    bankName: optText(120),
+    panPhoto: objectId,
+    aadhaarFront: objectId,
+    aadhaarBack: objectId,
+    consent: z.boolean().refine((v) => v === true, 'Please confirm that you agree to KYC verification'),
+  })
+  .strict();
+const kycDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: optText(500) }).refine((v) => v.decision !== 'rejected' || !!v.note, { message: 'Tell the vendor why the KYC was rejected', path: ['note'] });
+const BOOKING_MAX_DAYS_AHEAD = 90;
+const serviceBookingCreate = z.object({ preferredDate: date, preferredTime: hhmm.optional(), address: text(300, 5), note: optText(500) }).strict();
+const bookingNote = z.object({ note: optText(300) });
+const bookingMarkPaid = z.object({ amountPaise: positivePaise.refine((v) => v <= OFFER_MAX_PAISE, 'Amount is too high'), note: optText(300) }).strict();
+const adCreate = z.object({ kind: z.enum(AD_KINDS), listingId: objectId, city: text(80, 2), area: optText(120), days: z.number().int().min(1).max(30) }).strict();
+const adDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: optText(500) }).refine((v) => v.decision !== 'rejected' || !!v.note, { message: 'Tell the vendor why the ad was rejected', path: ['note'] });
+const AD_FILTERS = ['pending', 'active', 'expired', 'rejected', 'cancelled', 'all'];
+
+function requireVendor(req, _res, next) {
+  if (req.user.accountType !== 'vendor') throw new AppError(403, 'VENDOR_ONLY', 'This is available to vendor accounts only.');
+  next();
+}
+
+const KYC_DOCS = ['panPhoto', 'aadhaarFront', 'aadhaarBack'];
+const maskTail = (last4, total) => (last4 ? `${'•'.repeat(Math.max(0, total - last4.length))}${last4}` : null);
+const docOut = (m, ttl) => (m?._id ? { _id: m._id, url: mediaUrl(m, ttl), mimeType: m.mimeType } : null);
+
+/** Masked KYC view. Document links are short-lived signed URLs (private media). */
+function presentVendorProfile(p, docTtl = 600) {
+  if (!p) return null;
+  return {
+    businessName: p.businessName || null,
+    businessType: p.businessType,
+    city: p.city || null,
+    address: p.address || null,
+    kycStatus: p.kycStatus,
+    kycNote: p.kycNote || null,
+    submittedAt: p.submittedAt || null,
+    reviewedAt: p.reviewedAt || null,
+    consentAt: p.consentAt || null,
+    pan: maskTail(p.panLast4, 10),
+    aadhaar: p.aadhaarLast4 ? `XXXX XXXX ${p.aadhaarLast4}` : null,
+    bankAccountHolder: p.bankAccountHolder || null,
+    bankAccount: maskTail(p.bankAccountLast4, 10),
+    bankIfsc: p.bankIfsc || null,
+    bankName: p.bankName || null,
+    documents: Object.fromEntries(KYC_DOCS.map((k) => [k, docOut(p[k], docTtl)])),
+  };
+}
+
+async function loadVendorProfile(userId) {
+  return VendorProfile.findOneAndUpdate({ user: userId }, { $setOnInsert: { user: userId } }, { upsert: true, returnDocument: 'after' }).populate(KYC_DOCS).lean();
+}
+
+async function getVendorProfile(req, res) {
+  res.json({ ...presentVendorProfile(await loadVendorProfile(req.user._id)), kycAvailable: !!env.kycKey });
+}
+
+async function submitKyc(req, res) {
+  if (!env.kycKey) throw unavailable('Vendor verification is not set up on this server yet. Please try again later.', 'KYC_UNAVAILABLE');
+  const b = req.valid.body;
+  const p = (await VendorProfile.findOne({ user: req.user._id })) || new VendorProfile({ user: req.user._id });
+  if (p.kycStatus === 'approved') throw conflict('Your KYC is already approved. Contact support to change verified details.', 'KYC_APPROVED');
+  const docs = KYC_DOCS.map((k) => b[k]);
+  if (new Set(docs.map(String)).size !== docs.length) throw badRequest('Upload a separate photo for PAN, Aadhaar front and Aadhaar back');
+  await claimMedia(docs, { owner: req.user._id, purpose: 'kyc', max: 3 });
+  Object.assign(p, {
+    businessName: b.businessName,
+    businessType: b.businessType,
+    city: b.city,
+    address: b.address,
+    panEnc: encryptKyc(b.pan),
+    panLast4: b.pan.slice(-4),
+    aadhaarEnc: encryptKyc(b.aadhaar),
+    aadhaarLast4: b.aadhaar.slice(-4),
+    bankAccountHolder: b.bankAccountHolder,
+    bankAccountEnc: encryptKyc(b.bankAccountNumber),
+    bankAccountLast4: b.bankAccountNumber.slice(-4),
+    bankIfsc: b.bankIfsc,
+    bankName: b.bankName,
+    panPhoto: b.panPhoto,
+    aadhaarFront: b.aadhaarFront,
+    aadhaarBack: b.aadhaarBack,
+    consentAt: new Date(),
+    kycStatus: 'pending',
+    kycNote: undefined,
+    submittedAt: new Date(),
+    reviewedBy: undefined,
+    reviewedAt: undefined,
+  });
+  await p.save();
+  await UploadedMedia.updateMany({ _id: { $in: docs } }, { attachedTo: `VendorProfile:${p._id}` });
+  await audit(req, { action: 'vendor.kyc_submitted', targetType: 'VendorProfile', targetId: p._id, summary: b.businessName });
+  res.json({ ...presentVendorProfile(await loadVendorProfile(req.user._id)), kycAvailable: true });
+}
+
+const countBy = (rows) => Object.fromEntries(rows.map((r) => [r._id, r.n]));
+const adPhase = (a, now = new Date()) => (a.status !== 'approved' ? a.status : a.endsAt && a.endsAt <= now ? 'expired' : 'active');
+
+async function vendorDashboard(req, res) {
+  const v = req.user._id;
+  const now = new Date();
+  const [props, offers, bookings, ads, profile, cash] = await Promise.all([
+    PropertyListing.aggregate([{ $match: { owner: v, moderationStatus: { $ne: 'removed' } } }, { $group: { _id: '$moderationStatus', n: { $sum: 1 } } }]),
+    ServiceOffer.aggregate([{ $match: { provider: v, moderationStatus: { $ne: 'removed' } } }, { $group: { _id: '$moderationStatus', n: { $sum: 1 } } }]),
+    ServiceBooking.aggregate([{ $match: { vendor: v } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+    AdCampaign.find({ vendor: v, status: { $in: ['pending', 'approved'] } }).select('status startsAt endsAt').lean(),
+    VendorProfile.findOne({ user: v }).select('businessName kycStatus kycNote').lean(),
+    ServiceBooking.aggregate([{ $match: { vendor: v, 'payment.status': 'paid' } }, { $group: { _id: null, total: { $sum: '$payment.amountPaise' }, n: { $sum: 1 } } }]),
+  ]);
+  res.json({
+    businessName: profile?.businessName || req.user.name,
+    kycStatus: profile?.kycStatus || 'not_submitted',
+    kycNote: profile?.kycNote || null,
+    properties: countBy(props),
+    services: countBy(offers),
+    bookings: countBy(bookings),
+    ads: { pending: ads.filter((a) => a.status === 'pending').length, active: ads.filter((a) => adPhase(a, now) === 'active').length },
+    cashCollectedPaise: cash[0]?.total || 0,
+    paidBookings: cash[0]?.n || 0,
+  });
+}
+
+// ---------- service bookings ----------
+const bookingPopulate = [{ path: 'offer', select: 'title city category photos contactName contactPhone whatsappAvailable', populate: [{ path: 'photos' }, { path: 'category', select: 'name icon' }] }];
+
+function presentBooking(b, viewerId) {
+  const asVendor = String(b.vendor?._id || b.vendor) === String(viewerId);
+  const o = b.offer && typeof b.offer === 'object' && b.offer._id ? b.offer : null;
+  const paid = b.payment?.status === 'paid';
+  return {
+    _id: b._id,
+    status: b.status,
+    offerTitle: b.offerTitle,
+    priceType: b.priceType,
+    pricePaise: b.pricePaise ?? null,
+    preferredDate: b.preferredDate,
+    preferredTime: b.preferredTime || null,
+    address: b.address,
+    note: b.note || null,
+    payment: { status: b.payment?.status || 'unpaid', method: b.payment?.method || null, amountPaise: b.payment?.amountPaise ?? null, paidAt: b.payment?.paidAt || null, note: b.payment?.note || null },
+    timeline: (b.timeline || []).map((t) => ({ status: t.status, note: t.note || null, at: t.at })),
+    offer: o ? { _id: o._id, title: o.title, city: o.city, category: o.category, photo: presentMedia(o.photos)[0] || null } : { _id: b.offer },
+    // The vendor needs the customer's contact to do the job; the customer sees the vendor's public contact.
+    customer: asVendor ? { name: b.customerName || null, phone: b.customerPhone || null } : undefined,
+    vendor: !asVendor && o ? { name: o.contactName || null, phone: o.contactPhone || null, whatsappAvailable: o.whatsappAvailable !== false } : undefined,
+    role: asVendor ? 'vendor' : 'customer',
+    actions: asVendor
+      ? [...(BOOKING_TRANSITIONS[b.status] || []).map((s) => ({ requested: null, accepted: 'accept', declined: 'decline', completed: 'complete', cancelled: 'cancel' })[s]).filter(Boolean), ...(b.status === 'completed' && !paid ? ['mark-paid'] : [])]
+      : ['requested', 'accepted'].includes(b.status) ? ['cancel'] : [],
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+  };
+}
+
+/** Today's date in India (YYYY-MM-DD); bookings are made in local days. */
+const indiaToday = (offsetDays = 0) => new Date(Date.now() + 330 * 60_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
+
+async function bookService(req, res) {
+  if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts cannot book services. Use a member account to book.', 'MEMBER_ONLY');
+  const offer = await ServiceOffer.findOne({ _id: req.valid.params.id, moderationStatus: 'approved', status: 'active' }).lean();
+  if (!offer) throw notFound('Service');
+  if (offer.visibility === 'society' && String(await approvedSocietyOf(req.user._id)) !== String(offer.society)) throw notFound('Service');
+  if (String(offer.provider) === String(req.user._id)) throw badRequest('You cannot book your own service');
+  const b = req.valid.body;
+  if (b.preferredDate < indiaToday()) throw badRequest('Choose today or a later date');
+  if (b.preferredDate > indiaToday(BOOKING_MAX_DAYS_AHEAD)) throw badRequest(`Bookings can be made up to ${BOOKING_MAX_DAYS_AHEAD} days ahead`);
+  if (await ServiceBooking.exists({ offer: offer._id, customer: req.user._id, status: { $in: ['requested', 'accepted'] } })) {
+    throw conflict('You already have an open booking for this service.', 'BOOKING_EXISTS');
+  }
+  const booking = await ServiceBooking.create({
+    offer: offer._id,
+    vendor: offer.provider,
+    customer: req.user._id,
+    offerTitle: offer.title,
+    priceType: offer.priceType,
+    pricePaise: offer.pricePaise,
+    ...b,
+    customerName: req.user.name,
+    customerPhone: req.user.phone,
+    timeline: [{ status: 'requested', by: req.user._id }],
+  });
+  notifyUsers([offer.provider], { type: 'booking', title: 'New booking request', body: `${req.user.name || 'A customer'} booked "${offer.title}" for ${b.preferredDate}.`, route: 'VendorBookings', id: String(booking._id) }).catch(() => {});
+  const full = await ServiceBooking.findById(booking._id).populate(bookingPopulate).lean();
+  res.status(201).json(presentBooking(full, req.user._id));
+}
+
+const bookingStatusQuery = pageQuery.extend({ status: z.enum([...Object.keys(BOOKING_TRANSITIONS), 'open']).optional() });
+const bookingStatusFilter = (s) => (s === 'open' ? { $in: ['requested', 'accepted'] } : s);
+
+async function myServiceBookings(req, res) {
+  const q = req.valid.query;
+  const filter = { customer: req.user._id };
+  if (q.status) filter.status = bookingStatusFilter(q.status);
+  const page = await pagedFind(ServiceBooking, filter, q, { populate: bookingPopulate });
+  res.json({ ...page, items: page.items.map((b) => presentBooking(b, req.user._id)) });
+}
+
+async function cancelMyServiceBooking(req, res) {
+  const b = await ServiceBooking.findOneAndUpdate(
+    { _id: req.valid.params.id, customer: req.user._id, status: { $in: ['requested', 'accepted'] } },
+    { $set: { status: 'cancelled' }, $push: { timeline: { status: 'cancelled', note: req.valid.body?.note || 'Cancelled by customer', by: req.user._id } } },
+    { returnDocument: 'after' },
+  ).populate(bookingPopulate);
+  if (!b) {
+    if (await ServiceBooking.exists({ _id: req.valid.params.id, customer: req.user._id })) throw conflict('This booking can no longer be cancelled.', 'INVALID_TRANSITION');
+    throw notFound('Booking');
+  }
+  notifyUsers([b.vendor], { type: 'booking', title: 'Booking cancelled', body: `${b.customerName || 'The customer'} cancelled "${b.offerTitle}".`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
+  res.json(presentBooking(b.toObject(), req.user._id));
+}
+
+async function vendorBookings(req, res) {
+  const q = req.valid.query;
+  const filter = { vendor: req.user._id };
+  if (q.status) filter.status = bookingStatusFilter(q.status);
+  const page = await pagedFind(ServiceBooking, filter, q, { populate: bookingPopulate });
+  res.json({ ...page, items: page.items.map((b) => presentBooking(b, req.user._id)) });
+}
+
+async function vendorBooking(req, res) {
+  const b = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).populate(bookingPopulate).lean();
+  if (!b) throw notFound('Booking');
+  res.json(presentBooking(b, req.user._id));
+}
+
+const BOOKING_ACTIONS = { accept: 'accepted', decline: 'declined', complete: 'completed', cancel: 'cancelled' };
+const BOOKING_MESSAGES = { accepted: 'accepted your booking', declined: 'declined your booking', completed: 'marked your booking as done', cancelled: 'cancelled your booking' };
+
+/** Vendor moves a booking along. The status guard in the update makes concurrent clicks safe. */
+async function vendorBookingAction(req, res) {
+  const to = BOOKING_ACTIONS[req.params.action];
+  if (!to) throw notFound('Action');
+  const from = Object.keys(BOOKING_TRANSITIONS).filter((s) => BOOKING_TRANSITIONS[s].includes(to));
+  const note = req.valid.body?.note;
+  const b = await ServiceBooking.findOneAndUpdate(
+    { _id: req.valid.params.id, vendor: req.user._id, status: { $in: from } },
+    { $set: { status: to }, $push: { timeline: { status: to, note, by: req.user._id } } },
+    { returnDocument: 'after' },
+  ).populate(bookingPopulate);
+  if (!b) {
+    const cur = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).select('status').lean();
+    if (!cur) throw notFound('Booking');
+    throw conflict(`This booking is ${cur.status} and cannot be ${to}.`, 'INVALID_TRANSITION');
+  }
+  notifyUsers([b.customer], { type: 'booking', title: `Booking ${to}`, body: `${req.user.name || 'The vendor'} ${BOOKING_MESSAGES[to]} for "${b.offerTitle}".${note ? ` ${note}` : ''}`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
+  res.json(presentBooking(b.toObject(), req.user._id));
+}
+
+/** Cash received in person after the job. Recorded once and never changed; the audit log keeps who and when. */
+async function markBookingPaid(req, res) {
+  const { amountPaise, note } = req.valid.body;
+  const now = new Date();
+  const b = await ServiceBooking.findOneAndUpdate(
+    { _id: req.valid.params.id, vendor: req.user._id, status: 'completed', 'payment.status': { $ne: 'paid' } },
+    {
+      $set: { payment: { status: 'paid', method: 'cash', amountPaise, paidAt: now, markedBy: req.user._id, note } },
+      $push: { timeline: { status: 'paid', note: `Paid in cash: ₹${(amountPaise / 100).toFixed(2)}`, by: req.user._id, at: now } },
+    },
+    { returnDocument: 'after' },
+  ).populate(bookingPopulate);
+  if (!b) {
+    const cur = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).select('status payment').lean();
+    if (!cur) throw notFound('Booking');
+    if (cur.payment?.status === 'paid') throw conflict('This booking is already marked as paid.', 'ALREADY_PAID');
+    throw conflict('Mark the job as done before recording payment.', 'INVALID_TRANSITION');
+  }
+  await audit(req, { action: 'vendor.booking_paid_cash', targetType: 'ServiceBooking', targetId: b._id, summary: `₹${(amountPaise / 100).toFixed(2)} cash for "${b.offerTitle}"` });
+  notifyUsers([b.customer], { type: 'payment', title: 'Payment recorded', body: `${req.user.name || 'The vendor'} recorded ₹${(amountPaise / 100).toFixed(2)} received in cash for "${b.offerTitle}".`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
+  res.json(presentBooking(b.toObject(), req.user._id));
+}
+
+// ---------- ads (boost) ----------
+const SPONSORED_MAX = 5;
+
+/** Listings with a running ad for this kind and location (ads target a city; no city known → all running ads). */
+async function sponsoredListingIds(kind, city) {
+  const now = new Date();
+  const filter = { kind, status: 'approved', startsAt: { $lte: now }, endsAt: { $gt: now } };
+  if (city) filter.city = new RegExp(`^${escapeRegex(city.trim())}$`, 'i');
+  const ads = await AdCampaign.find(filter).sort({ startsAt: 1 }).select('listing').limit(50).lean();
+  return ads.map((a) => a.listing);
+}
+
+/** Running sponsored listings that also match the browse filters (the listing's own city is not a filter: the ad's is). */
+async function sponsoredMatches(Model, kind, filter, city, populate) {
+  const ids = await sponsoredListingIds(kind, city);
+  if (!ids.length) return [];
+  const { city: _ownCity, ...rest } = filter;
+  const found = await Model.find({ ...rest, _id: { $in: ids } }).populate(populate).lean();
+  const order = new Map(ids.map((id, i) => [String(id), i]));
+  return found.sort((a, b) => order.get(String(a._id)) - order.get(String(b._id))).slice(0, SPONSORED_MAX);
+}
+
+const LISTING_LIVE = { property: { availability: 'available' }, service: { status: 'active' } };
+
+function presentAd(a, listing) {
+  return {
+    _id: a._id,
+    kind: a.kind,
+    listingId: a.listing,
+    listingTitle: a.listingTitle,
+    city: a.city,
+    area: a.area || null,
+    days: a.days,
+    status: adPhase(a),
+    reviewNote: a.reviewNote || null,
+    reviewedAt: a.reviewedAt || null,
+    startsAt: a.startsAt || null,
+    endsAt: a.endsAt || null,
+    createdAt: a.createdAt,
+    listing: listing ? { _id: listing._id, title: listing.title, city: listing.city, photo: presentMedia(listing.photos)[0] || null, moderationStatus: listing.moderationStatus } : null,
+  };
+}
+
+/** Loads the listings behind a page of ads (two kinds, two queries). */
+async function adListings(ads, populateExtra = []) {
+  const out = new Map();
+  for (const kind of AD_KINDS) {
+    const ids = ads.filter((a) => a.kind === kind).map((a) => a.listing);
+    if (!ids.length) continue;
+    const rows = await LISTING_MODELS[kind].find({ _id: { $in: ids } }).populate([{ path: 'photos' }, ...populateExtra]).lean();
+    rows.forEach((r) => out.set(String(r._id), r));
+  }
+  return out;
+}
+
+async function createAd(req, res) {
+  await assertListingVendor(req.user);
+  const { kind, listingId, city, area, days } = req.valid.body;
+  const options = await adDayOptions();
+  if (!options.includes(days)) throw badRequest(`Choose one of: ${options.join(', ')} days`);
+  const l = await LISTING_MODELS[kind].findOne({ _id: listingId, [LISTING_OWNER[kind]]: req.user._id }).lean();
+  if (!l) throw notFound('Listing');
+  const live = Object.entries(LISTING_LIVE[kind]).every(([k, v]) => l[k] === v);
+  if (l.moderationStatus !== 'approved' || !live) throw new AppError(400, 'LISTING_NOT_LIVE', 'Only approved, live listings can be boosted.');
+  const now = new Date();
+  if (await AdCampaign.exists({ listing: l._id, $or: [{ status: 'pending' }, { status: 'approved', endsAt: { $gt: now } }] })) {
+    throw conflict('This listing already has a boost under review or running.', 'AD_EXISTS');
+  }
+  const ad = await AdCampaign.create({ vendor: req.user._id, kind, listing: l._id, listingTitle: l.title, city, area, days });
+  res.status(201).json(presentAd(ad.toObject(), l));
+}
+
+async function myAds(req, res) {
+  const q = req.valid.query;
+  const page = await pagedFind(AdCampaign, { vendor: req.user._id }, q);
+  const listings = await adListings(page.items);
+  res.json({ ...page, items: page.items.map((a) => presentAd(a, listings.get(String(a.listing)))) });
+}
+
+/** Vendor withdraws a pending request or stops a running ad early. */
+async function cancelAd(req, res) {
+  const now = new Date();
+  const ad = await AdCampaign.findOne({ _id: req.valid.params.id, vendor: req.user._id });
+  if (!ad) throw notFound('Ad');
+  const phase = adPhase(ad, now);
+  if (!['pending', 'active'].includes(phase)) throw conflict(`This ad is ${phase} and cannot be cancelled.`, 'INVALID_TRANSITION');
+  ad.status = 'cancelled';
+  if (phase === 'active') ad.endsAt = now;
+  await ad.save();
+  res.json(presentAd(ad.toObject()));
+}
+
+// ---------- platform: vendors & ads ----------
+async function listVendors(req, res) {
+  const q = req.valid.query;
+  const filter = {};
+  if (KYC_STATUSES.includes(req.query.kycStatus)) filter.kycStatus = req.query.kycStatus;
+  if (q.q) {
+    const rx = new RegExp(escapeRegex(q.q), 'i');
+    const users = await User.find({ accountType: 'vendor', $or: [{ name: rx }, { phone: new RegExp(escapeRegex(q.q)) }] }).select('_id').limit(200).lean();
+    filter.$or = [{ businessName: rx }, { user: { $in: users.map((u) => u._id) } }];
+  }
+  const page = await pagedFind(VendorProfile, filter, q, { sortable: ['createdAt', 'submittedAt', 'businessName'], defaultSort: '-submittedAt', populate: [{ path: 'user', select: 'name phone status createdAt' }] });
+  res.json({
+    ...page,
+    items: page.items.map((p) => ({
+      _id: p.user?._id,
+      profileId: p._id,
+      name: p.user?.name || null,
+      phone: maskPhone(p.user?.phone),
+      status: p.user?.status,
+      businessName: p.businessName || null,
+      city: p.city || null,
+      kycStatus: p.kycStatus,
+      submittedAt: p.submittedAt || null,
+      reviewedAt: p.reviewedAt || null,
+      createdAt: p.user?.createdAt || p.createdAt,
+    })),
+  });
+}
+
+async function vendorUser(id) {
+  const user = await User.findOne({ _id: id, accountType: 'vendor' }).select('name phone status createdAt lastLoginAt').lean();
+  if (!user) throw notFound('Vendor');
+  return user;
+}
+
+async function getVendor(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const [profile, properties, services, bookings, ads] = await Promise.all([
+    loadVendorProfile(user._id),
+    PropertyListing.countDocuments({ owner: user._id, moderationStatus: { $ne: 'removed' } }),
+    ServiceOffer.countDocuments({ provider: user._id, moderationStatus: { $ne: 'removed' } }),
+    ServiceBooking.countDocuments({ vendor: user._id }),
+    AdCampaign.countDocuments({ vendor: user._id }),
+  ]);
+  res.json({
+    user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
+    profile: presentVendorProfile(profile, 900),
+    counts: { properties, services, bookings, ads },
+    kycAvailable: !!env.kycKey,
+  });
+}
+
+async function decideVendorKyc(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const { decision, note } = req.valid.body;
+  const allowedFrom = decision === 'approved' ? ['pending', 'rejected'] : ['pending', 'approved'];
+  const p = await VendorProfile.findOneAndUpdate(
+    { user: user._id, kycStatus: { $in: allowedFrom } },
+    { $set: { kycStatus: decision, kycNote: note, reviewedBy: req.user._id, reviewedAt: new Date() } },
+    { returnDocument: 'after' },
+  ).populate(KYC_DOCS);
+  if (!p) throw conflict(decision === 'approved' ? 'Only submitted KYC can be approved.' : 'Only submitted or approved KYC can be rejected.', 'INVALID_TRANSITION');
+  await audit(req, { action: `platform.vendor_kyc_${decision}`, targetType: 'User', targetId: user._id, summary: note || p.businessName });
+  notifyUsers([user._id], { type: 'vendor', title: decision === 'approved' ? 'KYC approved' : 'KYC needs changes', body: decision === 'approved' ? 'You can now list properties and services.' : note, route: 'VendorKyc' }).catch(() => {});
+  res.json(presentVendorProfile(p.toObject(), 900));
+}
+
+/** Full PAN / Aadhaar / account number, for verification only. Every reveal is audited with the reason. */
+async function revealVendorKyc(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const p = await VendorProfile.findOne({ user: user._id }).select('+panEnc +aadhaarEnc +bankAccountEnc').lean();
+  if (!p?.panEnc) throw notFound('KYC details');
+  await audit(req, { action: 'privacy.kyc_reveal', targetType: 'User', targetId: user._id, summary: req.valid.body.reason });
+  res.json({ pan: decryptKyc(p.panEnc), aadhaar: decryptKyc(p.aadhaarEnc), bankAccountNumber: decryptKyc(p.bankAccountEnc), phone: user.phone || null });
+}
+
+function adFilter(status, now = new Date()) {
+  switch (status) {
+    case 'active':
+      return { status: 'approved', endsAt: { $gt: now } };
+    case 'expired':
+      return { status: 'approved', endsAt: { $lte: now } };
+    case 'all':
+      return {};
+    default:
+      return { status };
+  }
+}
+
+async function listAdsPlatform(req, res) {
+  const status = AD_FILTERS.includes(req.query.status) ? req.query.status : 'pending';
+  const filter = adFilter(status);
+  if (AD_KINDS.includes(req.query.kind)) filter.kind = req.query.kind;
+  const page = await pagedFind(AdCampaign, filter, req.valid.query, { populate: [{ path: 'vendor', select: 'name' }] });
+  const listings = await adListings(page.items);
+  res.json({ ...page, items: page.items.map((a) => ({ ...presentAd(a, listings.get(String(a.listing))), vendor: { _id: a.vendor?._id, name: a.vendor?.name || null } })) });
+}
+
+async function getAdPlatform(req, res) {
+  const ad = await AdCampaign.findById(req.valid.params.id).lean();
+  if (!ad) throw notFound('Ad');
+  const extra = ad.kind === 'service' ? [{ path: 'category', select: 'name icon' }] : [];
+  const listings = await adListings([ad], extra);
+  const l = listings.get(String(ad.listing));
+  const [vendor, profile] = await Promise.all([User.findById(ad.vendor).select('name phone status').lean(), VendorProfile.findOne({ user: ad.vendor }).select('businessName kycStatus city').lean()]);
+  res.json({
+    ...presentAd(ad, l),
+    listingDetail: l ? { ...l, photos: presentMedia(l.photos), reportCount: undefined } : null,
+    vendor: { _id: ad.vendor, name: vendor?.name || null, phone: maskPhone(vendor?.phone), status: vendor?.status, businessName: profile?.businessName || null, kycStatus: profile?.kycStatus || 'not_submitted', city: profile?.city || null },
+  });
+}
+
+async function decideAd(req, res) {
+  const { decision, note } = req.valid.body;
+  const ad = await AdCampaign.findOne({ _id: req.valid.params.id, status: 'pending' });
+  if (!ad) {
+    if (await AdCampaign.exists({ _id: req.valid.params.id })) throw conflict('Only ads waiting for review can be approved or rejected.', 'INVALID_TRANSITION');
+    throw notFound('Ad');
+  }
+  const now = new Date();
+  if (decision === 'approved') {
+    const l = await LISTING_MODELS[ad.kind].findOne({ _id: ad.listing, moderationStatus: 'approved', ...LISTING_LIVE[ad.kind] }).select('_id').lean();
+    if (!l) throw conflict('The listing is no longer approved and live, so this ad cannot run. Reject it instead.', 'LISTING_NOT_LIVE');
+    ad.startsAt = now;
+    ad.endsAt = new Date(now.getTime() + ad.days * 86_400_000);
+  }
+  Object.assign(ad, { status: decision, reviewNote: note, reviewedBy: req.user._id, reviewedAt: now });
+  await ad.save();
+  await audit(req, { action: `platform.ad_${decision}`, targetType: 'AdCampaign', targetId: ad._id, summary: note || `${ad.kind}: ${ad.listingTitle} · ${ad.city} · ${ad.days}d` });
+  notifyUsers([ad.vendor], {
+    type: 'ad',
+    title: decision === 'approved' ? 'Your boost is live' : 'Your boost was not approved',
+    body: decision === 'approved' ? `"${ad.listingTitle}" is sponsored in ${ad.city} for ${ad.days} day${ad.days === 1 ? '' : 's'}.` : note,
+    route: 'VendorAds',
+    id: String(ad._id),
+  }).catch(() => {});
+  res.json(presentAd(ad.toObject()));
+}
 
 const id$1 = validate({ params: idParam });
 const page$1 = validate({ query: pageQuery });
@@ -4269,7 +4981,7 @@ residentRouter.get('/receipts/:id/pdf', id$1, receiptPdf);
 
 /** Marketplace & property: any signed-in (phone-verified) user; no society membership required. */
 const listingsRouter = Router();
-listingsRouter.use(['/properties', '/marketplace', '/service-offers'], authenticate);
+listingsRouter.use(['/properties', '/marketplace', '/service-offers', '/service-bookings'], authenticate);
 
 listingsRouter.get('/properties', validate({ query: propertyQuery }), browseProperties);
 listingsRouter.get('/properties/mine', page$1, myProperties);
@@ -4296,6 +5008,25 @@ listingsRouter.get('/service-offers/:id', id$1, getOffer);
 listingsRouter.patch('/service-offers/:id', id$1, validate({ body: offerUpdate }), updateOffer);
 listingsRouter.delete('/service-offers/:id', id$1, deleteOffer);
 listingsRouter.post('/service-offers/:id/report', id$1, validate({ body: reportCreate }), reportListing('service'));
+listingsRouter.post('/service-offers/:id/bookings', id$1, validate({ body: serviceBookingCreate }), bookService);
+
+// A member's own bookings of vendor services.
+listingsRouter.get('/service-bookings', validate({ query: bookingStatusQuery }), myServiceBookings);
+listingsRouter.post('/service-bookings/:id/cancel', id$1, validate({ body: bookingNote }), cancelMyServiceBooking);
+
+/** Vendor accounts: KYC, dashboard, bookings of their services, boosted ads. No society context, ever. */
+const vendorRouter = Router();
+vendorRouter.use(authenticate, requireVendor);
+vendorRouter.get('/profile', getVendorProfile);
+vendorRouter.put('/kyc', validate({ body: kycSubmit }), submitKyc);
+vendorRouter.get('/dashboard', vendorDashboard);
+vendorRouter.get('/bookings', validate({ query: bookingStatusQuery }), vendorBookings);
+vendorRouter.get('/bookings/:id', id$1, vendorBooking);
+vendorRouter.post('/bookings/:id/mark-paid', id$1, validate({ body: bookingMarkPaid }), markBookingPaid);
+vendorRouter.post('/bookings/:id/:action', id$1, validate({ body: bookingNote }), vendorBookingAction);
+vendorRouter.get('/ads', page$1, myAds);
+vendorRouter.post('/ads', validate({ body: adCreate }), createAd);
+vendorRouter.post('/ads/:id/cancel', id$1, cancelAd);
 
 const sid$1 = (req) => req.societyId;
 
@@ -4634,15 +5365,24 @@ async function listSocietyCategories(req, res) {
 
 async function createSocietyCategory(req, res) {
   if (req.valid.body.kind === 'marketplace') throw badRequest('Marketplace categories are managed by the platform');
+  assertServiceIcon(req.valid.body.kind, req.valid.body.icon);
   const c = await ServiceCategory.create({ ...req.valid.body, society: sid$1(req) });
   await audit(req, { action: 'category.created', targetType: 'ServiceCategory', targetId: c._id, summary: c.name });
   res.status(201).json(c);
 }
 
 async function updateSocietyCategory(req, res) {
+  const existing = await ServiceCategory.findOne({ _id: req.valid.params.id, society: sid$1(req) }).select('kind').lean();
+  if (!existing) throw notFound('Category (only society categories can be edited here)');
+  assertServiceIcon(req.valid.body.kind || existing.kind, req.valid.body.icon);
   const c = await ServiceCategory.findOneAndUpdate({ _id: req.valid.params.id, society: sid$1(req) }, req.valid.body, { returnDocument: 'after', runValidators: true });
   if (!c) throw notFound('Category (only society categories can be edited here)');
   res.json(c);
+}
+
+async function deleteSocietyCategory(req, res) {
+  await removeCategory(req, { _id: req.valid.params.id, society: sid$1(req) });
+  res.json({ ok: true });
 }
 
 // ======================= Announcements =======================
@@ -5103,7 +5843,7 @@ async function report(req, res) {
 // ======================= Overview =======================
 async function overview(_req, res) {
   const since = new Date(Date.now() - 30 * 86400_000);
-  const [societies, suspended, pendingRegistrations, users, newUsers, members, pendingMembers, openComplaints, pendingListings, openReports, payments30, invoiceTotals] = await Promise.all([
+  const [societies, suspended, pendingRegistrations, users, newUsers, members, pendingMembers, openComplaints, pendingListings, openReports, payments30, invoiceTotals, vendors, pendingKyc, pendingAds] = await Promise.all([
     Society.countDocuments({ status: 'active' }),
     Society.countDocuments({ status: 'suspended' }),
     SocietyRegistration.countDocuments({ status: { $in: ['submitted', 'under_review'] } }),
@@ -5116,9 +5856,12 @@ async function overview(_req, res) {
     ContentReport.countDocuments({ status: 'open' }),
     Payment.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: { channel: '$channel', status: '$status' }, total: { $sum: '$amountPaise' }, n: { $sum: 1 } } }]),
     MaintenanceInvoice.aggregate([{ $match: { active: true } }, { $group: { _id: null, billed: { $sum: '$totalPaise' }, collected: { $sum: '$paidPaise' } } }]),
+    User.countDocuments({ accountType: 'vendor' }),
+    VendorProfile.countDocuments({ kycStatus: 'pending' }),
+    AdCampaign.countDocuments({ status: 'pending' }),
   ]);
   res.json({
-    counts: { societies, suspended, pendingRegistrations, users, newUsers30d: newUsers, members, pendingMembers, openComplaints, pendingListings, openReports },
+    counts: { societies, suspended, pendingRegistrations, users, newUsers30d: newUsers, members, pendingMembers, openComplaints, pendingListings, openReports, vendors, pendingKyc, pendingAds },
     payments30d: payments30.map((p) => ({ channel: p._id.channel, status: p._id.status, totalPaise: p.total, count: p.n })),
     billing: { billedPaise: invoiceTotals[0]?.billed || 0, collectedPaise: invoiceTotals[0]?.collected || 0 },
   });
@@ -5269,6 +6012,7 @@ async function listUsers(req, res) {
   const filter = {};
   if (q.status) filter.status = q.status;
   if (req.query.role === 'super_admin' || req.query.role === 'user') filter.platformRole = req.query.role;
+  if (req.query.accountType === 'member' || req.query.accountType === 'vendor') filter.accountType = req.query.accountType;
   if (q.q) filter.$or = [{ name: new RegExp(escapeRegex(q.q), 'i') }, { phone: new RegExp(escapeRegex(q.q)) }, { email: new RegExp(escapeRegex(q.q), 'i') }];
   res.json(maskPersonalData(await pagedFind(User, filter, q, { sortable: ['createdAt', 'lastLoginAt', 'name'] })));
 }
@@ -5325,16 +6069,41 @@ async function listCategories(req, res) {
 }
 
 async function createCategory(req, res) {
+  assertServiceIcon(req.valid.body.kind, req.valid.body.icon);
   const c = await ServiceCategory.create({ ...req.valid.body, society: null });
   await audit(req, { action: 'platform.category_created', targetType: 'ServiceCategory', targetId: c._id, summary: `${c.kind}: ${c.name}` });
   res.status(201).json(c);
 }
 
 async function updateCategory(req, res) {
+  const existing = await ServiceCategory.findOne({ _id: req.valid.params.id, society: null }).select('kind').lean();
+  if (!existing) throw notFound('Category');
+  assertServiceIcon(req.valid.body.kind || existing.kind, req.valid.body.icon);
   const c = await ServiceCategory.findOneAndUpdate({ _id: req.valid.params.id, society: null }, req.valid.body, { returnDocument: 'after', runValidators: true });
   if (!c) throw notFound('Category');
   await audit(req, { action: 'platform.category_updated', targetType: 'ServiceCategory', targetId: c._id, changes: req.valid.body });
   res.json(c);
+}
+
+/** How many listings / requests use a category (those keep it; it can only be hidden). */
+async function categoryUsage(id) {
+  const counts = await Promise.all([ServiceOffer, MarketplaceListing, Complaint, ServiceRequest].map((M) => M.countDocuments({ category: id })));
+  return counts.reduce((a, b) => a + b, 0);
+}
+
+async function removeCategory(req, filter) {
+  const c = await ServiceCategory.findOne(filter).lean();
+  if (!c) throw notFound('Category');
+  const used = await categoryUsage(c._id);
+  if (used) throw conflict(`"${c.name}" is used by ${used} listing${used === 1 ? '' : 's'} or request${used === 1 ? '' : 's'}, so it can't be deleted. Turn off "Active" to hide it instead.`, 'CATEGORY_IN_USE');
+  await ServiceCategory.deleteOne({ _id: c._id });
+  await audit(req, { action: req.platformSociety || !filter.society ? 'platform.category_deleted' : 'category.deleted', targetType: 'ServiceCategory', targetId: c._id, summary: `${c.kind}: ${c.name}` });
+  return c;
+}
+
+async function deleteCategory(req, res) {
+  await removeCategory(req, { _id: req.valid.params.id, society: null });
+  res.json({ ok: true });
 }
 
 // ======================= Platform announcements =======================
@@ -5358,18 +6127,31 @@ async function archivePlatformAnnouncement(req, res) {
 }
 
 // ======================= Settings & audit =======================
-const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string' };
+const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string', 'ads.dayOptions': 'string' };
+const SETTING_DEFAULTS = { 'listings.requireApproval': true, 'ads.dayOptions': '3,7,15,30' };
+/** "3, 7,15" → [3, 7, 15]; null when invalid (each 1–30 days, 1–6 distinct options). */
+function parseDayOptions(v) {
+  const days = String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean).map(Number);
+  if (!days.length || days.length > 6 || days.some((d) => !Number.isInteger(d) || d < 1 || d > 30) || new Set(days).size !== days.length) return null;
+  return days.sort((a, b) => a - b);
+}
+const adDayOptions = async () => parseDayOptions(await platformSetting('ads.dayOptions', SETTING_DEFAULTS['ads.dayOptions'])) || [3, 7, 15, 30];
 
 async function listSettings(_req, res) {
   const rows = await PlatformSetting.find({}).lean();
   const values = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  res.json({ items: Object.entries(SETTING_KEYS).map(([key, type]) => ({ key, type, value: values[key] ?? (key === 'listings.requireApproval' ? true : '') })) });
+  res.json({ items: Object.entries(SETTING_KEYS).map(([key, type]) => ({ key, type, value: values[key] ?? SETTING_DEFAULTS[key] ?? '' })) });
 }
 
 async function updateSetting(req, res) {
   const key = req.params.key;
   if (!SETTING_KEYS[key]) throw badRequest('Unknown setting');
   if (typeof req.valid.body.value !== SETTING_KEYS[key]) throw badRequest(`Setting ${key} must be a ${SETTING_KEYS[key]}`);
+  if (key === 'ads.dayOptions') {
+    const days = parseDayOptions(req.valid.body.value);
+    if (!days) throw badRequest('Enter 1 to 6 different day counts between 1 and 30, separated by commas (e.g. 3,7,15,30)');
+    req.valid.body.value = days.join(',');
+  }
   const s = await PlatformSetting.findOneAndUpdate({ key }, { value: req.valid.body.value, updatedBy: req.user._id }, { upsert: true, returnDocument: 'after' });
   await audit(req, { action: 'platform.setting_updated', targetType: 'PlatformSetting', targetId: key, changes: { value: req.valid.body.value } });
   res.json(s);
@@ -5431,6 +6213,7 @@ societyRouter.post('/complaints/:id/remarks', can('complaints'), id, validate({ 
 societyRouter.get('/categories', can('society.read'), listSocietyCategories);
 societyRouter.post('/categories', can('society.manage'), validate({ body: categoryUpsert }), createSocietyCategory);
 societyRouter.patch('/categories/:id', can('society.manage'), id, validate({ body: patchOf(categoryUpsert) }), updateSocietyCategory);
+societyRouter.delete('/categories/:id', can('society.manage'), id, deleteSocietyCategory);
 
 societyRouter.get('/announcements', can('society.read'), page, listAnnouncementsAdmin);
 societyRouter.post('/announcements', can('announcements'), validate({ body: announcementCreate }), createAnnouncement);
@@ -5801,6 +6584,7 @@ platformRouter.get('/content-reports', page, listAllReports);
 platformRouter.get('/categories', listCategories);
 platformRouter.post('/categories', validate({ body: categoryUpsert }), createCategory);
 platformRouter.patch('/categories/:id', id, validate({ body: patchOf(categoryUpsert) }), updateCategory);
+platformRouter.delete('/categories/:id', id, deleteCategory);
 
 platformRouter.get('/announcements', page, listPlatformAnnouncements);
 platformRouter.post('/announcements', validate({ body: announcementCreate }), createPlatformAnnouncement);
@@ -5810,6 +6594,14 @@ platformRouter.get('/settings', listSettings);
 platformRouter.put('/settings/:key', validate({ body: platformSetting$1 }), updateSetting);
 platformRouter.get('/audit-logs', page, listAudit);
 platformRouter.get('/payments', page, listPaymentsPlatform);
+
+platformRouter.get('/vendors', page, listVendors);
+platformRouter.get('/vendors/:id', id, getVendor);
+platformRouter.post('/vendors/:id/kyc', id, validate({ body: kycDecision }), decideVendorKyc);
+platformRouter.post('/vendors/:id/reveal', id, reason, revealVendorKyc);
+platformRouter.get('/ads', page, listAdsPlatform);
+platformRouter.get('/ads/:id', id, getAdPlatform);
+platformRouter.post('/ads/:id/review', id, validate({ body: adDecision }), decideAd);
 
 function createApp() {
   const app = express();
@@ -5862,6 +6654,7 @@ function createApp() {
   app.use('/api/v1/resident', residentRouter);
   app.use('/api/v1/society', societyRouter);
   app.use('/api/v1/platform', platformRouter);
+  app.use('/api/v1/vendor', vendorRouter);
   app.use('/api/v1', listingsRouter);
 
   app.use(notFoundHandler);
@@ -5972,7 +6765,7 @@ function stopScheduler() {
 /** Default platform categories (configuration, not records). Inserted only when a kind has none. */
 const DEFAULT_CATEGORIES = {
   complaint: ['Water Supply', 'Electricity', 'Lift Maintenance', 'Plumbing & Drainage', 'Security', 'Cleaning & Sanitation', 'Parking', 'Waste Management', 'Common Area Maintenance', 'Road Damage', 'Other'],
-  service: ['Plumber', 'Electrician', 'Carpenter', 'Housekeeping', 'Pest Control', 'Appliance Repair', 'Painting', 'Gardening'],
+  service: ['Plumber', 'Electrician', 'Housekeeping', 'Appliance Repair', 'Carpenter', 'Painting', 'Pest Control', 'Gardening'],
   marketplace: ['Furniture', 'Electronics', 'Home Appliances', 'Books', 'Vehicles', 'Kids & Toys', 'Sports & Fitness', 'Household', 'Other'],
 };
 const ICONS = { 'Water Supply': 'water', Electricity: 'flash', 'Lift Maintenance': 'swap-vertical', Security: 'shield-checkmark', Parking: 'car', Plumber: 'build', Electrician: 'flash', Furniture: 'bed', Electronics: 'phone-portrait', Books: 'book', Vehicles: 'bicycle' };
@@ -5985,9 +6778,13 @@ async function ensureDefaults() {
       summary[kind] = `kept ${count} existing`;
       continue;
     }
-    await ServiceCategory.insertMany(names.map((name, i) => ({ kind, name, society: null, sortOrder: i, icon: ICONS[name] })));
+    await ServiceCategory.insertMany(names.map((name, i) => ({ kind, name, society: null, sortOrder: i, icon: kind === 'service' ? guessServiceIcon(name) : ICONS[name] })));
     summary[kind] = `inserted ${names.length}`;
   }
+  // Service categories created before icons were selectable get the closest NIVASA icon (admins can change it).
+  const legacy = await ServiceCategory.find({ kind: 'service', $or: [{ icon: { $exists: false } }, { icon: null }, { icon: { $nin: SERVICE_ICON_KEYS } }] }).select('name').lean();
+  for (const c of legacy) await ServiceCategory.updateOne({ _id: c._id }, { icon: guessServiceIcon(c.name) });
+  summary.serviceIconsUpgraded = legacy.length;
   return summary;
 }
 
@@ -6114,6 +6911,7 @@ function checkSecrets() {
     [/JWT_(ACCESS|REFRESH)_SECRET/, 'JWT secret variable'],
     [/PAYMENT_(SECRET_KEY|WEBHOOK_SECRET)/, 'Payment secret variable'],
     [/OTP_PROVIDER_API_KEY|OTP_HASH_SECRET/, 'OTP secret variable'],
+    [/KYC_ENCRYPTION_KEY/, 'KYC encryption key variable'],
     [/EXPO_PUBLIC_[A-Z_]*(SECRET|PASSWORD|MONGO)/, 'Secret exposed via EXPO_PUBLIC_'],
     [/VITE_[A-Z_]*(SECRET|PASSWORD|MONGO)/, 'Secret exposed via VITE_'],
   ];

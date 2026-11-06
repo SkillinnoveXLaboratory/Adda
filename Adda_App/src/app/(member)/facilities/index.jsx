@@ -24,7 +24,7 @@ export default function Facilities() {
                 style={({ pressed }) => [{ width: '47.5%', flexGrow: 1, backgroundColor: colors.white, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, padding: 16, alignItems: 'center', gap: 6 }, pressed && { opacity: 0.85 }]}
               >
                 <View style={{ width: 52, height: 52, borderRadius: 16, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name={facilityIcon(f)} size={26} color="#0b1a30" />
+                  <Ionicons name={facilityIcon(f)} size={26} color="#07162c" />
                 </View>
                 <T weight="bold" size={14} style={{ textAlign: 'center' }} numberOfLines={2}>
                   {f.name}
@@ -32,7 +32,7 @@ export default function Facilities() {
                 <T size={12} color="#94a3b8" style={{ textAlign: 'center' }}>
                   {time12(f.openTime)} – {time12(f.closeTime)}
                 </T>
-                <T weight="bold" size={12.5} color="#0b1a30">
+                <T weight="bold" size={12.5} color="#07162c">
                   {f.feePaise ? `${money(f.feePaise)} / slot` : 'Free'}
                 </T>
                 {f.requiresApproval ? (

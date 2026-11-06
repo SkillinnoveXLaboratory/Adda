@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { notify } from '../../lib/dialog';
 import { AuthHeading, AuthShell, FormError, LineField, OrDivider, OutlineAuthButton, PrimaryAuthButton } from '../../components/AuthKit';
 import { T } from '../../components/Text';
+import { AccountTypePicker } from '../../components/AccountTypePicker';
 import { TextLink } from '../../components/ui';
 import { useAuth } from '../../context/auth';
 import { useAction } from '../../hooks/useApi';
@@ -12,6 +13,7 @@ import { colors } from '../../theme';
 
 export default function Login() {
   const { signIn } = useAuth();
+  const [accountType, setAccountType] = useState('member');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState({});
@@ -23,10 +25,16 @@ export default function Login() {
     setFormError(null);
     if (next.phone || next.password) return;
     try {
-      await signIn(phone, password);
+      await signIn(phone, password, accountType);
       // The navigator moves to the right area automatically once the session is set.
     } catch (err) {
-      setFormError(err.code === 'PASSWORD_LOGIN_DISABLED' ? 'Password sign-in is not enabled on the server yet. Please contact your society office.' : err.message);
+      if (err.code === 'WRONG_ACCOUNT_TYPE') {
+        // Offer the right switch instead of a dead end.
+        setAccountType(err.accountType);
+        setFormError(err.message);
+      } else {
+        setFormError(err.code === 'PASSWORD_LOGIN_DISABLED' ? 'Password sign-in is not enabled on the server yet. Please contact your society office.' : err.message);
+      }
     }
   });
 
@@ -34,12 +42,13 @@ export default function Login() {
     <AuthShell
       footer={
         <T size={10.5} color="#94a3b8" style={{ textAlign: 'center', lineHeight: 16 }}>
-          Your society office verifies every new resident before access is granted.
+          {accountType === 'vendor' ? 'Vendors are verified by NIVASA (KYC) before they can list properties or services.' : 'Your society office verifies every new resident before access is granted.'}
         </T>
       }
     >
       <AuthHeading lead="Welcome back" strong="" sub="Sign in with your mobile number and password." />
       <View style={{ gap: 14, marginTop: 18 }}>
+        <AccountTypePicker compact value={accountType} onChange={(t) => (setAccountType(t), setFormError(null))} />
         <LineField
           label="Mobile number"
           icon="phone-portrait-outline"
@@ -85,7 +94,7 @@ export default function Login() {
         <FormError message={formError} />
         <PrimaryAuthButton title="Login" onPress={submit} loading={busy} />
         <OrDivider />
-        <OutlineAuthButton title="Create New Account" onPress={() => router.replace('/register')} />
+        <OutlineAuthButton title={accountType === 'vendor' ? 'Register as a Vendor' : 'Create New Account'} onPress={() => router.replace({ pathname: '/register', params: { type: accountType } })} />
       </View>
     </AuthShell>
   );

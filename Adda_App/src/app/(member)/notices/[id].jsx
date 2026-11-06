@@ -28,8 +28,8 @@ export default function NoticeDetail() {
             </T>
             {d.eventDate ? (
               <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#f1f5f9', borderRadius: 10, padding: 10 }}>
-                <Ionicons name="calendar" size={18} color="#0b1a30" />
-                <T weight="bold" size={13} color="#0b1a30">
+                <Ionicons name="calendar" size={18} color="#07162c" />
+                <T weight="bold" size={13} color="#07162c">
                   {formatDateTime(d.eventDate)}
                 </T>
               </View>

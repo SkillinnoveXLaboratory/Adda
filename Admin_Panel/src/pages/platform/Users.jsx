@@ -15,9 +15,10 @@ export default function Users() {
   const toast = useToast();
   const [status, setStatus] = useState('');
   const [role, setRole] = useState('');
+  const [accountType, setAccountType] = useState('');
   const [search, setSearch] = useState('');
   const q = useDebounced(search);
-  const list = usePaged((p) => api.get('/platform/users', { ...p, sort: '-createdAt' }), { status, role, q });
+  const list = usePaged((p) => api.get('/platform/users', { ...p, sort: '-createdAt' }), { status, role, accountType, q });
   const [act, setAct] = useState(null);
   const [run, busy] = useAction((reason) => api.post(`/platform/users/${act.u._id}/${act.to}`, reason ? { reason } : {}), {
     toast,
@@ -27,6 +28,18 @@ export default function Users() {
   const reasonFor = (u) => (u._id === me?._id ? 'You can’t change your own account' : u.platformRole === 'super_admin' ? 'Super admin accounts are managed from the server console' : u.status === 'pending_setup' ? 'This account hasn’t completed setup yet' : null);
   const columns = [
     { key: 'name', header: 'User', render: (u) => <div className="flex items-center gap-3"><Avatar name={u.name || u.email || u.phone} size="sm" /><div className="min-w-0"><Link to={`/admin/members/${u._id}`} className="link block truncate">{u.name || 'Unnamed'}</Link><p className="truncate text-[11px] text-gray-400">{u.email || '—'}</p></div></div> },
+    {
+      key: 'type',
+      header: 'Type',
+      render: (u) =>
+        u.accountType === 'vendor' ? (
+          <Link to={`/admin/vendors/${u._id}`} title="Open vendor & KYC">
+            <Badge tone="info">Vendor</Badge>
+          </Link>
+        ) : (
+          <Badge tone="neutral">Member</Badge>
+        ),
+    },
     { key: 'phone', header: 'Mobile', render: (u) => formatPhone(u.phone) },
     { key: 'role', header: 'Role', render: (u) => <Badge tone={u.platformRole === 'super_admin' ? 'purple' : 'neutral'}>{u.platformRole === 'super_admin' ? 'Super admin' : 'User'}</Badge> },
     { key: 'city', header: 'City', render: (u) => u.city || '—' },
@@ -51,18 +64,23 @@ export default function Users() {
   ];
   return (
     <div>
-      <PageHeader title="Accounts" subtitle="Every sign-in account on adda. Contact details are masked — open a profile to reveal them (logged)." />
+      <PageHeader title="Accounts" subtitle="Every sign-in account on adda — members (residents and customers) and vendors (list properties and services). Contact details are masked — open a profile to reveal them (logged)." />
       <Tabs className="mb-4" tabs={[{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'pending_setup', label: 'Setup pending' }, { value: 'disabled', label: 'Disabled' }]} value={status} onChange={setStatus} />
       <div className="card">
         <Toolbar right={list.data && <span className="text-[11px] text-brand-muted">{plural(list.data.total, 'user', 'users')}</span>}>
           <SearchInput value={search} onChange={setSearch} placeholder="Name, phone or email…" className="w-full sm:w-72" />
+          <Select value={accountType} onChange={(e) => setAccountType(e.target.value)} aria-label="Account type" className="sm:w-44" data-testid="account-type-filter">
+            <option value="">Members & vendors</option>
+            <option value="member">Members</option>
+            <option value="vendor">Vendors</option>
+          </Select>
           <Select value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role" className="sm:w-44">
             <option value="">All roles</option>
             <option value="user">Users</option>
             <option value="super_admin">Super admins</option>
           </Select>
         </Toolbar>
-        <DataTable testId="users-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-solid fa-users" title={q || status || role ? 'No users match' : 'No users yet'} />} />
+        <DataTable testId="users-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-solid fa-users" title={q || status || role || accountType ? 'No users match' : 'No users yet'} />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
       <ReasonDialog open={act?.to === 'disabled'} onClose={() => setAct(null)} onSubmit={(r) => run(r)} busy={busy} title={`Disable ${act?.u?.name || 'user'}`} confirmLabel="Disable account" message="They are signed out on every device and can’t sign in until re-enabled." />

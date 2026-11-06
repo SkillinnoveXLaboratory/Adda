@@ -47,11 +47,26 @@ export function ListingCard({ item, kind, onPress, showModeration }) {
               </T>
             </View>
           )}
-          <View style={[styles.tag, { backgroundColor: rent ? '#059669' : '#2563eb' }]}>
+          <View style={[styles.tag, styles.tagTopRight, { backgroundColor: rent ? '#059669' : '#2563eb' }]}>
             <T weight="bold" size={9.5} color={colors.white} style={{ lineHeight: 13 }}>
               {rent ? 'For Rent' : 'For Sale'}
             </T>
           </View>
+          {item.sponsored ? (
+            <View style={[styles.tag, styles.sponsored]}>
+              <T weight="bold" size={9.5} color={colors.navy} style={{ lineHeight: 13 }}>
+                Sponsored
+              </T>
+            </View>
+          ) : null}
+          {item.verifiedVendor ? (
+            <View style={[styles.tag, styles.verified]} accessibilityLabel="Verified vendor">
+              <Ionicons name="shield-checkmark" size={11} color={colors.white} />
+              <T weight="bold" size={9.5} color={colors.white} style={{ lineHeight: 13 }}>
+                Verified
+              </T>
+            </View>
+          ) : null}
         </View>
         <View style={{ padding: 12, gap: 4 }}>
           {showModeration ? (
@@ -136,7 +151,11 @@ const styles = StyleSheet.create({
   pimgWrap: { height: 132, backgroundColor: '#e2e8f0' },
   pimg: { width: '100%', height: '100%' },
   noPhoto: { alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: '#f1f5f9' },
-  tag: { position: 'absolute', top: 8, right: 8, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
+  // Each tag owns one corner (setting an offset to undefined does not clear it in a style array).
+  tag: { position: 'absolute', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
+  tagTopRight: { top: 8, right: 8 },
+  sponsored: { top: 8, left: 8, backgroundColor: colors.gold },
+  verified: { bottom: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(7,22,44,0.85)' },
   specs: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4, borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 8, marginTop: 4 },
   spec: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   card: { flexDirection: 'row', gap: 12, alignItems: 'center', backgroundColor: colors.white, borderWidth: 1, borderColor: '#f1f5f9', borderRadius: 16, padding: 10, ...shadow.card },

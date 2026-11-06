@@ -96,7 +96,7 @@ function SettingsForm({ society, canEdit, onSaved }) {
   };
   return (
     <div className="space-y-5">
-      <Toggle label="Listings need approval" description="Property and marketplace listings linked to the society wait for moderation before residents see them." checked={Boolean(s.listingsRequireApproval)} disabled={!canEdit || busy} onChange={(x) => toggle('listingsRequireApproval', x)} />
+      <Toggle label="Listings need approval" description="Marketplace listings linked to the society wait for moderation before residents see them. Property and service listings from vendors are reviewed by the platform." checked={Boolean(s.listingsRequireApproval)} disabled={!canEdit || busy} onChange={(x) => toggle('listingsRequireApproval', x)} />
       <Toggle label="Facility bookings need approval" description="Applies on top of each facility’s own setting." checked={Boolean(s.bookingsRequireApproval)} disabled={!canEdit || busy} onChange={(x) => toggle('bookingsRequireApproval', x)} />
     </div>
   );

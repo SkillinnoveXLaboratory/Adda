@@ -66,8 +66,8 @@ export default function ComplaintDetail() {
                 </T>
                 {d.currentAssignment ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f1f5f9', borderRadius: 10, padding: 10 }}>
-                    <Ionicons name="person-circle-outline" size={20} color="#0b1a30" />
-                    <T size={13} color="#0b1a30" style={{ flex: 1 }}>
+                    <Ionicons name="person-circle-outline" size={20} color="#07162c" />
+                    <T size={13} color="#07162c" style={{ flex: 1 }}>
                       Assigned to {d.currentAssignment.assigneeName} ({d.currentAssignment.assigneeType})
                     </T>
                   </View>

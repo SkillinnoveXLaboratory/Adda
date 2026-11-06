@@ -49,3 +49,32 @@ export async function giveReason(page, reason) {
   await d.locator('textarea[name=reason]').fill(reason);
   await d.getByRole('button', { name: 'Continue' }).click();
 }
+
+// ------------------------------------------------------------------ vendors (KYC, listings, ads)
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+export async function upload(token, purpose) {
+  const form = new FormData();
+  form.append('purpose', purpose);
+  form.append('file', new Blob([PNG], { type: 'image/png' }), `${purpose}.png`);
+  const res = await fetch(`${API}/uploads`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`upload ${purpose} → ${res.status} ${JSON.stringify(json)}`);
+  return json._id;
+}
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+const VINV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+/** 11 digits → 12-digit Verhoeff-valid test Aadhaar. */
+export const withVerhoeff = (base11) => base11 + VINV[base11.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
+
+/** Registers a vendor and submits KYC (status pending). Returns ids, token and the plain KYC numbers. */
+export async function seedVendorWithKyc(name, business) {
+  const phone = randPhone();
+  const reg = await apiCall('POST', '/auth/resident/register', { body: { phone, name, password: PASSWORD, accountType: 'vendor' } });
+  const token = reg.accessToken;
+  const docs = [await upload(token, 'kyc'), await upload(token, 'kyc'), await upload(token, 'kyc')];
+  const stamp = String(Date.now() + Math.floor(Math.random() * 1e6));
+  const kyc = { pan: `PQRST${stamp.slice(-4)}K`, aadhaar: withVerhoeff(`4${stamp.slice(-10)}`), bankAccountNumber: `7002${stamp.slice(-8)}` };
+  await apiCall('PUT', '/vendor/kyc', { token, body: { businessName: business, businessType: 'business', city: 'Kolkata', address: '7 Park Street', ...kyc, bankAccountHolder: name, bankIfsc: 'HDFC0001234', bankName: 'HDFC Bank', panPhoto: docs[0], aadhaarFront: docs[1], aadhaarBack: docs[2], consent: true } });
+  return { id: reg.user._id, token, phone, name, business, ...kyc };
+}

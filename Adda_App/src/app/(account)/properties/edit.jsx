@@ -28,11 +28,11 @@ const int = (v) => (v === '' || v === undefined ? undefined : Number(v));
 /** Create or edit a property listing (?id= to edit). */
 export default function PropertyForm() {
   const { id } = useLocalSearchParams();
-  const { user, isMember } = useAuth();
+  const { user } = useAuth();
   const toast = useToast();
   const [loading, setLoading] = useState(!!id);
   const [loadError, setLoadError] = useState(null);
-  const [f, setF] = useState({ listingType: 'rent', propertyType: 'apartment', title: '', description: '', price: '', areaSqft: '', bedrooms: '', bathrooms: '', furnishing: '', locality: '', city: user?.city || '', address: '', contactName: user?.name || '', contactPhone: user?.phone || '', whatsappAvailable: true, linkToMySociety: false });
+  const [f, setF] = useState({ listingType: 'rent', propertyType: 'apartment', title: '', description: '', price: '', areaSqft: '', bedrooms: '', bathrooms: '', furnishing: '', locality: '', city: user?.city || '', address: '', contactName: user?.name || '', contactPhone: user?.phone || '', whatsappAvailable: true });
   const [photos, setPhotos] = useState([]);
   const [errors, setErrors] = useState({});
   const set = (k) => (v) => {
@@ -42,7 +42,7 @@ export default function PropertyForm() {
 
   /** Copies a loaded listing into the form. */
   const applyExisting = (d) => {
-    setF({ listingType: d.listingType, propertyType: d.propertyType, title: d.title, description: d.description || '', price: String(d.pricePaise / 100), areaSqft: d.areaSqft ? String(d.areaSqft) : '', bedrooms: d.bedrooms !== undefined && d.bedrooms !== null ? String(d.bedrooms) : '', bathrooms: d.bathrooms !== undefined && d.bathrooms !== null ? String(d.bathrooms) : '', furnishing: d.furnishing || '', locality: d.locality || '', city: d.city || '', address: d.address || '', contactName: d.contactName || '', contactPhone: d.contactPhone || '', whatsappAvailable: d.whatsappAvailable !== false, linkToMySociety: !!d.society });
+    setF({ listingType: d.listingType, propertyType: d.propertyType, title: d.title, description: d.description || '', price: String(d.pricePaise / 100), areaSqft: d.areaSqft ? String(d.areaSqft) : '', bedrooms: d.bedrooms !== undefined && d.bedrooms !== null ? String(d.bedrooms) : '', bathrooms: d.bathrooms !== undefined && d.bathrooms !== null ? String(d.bathrooms) : '', furnishing: d.furnishing || '', locality: d.locality || '', city: d.city || '', address: d.address || '', contactName: d.contactName || '', contactPhone: d.contactPhone || '', whatsappAvailable: d.whatsappAvailable !== false });
     setPhotos((d.photos || []).map((p) => ({ ...p })));
     setLoading(false);
   };
@@ -91,7 +91,6 @@ export default function PropertyForm() {
       contactPhone: normalizePhone(f.contactPhone),
       whatsappAvailable: f.whatsappAvailable,
       photos: photos.map((p) => p._id),
-      ...(!id && { linkToMySociety: f.linkToMySociety }),
     };
     try {
       const saved = await api(id ? `/properties/${id}` : '/properties', { method: id ? 'PATCH' : 'POST', body });
@@ -145,7 +144,6 @@ export default function PropertyForm() {
       <Field label="Contact name" value={f.contactName} onChangeText={set('contactName')} maxLength={120} />
       <Field label="Contact mobile" prefix="+91" value={f.contactPhone} onChangeText={(v) => set('contactPhone')(phoneInput(v))} keyboardType="number-pad" maxLength={PHONE_INPUT_MAX} error={errors.contactPhone} />
       <ToggleRow label="Available on WhatsApp" value={f.whatsappAvailable} onChange={set('whatsappAvailable')} />
-      {!id && isMember ? <ToggleRow label="Show my society name on this listing" value={f.linkToMySociety} onChange={set('linkToMySociety')} /> : null}
       <Hint>Listings are reviewed by moderators before they appear to others.</Hint>
     </Screen>
   );

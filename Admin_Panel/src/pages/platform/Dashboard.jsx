@@ -23,6 +23,8 @@ export default function PlatformDashboard() {
         const rate = billed ? Math.round((collected / billed) * 1000) / 10 : 0;
         const attention = [
           { label: 'Applications to review', count: o.counts.pendingRegistrations, icon: 'fa-regular fa-file-lines', to: '/admin/applications', tone: 'text-brand bg-brand-light' },
+          { label: 'Vendor KYC to review', count: o.counts.pendingKyc, icon: 'fa-solid fa-id-card', to: '/admin/vendors', tone: 'text-violet-500 bg-violet-50' },
+          { label: 'Ads to review', count: o.counts.pendingAds, icon: 'fa-solid fa-rocket', to: '/admin/ads', tone: 'text-emerald-500 bg-emerald-50' },
           { label: 'Listings to moderate', count: o.counts.pendingListings, icon: 'fa-solid fa-store', to: '/admin/listings', tone: 'text-cyan-500 bg-cyan-50' },
           { label: 'Open content reports', count: o.counts.openReports, icon: 'fa-regular fa-flag', to: '/admin/reports', tone: 'text-rose-500 bg-rose-50' },
           { label: 'Open complaints', count: o.counts.openComplaints, icon: 'fa-solid fa-screwdriver-wrench', tone: 'text-amber-500 bg-amber-50' },
@@ -48,7 +50,7 @@ export default function PlatformDashboard() {
             <div className="mb-6 grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard tone="purple" label="Active societies" value={formatNumber(o.counts.societies)} footer={`${formatNumber(o.counts.suspended)} suspended`} footerIcon="fa-regular fa-building" icon="fa-regular fa-building" onClick={() => navigate('/admin/societies')} testId="card-societies" />
               <MetricCard tone="orange" label="Pending applications" value={formatNumber(o.counts.pendingRegistrations)} footer="In the review queue" footerIcon="fa-regular fa-clock" icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')} testId="card-applications" />
-              <MetricCard tone="green" label="Resident accounts" value={formatNumber(o.counts.users)} footer={`${formatNumber(o.counts.newUsers30d)} joined in 30 days`} footerIcon="fa-solid fa-arrow-trend-up" icon="fa-solid fa-users" series={ins.trends.newResidents} onClick={() => navigate('/admin/users')} testId="card-users" />
+              <MetricCard tone="green" label="User accounts" value={formatNumber(o.counts.users)} footer={`${formatNumber(o.counts.vendors || 0)} vendors · ${formatNumber(o.counts.newUsers30d)} new in 30 days`} footerIcon="fa-solid fa-arrow-trend-up" icon="fa-solid fa-users" series={ins.trends.newResidents} onClick={() => navigate('/admin/users')} testId="card-users" />
               <MetricCard tone="cyan" label="Approved members" value={formatNumber(o.counts.members)} footer={`${formatNumber(o.counts.pendingMembers)} awaiting approval`} footerIcon="fa-solid fa-user-check" icon="fa-solid fa-house-user" onClick={() => navigate('/admin/members')} testId="card-members" />
             </div>
 
