@@ -20,7 +20,7 @@ const TABS = [
 ];
 
 const EMPTY = {
-  pending: ['fa-regular fa-circle-check', 'No pending requests', 'When residents join your society from the adda app, their requests appear here for approval.'],
+  pending: ['fa-regular fa-circle-check', 'No pending requests', 'When residents join your society from the Nivasa app, their requests appear here for approval.'],
   approved: ['fa-solid fa-address-book', 'No approved residents yet', 'Approve pending requests to build your resident directory.'],
   suspended: ['fa-solid fa-user-slash', 'No suspended residents', 'Residents you suspend appear here and can be reactivated.'],
   rejected: ['fa-solid fa-user-xmark', 'No rejected requests', 'Requests you decline are kept here for reference.'],
@@ -116,7 +116,7 @@ export default function Residents() {
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
 
-      <ConfirmDialog open={Boolean(pending && !d?.reason)} onClose={() => setPending(null)} onConfirm={() => run()} busy={busy} tone="primary" title={d?.title} confirmLabel={d?.confirm} message={<>Give {subject} full access to society features in the adda app?</>} />
+      <ConfirmDialog open={Boolean(pending && !d?.reason)} onClose={() => setPending(null)} onConfirm={() => run()} busy={busy} tone="primary" title={d?.title} confirmLabel={d?.confirm} message={<>Give {subject} full access to society features in the Nivasa app?</>} />
       <ReasonDialog open={Boolean(pending && d?.reason)} onClose={() => setPending(null)} onSubmit={(r) => run(r)} busy={busy} title={d?.title} confirmLabel={d?.confirm} message={<>This will {pending?.action} {subject}. The resident is notified with your reason.</>} />
     </div>
   );

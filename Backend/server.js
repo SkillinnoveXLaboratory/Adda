@@ -695,6 +695,8 @@ const serviceOfferSchema = new Schema$3(
     whatsappAvailable: { type: Boolean, default: true },
     visibility: { type: String, enum: ['public', 'society'], default: 'public' },
     status: { type: String, enum: ['active', 'paused'], default: 'active' },
+    // Platform commission (basis points, 1000 = 10%) in force when the vendor published / last edited this service.
+    commissionBps: { type: Number, min: 0, max: 5000, default: 0 },
     ...moderation$1,
   },
   { timestamps: true },
@@ -763,6 +765,11 @@ const serviceBookingSchema = new Schema$3(
     note: { type: String, trim: true, maxlength: 500 },
     customerName: { type: String, maxlength: 120 },
     customerPhone: { type: String, match: /^[6-9]\d{9}$/ },
+    // Coupon (discount funded by NIVASA) and the commission rate snapshotted from the service at booking time.
+    coupon: { type: ObjectId$3, ref: 'Coupon' },
+    couponCode: String,
+    discountPaise: { type: Number, min: 0, default: 0 },
+    commissionBps: { type: Number, min: 0, max: 5000, default: 0 },
     status: { type: String, enum: Object.keys(BOOKING_TRANSITIONS), default: 'requested' },
     timeline: [{ status: String, note: String, by: { type: ObjectId$3, ref: 'User' }, at: { type: Date, default: Date.now } }],
     payment: {
@@ -772,6 +779,13 @@ const serviceBookingSchema = new Schema$3(
       paidAt: Date,
       markedBy: { type: ObjectId$3, ref: 'User' },
       note: { type: String, maxlength: 300 },
+      // Settlement, fixed when payment is recorded: gross = cash + coupon discount; commission on gross;
+      // netToPlatform = commission − discount (negative → NIVASA owes the vendor).
+      discountPaise: Number,
+      grossPaise: Number,
+      commissionBps: Number,
+      commissionPaise: Number,
+      netToPlatformPaise: Number,
     },
   },
   { timestamps: true },
@@ -780,6 +794,39 @@ serviceBookingSchema.index({ vendor: 1, status: 1, createdAt: -1 });
 serviceBookingSchema.index({ customer: 1, createdAt: -1 });
 serviceBookingSchema.index({ offer: 1, customer: 1, status: 1 });
 const ServiceBooking = model$3('ServiceBooking', serviceBookingSchema);
+
+/**
+ * Platform coupon for members booking vendor services: a fixed rupee discount, usable once per member by up to
+ * `maxUses` different members, optionally only for members of chosen societies. NIVASA funds the discount.
+ */
+const couponSchema = new Schema$3(
+  {
+    code: { type: String, required: true, unique: true, uppercase: true, trim: true, match: /^[A-Z0-9-]{3,20}$/ },
+    description: { type: String, trim: true, maxlength: 200 },
+    discountPaise: { type: Number, required: true, min: 100, validate: { validator: Number.isInteger, message: 'Discount must be whole paise' } },
+    maxUses: { type: Number, required: true, min: 1, max: 100000 },
+    usedCount: { type: Number, default: 0, min: 0 },
+    societies: [{ type: ObjectId$3, ref: 'Society' }],
+    active: { type: Boolean, default: true },
+    expiresAt: Date,
+    createdBy: { type: ObjectId$3, ref: 'User' },
+  },
+  { timestamps: true },
+);
+const Coupon = model$3('Coupon', couponSchema);
+
+/** One row per member per coupon (unique) — the reservation behind usedCount; released if the booking is cancelled. */
+const couponRedemptionSchema = new Schema$3(
+  {
+    coupon: { type: ObjectId$3, ref: 'Coupon', required: true },
+    user: { type: ObjectId$3, ref: 'User', required: true },
+    booking: { type: ObjectId$3, ref: 'ServiceBooking', required: true },
+    discountPaise: { type: Number, required: true },
+  },
+  { timestamps: true },
+);
+couponRedemptionSchema.index({ coupon: 1, user: 1 }, { unique: true });
+const CouponRedemption = model$3('CouponRedemption', couponRedemptionSchema);
 
 /**
  * "Boost" a property or service: the vendor picks a location and a number of days; the platform reviews it.
@@ -1197,6 +1244,8 @@ const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   Complaint,
   ComplaintAssignment,
   ContentReport,
+  Coupon,
+  CouponRedemption,
   Counter,
   Expense,
   Facility,
@@ -2599,7 +2648,7 @@ logger.debug({ configured: env.paymentsConfigured }, 'Payment gateway configurat
 
 /** Non-secret runtime capabilities the clients use to show accurate availability states. */
 async function config(_req, res) {
-  const dayOptions = await adDayOptions();
+  const [dayOptions, commissionBps] = await Promise.all([adDayOptions(), commissionBpsNow()]);
   res.json({
     apiVersion: 'v1',
     environment: env.NODE_ENV,
@@ -2608,6 +2657,7 @@ async function config(_req, res) {
     payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: env.paymentsConfigured ? 'razorpay' : null },
     uploads: { maxMb: env.MAX_UPLOAD_MB, types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] },
     ads: { dayOptions },
+    services: { commissionPercent: commissionBps / 100 },
   });
 }
 
@@ -4129,6 +4179,7 @@ const presentListing = (l, userId) => ({
   verifiedVendor: (l.owner || l.provider)?.accountType === 'vendor',
   society: l.society?.name ? { _id: l.society._id, name: l.society.name } : l.society,
   reportCount: undefined,
+  commissionBps: String(l.owner?._id || l.owner || l.seller?._id || l.seller || l.provider?._id || l.provider) === String(userId) ? l.commissionBps ?? 0 : undefined,
 });
 
 // ======================= Property =======================
@@ -4339,6 +4390,7 @@ async function createOffer(req, res) {
     photos: photoIds,
     provider: req.user._id,
     contactName: data.contactName || req.user.name,
+    commissionBps: await commissionBpsNow(),
     moderationStatus: approval ? 'pending' : 'approved',
   });
   res.status(201).json(offer);
@@ -4358,6 +4410,8 @@ async function updateOffer(req, res) {
   Object.assign(offer, data);
   if (priceType === 'on_quote') offer.pricePaise = undefined;
   if (photos) offer.photos = await claimMedia(photos, { owner: req.user._id, purpose: 'service', max: 6 });
+  // Editing the listing re-publishes it at the current platform commission rate.
+  if (contentChanged) offer.commissionBps = await commissionBpsNow();
   if (contentChanged && (await needsApproval(offer.society))) offer.moderationStatus = 'pending';
   await offer.save();
   res.json(offer);
@@ -4436,7 +4490,21 @@ const kycSubmit = z
   .strict();
 const kycDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: optText(500) }).refine((v) => v.decision !== 'rejected' || !!v.note, { message: 'Tell the vendor why the KYC was rejected', path: ['note'] });
 const BOOKING_MAX_DAYS_AHEAD = 90;
-const serviceBookingCreate = z.object({ preferredDate: date, preferredTime: hhmm.optional(), address: text(300, 5), note: optText(500) }).strict();
+const couponCodeInput = z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,20}$/, 'Enter a valid coupon code');
+const serviceBookingCreate = z.object({ preferredDate: date, preferredTime: hhmm.optional(), address: text(300, 5), note: optText(500), couponCode: couponCodeInput.optional() }).strict();
+const couponCheck = z.object({ code: couponCodeInput }).strict();
+const couponFields = {
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,20}$/, 'Use 3 to 20 letters, numbers or dashes'),
+  description: optText(200),
+  discountPaise: z.number().int('Discount must be in whole paise').min(100, 'Discount must be at least ₹1').max(OFFER_MAX_PAISE, 'Discount is too high'),
+  maxUses: z.number().int().min(1, 'Allow at least 1 use').max(100000),
+  societyIds: z.array(objectId).max(500),
+  active: z.boolean(),
+  expiresOn: date.nullable(),
+};
+const couponCreate = z.object({ ...couponFields, description: couponFields.description, societyIds: couponFields.societyIds.default([]), active: couponFields.active.default(true), expiresOn: couponFields.expiresOn.optional() }).strict();
+// On edit an empty description clears it (optText would turn '' into "not sent").
+const couponUpdate = z.object({ ...couponFields, description: z.string().trim().max(200) }).partial().strict();
 const bookingNote = z.object({ note: optText(300) });
 const bookingMarkPaid = z.object({ amountPaise: positivePaise.refine((v) => v <= OFFER_MAX_PAISE, 'Amount is too high'), note: optText(300) }).strict();
 const adCreate = z.object({ kind: z.enum(AD_KINDS), listingId: objectId, city: text(80, 2), area: optText(120), days: z.number().int().min(1).max(30) }).strict();
@@ -4533,7 +4601,7 @@ async function vendorDashboard(req, res) {
     ServiceBooking.aggregate([{ $match: { vendor: v } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     AdCampaign.find({ vendor: v, status: { $in: ['pending', 'approved'] } }).select('status startsAt endsAt').lean(),
     VendorProfile.findOne({ user: v }).select('businessName kycStatus kycNote').lean(),
-    ServiceBooking.aggregate([{ $match: { vendor: v, 'payment.status': 'paid' } }, { $group: { _id: null, total: { $sum: '$payment.amountPaise' }, n: { $sum: 1 } } }]),
+    ServiceBooking.aggregate([{ $match: { vendor: v, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]),
   ]);
   res.json({
     businessName: profile?.businessName || req.user.name,
@@ -4543,8 +4611,10 @@ async function vendorDashboard(req, res) {
     services: countBy(offers),
     bookings: countBy(bookings),
     ads: { pending: ads.filter((a) => a.status === 'pending').length, active: ads.filter((a) => adPhase(a, now) === 'active').length },
-    cashCollectedPaise: cash[0]?.total || 0,
+    cashCollectedPaise: cash[0]?.cash || 0,
     paidBookings: cash[0]?.n || 0,
+    settlement: presentSettlement(cash[0]),
+    commissionPercent: (await commissionBpsNow()) / 100,
   });
 }
 
@@ -4565,7 +4635,23 @@ function presentBooking(b, viewerId) {
     preferredTime: b.preferredTime || null,
     address: b.address,
     note: b.note || null,
-    payment: { status: b.payment?.status || 'unpaid', method: b.payment?.method || null, amountPaise: b.payment?.amountPaise ?? null, paidAt: b.payment?.paidAt || null, note: b.payment?.note || null },
+    // What the member pays: list price − coupon discount (null for "price on request").
+    pricing: {
+      listPricePaise: b.pricePaise ?? null,
+      couponCode: b.couponCode || null,
+      discountPaise: b.discountPaise || 0,
+      payablePaise: b.pricePaise != null ? Math.max(0, b.pricePaise - (b.discountPaise || 0)) : null,
+      ...(asVendor && { commissionPercent: (b.commissionBps || 0) / 100 }),
+    },
+    payment: {
+      status: b.payment?.status || 'unpaid',
+      method: b.payment?.method || null,
+      amountPaise: b.payment?.amountPaise ?? null,
+      paidAt: b.payment?.paidAt || null,
+      note: b.payment?.note || null,
+      // The settlement with NIVASA is the vendor's business, not the member's.
+      ...(asVendor && paid && { discountPaise: b.payment.discountPaise ?? 0, grossPaise: b.payment.grossPaise ?? b.payment.amountPaise, commissionPaise: b.payment.commissionPaise ?? 0, netToPlatformPaise: b.payment.netToPlatformPaise ?? 0 }),
+    },
     timeline: (b.timeline || []).map((t) => ({ status: t.status, note: t.note || null, at: t.at })),
     offer: o ? { _id: o._id, title: o.title, city: o.city, category: o.category, photo: presentMedia(o.photos)[0] || null } : { _id: b.offer },
     // The vendor needs the customer's contact to do the job; the customer sees the vendor's public contact.
@@ -4589,24 +4675,37 @@ async function bookService(req, res) {
   if (!offer) throw notFound('Service');
   if (offer.visibility === 'society' && String(await approvedSocietyOf(req.user._id)) !== String(offer.society)) throw notFound('Service');
   if (String(offer.provider) === String(req.user._id)) throw badRequest('You cannot book your own service');
-  const b = req.valid.body;
+  const { couponCode, ...b } = req.valid.body;
   if (b.preferredDate < indiaToday()) throw badRequest('Choose today or a later date');
   if (b.preferredDate > indiaToday(BOOKING_MAX_DAYS_AHEAD)) throw badRequest(`Bookings can be made up to ${BOOKING_MAX_DAYS_AHEAD} days ahead`);
   if (await ServiceBooking.exists({ offer: offer._id, customer: req.user._id, status: { $in: ['requested', 'accepted'] } })) {
     throw conflict('You already have an open booking for this service.', 'BOOKING_EXISTS');
   }
-  const booking = await ServiceBooking.create({
-    offer: offer._id,
-    vendor: offer.provider,
-    customer: req.user._id,
-    offerTitle: offer.title,
-    priceType: offer.priceType,
-    pricePaise: offer.pricePaise,
-    ...b,
-    customerName: req.user.name,
-    customerPhone: req.user.phone,
-    timeline: [{ status: 'requested', by: req.user._id }],
-  });
+  // Coupon: validate, then reserve atomically before the booking exists (released again if anything fails).
+  const deal = couponCode ? await evaluateCoupon(couponCode, req.user, offer) : null;
+  const bookingId = new mongoose.Types.ObjectId();
+  if (deal) await reserveCoupon(deal, req.user._id, bookingId);
+  let booking;
+  try {
+    booking = await ServiceBooking.create({
+      _id: bookingId,
+      ...(deal && { coupon: deal.coupon._id, couponCode: deal.coupon.code, discountPaise: deal.discountPaise }),
+      commissionBps: offer.commissionBps || 0,
+      offer: offer._id,
+      vendor: offer.provider,
+      customer: req.user._id,
+      offerTitle: offer.title,
+      priceType: offer.priceType,
+      pricePaise: offer.pricePaise,
+      ...b,
+      customerName: req.user.name,
+      customerPhone: req.user.phone,
+      timeline: [{ status: 'requested', by: req.user._id }],
+    });
+  } catch (err) {
+    if (deal) await releaseCoupon({ _id: bookingId, coupon: deal.coupon._id });
+    throw err;
+  }
   notifyUsers([offer.provider], { type: 'booking', title: 'New booking request', body: `${req.user.name || 'A customer'} booked "${offer.title}" for ${b.preferredDate}.`, route: 'VendorBookings', id: String(booking._id) }).catch(() => {});
   const full = await ServiceBooking.findById(booking._id).populate(bookingPopulate).lean();
   res.status(201).json(presentBooking(full, req.user._id));
@@ -4633,6 +4732,7 @@ async function cancelMyServiceBooking(req, res) {
     if (await ServiceBooking.exists({ _id: req.valid.params.id, customer: req.user._id })) throw conflict('This booking can no longer be cancelled.', 'INVALID_TRANSITION');
     throw notFound('Booking');
   }
+  await releaseCoupon(b);
   notifyUsers([b.vendor], { type: 'booking', title: 'Booking cancelled', body: `${b.customerName || 'The customer'} cancelled "${b.offerTitle}".`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
 }
@@ -4670,6 +4770,7 @@ async function vendorBookingAction(req, res) {
     if (!cur) throw notFound('Booking');
     throw conflict(`This booking is ${cur.status} and cannot be ${to}.`, 'INVALID_TRANSITION');
   }
+  if (['declined', 'cancelled'].includes(to)) await releaseCoupon(b);
   notifyUsers([b.customer], { type: 'booking', title: `Booking ${to}`, body: `${req.user.name || 'The vendor'} ${BOOKING_MESSAGES[to]} for "${b.offerTitle}".${note ? ` ${note}` : ''}`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
 }
@@ -4678,10 +4779,16 @@ async function vendorBookingAction(req, res) {
 async function markBookingPaid(req, res) {
   const { amountPaise, note } = req.valid.body;
   const now = new Date();
+  const snap = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).select('discountPaise commissionBps').lean();
+  if (!snap) throw notFound('Booking');
+  const discountPaise = snap.discountPaise || 0;
+  const commissionBps = snap.commissionBps || 0;
+  const grossPaise = amountPaise + discountPaise;
+  const commissionPaise = Math.round((grossPaise * commissionBps) / 10_000);
   const b = await ServiceBooking.findOneAndUpdate(
     { _id: req.valid.params.id, vendor: req.user._id, status: 'completed', 'payment.status': { $ne: 'paid' } },
     {
-      $set: { payment: { status: 'paid', method: 'cash', amountPaise, paidAt: now, markedBy: req.user._id, note } },
+      $set: { payment: { status: 'paid', method: 'cash', amountPaise, paidAt: now, markedBy: req.user._id, note, discountPaise, grossPaise, commissionBps, commissionPaise, netToPlatformPaise: commissionPaise - discountPaise } },
       $push: { timeline: { status: 'paid', note: `Paid in cash: ₹${(amountPaise / 100).toFixed(2)}`, by: req.user._id, at: now } },
     },
     { returnDocument: 'after' },
@@ -4692,9 +4799,175 @@ async function markBookingPaid(req, res) {
     if (cur.payment?.status === 'paid') throw conflict('This booking is already marked as paid.', 'ALREADY_PAID');
     throw conflict('Mark the job as done before recording payment.', 'INVALID_TRANSITION');
   }
-  await audit(req, { action: 'vendor.booking_paid_cash', targetType: 'ServiceBooking', targetId: b._id, summary: `₹${(amountPaise / 100).toFixed(2)} cash for "${b.offerTitle}"` });
+  await audit(req, { action: 'vendor.booking_paid_cash', targetType: 'ServiceBooking', targetId: b._id, summary: `₹${(amountPaise / 100).toFixed(2)} cash for "${b.offerTitle}" · commission ₹${(commissionPaise / 100).toFixed(2)} · coupon ₹${(discountPaise / 100).toFixed(2)}` });
   notifyUsers([b.customer], { type: 'payment', title: 'Payment recorded', body: `${req.user.name || 'The vendor'} recorded ₹${(amountPaise / 100).toFixed(2)} received in cash for "${b.offerTitle}".`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
+}
+
+// ---------- coupons & settlement ----------
+/** $group stage summing recorded payments: cash received, coupon credits, commission, net due to NIVASA. */
+const SETTLEMENT_GROUP = { _id: null, n: { $sum: 1 }, cash: { $sum: '$payment.amountPaise' }, discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } }, commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } }, net: { $sum: { $ifNull: ['$payment.netToPlatformPaise', 0] } } };
+const presentSettlement = (g) => ({ paidBookings: g?.n || 0, cashCollectedPaise: g?.cash || 0, couponCreditsPaise: g?.discount || 0, commissionPaise: g?.commission || 0, netToPlatformPaise: g?.net || 0 });
+
+/** Checks a code for this member and service; returns the coupon and the discount (never more than the price). */
+async function evaluateCoupon(rawCode, user, offer) {
+  const code = String(rawCode).trim().toUpperCase();
+  const coupon = await Coupon.findOne({ code }).lean();
+  if (!coupon || !coupon.active || (coupon.expiresAt && coupon.expiresAt < new Date())) throw new AppError(400, 'COUPON_INVALID', 'This coupon code is not valid.');
+  if (coupon.usedCount >= coupon.maxUses) throw conflict('This coupon has been fully used.', 'COUPON_EXHAUSTED');
+  if (coupon.societies?.length) {
+    const eligible = await SocietyMembership.exists({ user: user._id, status: 'approved', society: { $in: coupon.societies } });
+    if (!eligible) throw new AppError(403, 'COUPON_NOT_ELIGIBLE', 'This coupon is only for members of selected societies.');
+  }
+  if (await CouponRedemption.exists({ coupon: coupon._id, user: user._id })) throw conflict('You have already used this coupon.', 'COUPON_ALREADY_USED');
+  if (offer.priceType === 'on_quote' || !(offer.pricePaise > 0)) throw new AppError(400, 'COUPON_NEEDS_PRICE', 'Coupons apply to services with a listed price.');
+  const discountPaise = Math.min(coupon.discountPaise, offer.pricePaise);
+  return { coupon, discountPaise, listPricePaise: offer.pricePaise, payablePaise: offer.pricePaise - discountPaise };
+}
+
+/** Claims one use: the usedCount guard and the unique (coupon, user) row make this safe under concurrent bookings. */
+async function reserveCoupon(deal, userId, bookingId) {
+  const c = await Coupon.findOneAndUpdate({ _id: deal.coupon._id, active: true, $expr: { $lt: ['$usedCount', '$maxUses'] } }, { $inc: { usedCount: 1 } }, { returnDocument: 'after' });
+  if (!c) throw conflict('This coupon has just been fully used.', 'COUPON_EXHAUSTED');
+  try {
+    await CouponRedemption.create({ coupon: c._id, user: userId, booking: bookingId, discountPaise: deal.discountPaise });
+  } catch (err) {
+    await Coupon.updateOne({ _id: c._id }, { $inc: { usedCount: -1 } });
+    if (err.code === 11000) throw conflict('You have already used this coupon.', 'COUPON_ALREADY_USED');
+    throw err;
+  }
+}
+
+/** Gives the use back when a booking is cancelled or declined before the job (idempotent). */
+async function releaseCoupon(booking) {
+  if (!booking?.coupon) return;
+  const r = await CouponRedemption.deleteOne({ coupon: booking.coupon, booking: booking._id });
+  if (r.deletedCount) await Coupon.updateOne({ _id: booking.coupon, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+}
+
+async function checkCoupon(req, res) {
+  if (req.user.accountType === 'vendor') throw forbidden('Coupons are for members booking services.', 'MEMBER_ONLY');
+  const offer = await ServiceOffer.findOne({ _id: req.valid.params.id, moderationStatus: 'approved', status: 'active' }).lean();
+  if (!offer) throw notFound('Service');
+  const deal = await evaluateCoupon(req.valid.body.code, req.user, offer);
+  res.json({ code: deal.coupon.code, description: deal.coupon.description || null, discountPaise: deal.discountPaise, listPricePaise: deal.listPricePaise, payablePaise: deal.payablePaise });
+}
+
+const couponPhase = (c, now = new Date()) => (!c.active ? 'inactive' : c.expiresAt && c.expiresAt < now ? 'expired' : c.usedCount >= c.maxUses ? 'used_up' : 'active');
+const endOfIndiaDay = (ymd) => new Date(`${ymd}T23:59:59.999+05:30`);
+const presentCoupon = (c) => ({
+  _id: c._id,
+  code: c.code,
+  description: c.description || null,
+  discountPaise: c.discountPaise,
+  maxUses: c.maxUses,
+  usedCount: c.usedCount,
+  remaining: Math.max(0, c.maxUses - c.usedCount),
+  societies: (c.societies || []).map((x) => (x?.name ? { _id: x._id, name: x.name, city: x.city } : { _id: x })),
+  allMembers: !c.societies?.length,
+  active: c.active,
+  expiresAt: c.expiresAt || null,
+  status: couponPhase(c),
+  createdAt: c.createdAt,
+  updatedAt: c.updatedAt,
+});
+
+async function listCoupons(req, res) {
+  const q = req.valid.query;
+  const now = new Date();
+  const filter = {};
+  if (q.q) filter.code = new RegExp(escapeRegex(q.q.toUpperCase()));
+  if (req.query.status === 'active') Object.assign(filter, { active: true, $expr: { $lt: ['$usedCount', '$maxUses'] }, $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] });
+  else if (req.query.status === 'inactive') filter.active = false;
+  else if (req.query.status === 'expired') filter.expiresAt = { $lte: now };
+  const page = await pagedFind(Coupon, filter, q, { sortable: ['createdAt', 'code', 'usedCount'], populate: [{ path: 'societies', select: 'name city' }] });
+  res.json({ ...page, items: page.items.map(presentCoupon) });
+}
+
+async function getCoupon(req, res) {
+  const c = await Coupon.findById(req.valid.params.id).populate('societies', 'name city').lean();
+  if (!c) throw notFound('Coupon');
+  const redemptions = await CouponRedemption.find({ coupon: c._id }).sort({ createdAt: -1 }).limit(200).populate('user', 'name phone').populate('booking', 'offerTitle status pricePaise payment.status').lean();
+  res.json({
+    ...presentCoupon(c),
+    redemptions: redemptions.map((r) => ({ _id: r._id, at: r.createdAt, discountPaise: r.discountPaise, user: { _id: r.user?._id, name: r.user?.name || null, phone: maskPhone(r.user?.phone) }, booking: r.booking ? { _id: r.booking._id, offerTitle: r.booking.offerTitle, status: r.booking.status, paid: r.booking.payment?.status === 'paid' } : null })),
+  });
+}
+
+async function assertSocieties(ids = []) {
+  if (!ids.length) return [];
+  const found = await Society.countDocuments({ _id: { $in: ids } });
+  if (found !== new Set(ids.map(String)).size) throw badRequest('One or more selected societies do not exist');
+  return ids;
+}
+
+async function createCoupon(req, res) {
+  const b = req.valid.body;
+  if (await Coupon.exists({ code: b.code })) throw conflict('A coupon with this code already exists.', 'COUPON_EXISTS');
+  const c = await Coupon.create({ code: b.code, description: b.description, discountPaise: b.discountPaise, maxUses: b.maxUses, societies: await assertSocieties(b.societyIds), active: b.active, expiresAt: b.expiresOn ? endOfIndiaDay(b.expiresOn) : undefined, createdBy: req.user._id });
+  await audit(req, { action: 'platform.coupon_created', targetType: 'Coupon', targetId: c._id, summary: `${c.code}: ₹${(c.discountPaise / 100).toFixed(2)} × ${c.maxUses}` });
+  res.status(201).json(presentCoupon((await Coupon.findById(c._id).populate('societies', 'name city').lean())));
+}
+
+async function updateCoupon(req, res) {
+  const c = await Coupon.findById(req.valid.params.id);
+  if (!c) throw notFound('Coupon');
+  const b = req.valid.body;
+  if (b.code && b.code !== c.code) {
+    if (c.usedCount > 0) throw conflict('The code of a coupon that members already used cannot change.', 'COUPON_IN_USE');
+    if (await Coupon.exists({ code: b.code })) throw conflict('A coupon with this code already exists.', 'COUPON_EXISTS');
+    c.code = b.code;
+  }
+  if (b.maxUses !== undefined && b.maxUses < c.usedCount) throw badRequest(`${c.usedCount} members already used this coupon, so uses can't be lower than that`);
+  for (const k of ['discountPaise', 'maxUses', 'active']) if (b[k] !== undefined) c[k] = b[k];
+  if (b.description !== undefined) c.description = b.description || undefined;
+  if (b.societyIds !== undefined) c.societies = await assertSocieties(b.societyIds);
+  if (b.expiresOn !== undefined) c.expiresAt = b.expiresOn ? endOfIndiaDay(b.expiresOn) : undefined;
+  await c.save();
+  await audit(req, { action: 'platform.coupon_updated', targetType: 'Coupon', targetId: c._id, changes: b });
+  res.json(presentCoupon(await Coupon.findById(c._id).populate('societies', 'name city').lean()));
+}
+
+async function deleteCoupon(req, res) {
+  const c = await Coupon.findById(req.valid.params.id).lean();
+  if (!c) throw notFound('Coupon');
+  if (c.usedCount > 0 || (await CouponRedemption.exists({ coupon: c._id }))) throw conflict('Members already used this coupon, so it is kept for the records. Turn it off instead.', 'COUPON_IN_USE');
+  await Coupon.deleteOne({ _id: c._id });
+  await audit(req, { action: 'platform.coupon_deleted', targetType: 'Coupon', targetId: c._id, summary: c.code });
+  res.json({ ok: true });
+}
+
+/** Paid service bookings with their settlement (cash, coupon credit, commission, net), plus totals for the filter. */
+async function listServiceBookingsPlatform(req, res) {
+  const q = req.valid.query;
+  const filter = {};
+  if (isObjectId(req.query.vendorId)) filter.vendor = new mongoose.Types.ObjectId(req.query.vendorId);
+  if (Object.keys(BOOKING_TRANSITIONS).includes(req.query.status)) filter.status = req.query.status;
+  if (req.query.paid === 'true') filter['payment.status'] = 'paid';
+  if (req.query.paid === 'false') filter['payment.status'] = { $ne: 'paid' };
+  const [page, totals] = await Promise.all([
+    pagedFind(ServiceBooking, filter, q, { populate: [{ path: 'vendor', select: 'name' }, { path: 'customer', select: 'name' }] }),
+    // Totals are for recorded payments only, so an unpaid-only view has none.
+    req.query.paid === 'false' ? Promise.resolve([]) : ServiceBooking.aggregate([{ $match: { ...filter, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]),
+  ]);
+  res.json({
+    ...page,
+    totals: presentSettlement(totals[0]),
+    items: page.items.map((b) => ({
+      _id: b._id,
+      offerTitle: b.offerTitle,
+      status: b.status,
+      preferredDate: b.preferredDate,
+      vendor: { _id: b.vendor?._id, name: b.vendor?.name || null },
+      customer: { name: b.customer?.name || null },
+      listPricePaise: b.pricePaise ?? null,
+      couponCode: b.couponCode || null,
+      discountPaise: b.discountPaise || 0,
+      commissionPercent: (b.commissionBps || 0) / 100,
+      payment: { status: b.payment?.status || 'unpaid', amountPaise: b.payment?.amountPaise ?? null, paidAt: b.payment?.paidAt || null, grossPaise: b.payment?.grossPaise ?? null, commissionPaise: b.payment?.commissionPaise ?? null, netToPlatformPaise: b.payment?.netToPlatformPaise ?? null },
+      createdAt: b.createdAt,
+    })),
+  });
 }
 
 // ---------- ads (boost) ----------
@@ -4833,7 +5106,9 @@ async function getVendor(req, res) {
     ServiceBooking.countDocuments({ vendor: user._id }),
     AdCampaign.countDocuments({ vendor: user._id }),
   ]);
+  const settled = await ServiceBooking.aggregate([{ $match: { vendor: user._id, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]);
   res.json({
+    settlement: presentSettlement(settled[0]),
     user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
     profile: presentVendorProfile(profile, 900),
     counts: { properties, services, bookings, ads },
@@ -5009,6 +5284,7 @@ listingsRouter.patch('/service-offers/:id', id$1, validate({ body: offerUpdate }
 listingsRouter.delete('/service-offers/:id', id$1, deleteOffer);
 listingsRouter.post('/service-offers/:id/report', id$1, validate({ body: reportCreate }), reportListing('service'));
 listingsRouter.post('/service-offers/:id/bookings', id$1, validate({ body: serviceBookingCreate }), bookService);
+listingsRouter.post('/service-offers/:id/coupon', id$1, validate({ body: couponCheck }), checkCoupon);
 
 // A member's own bookings of vendor services.
 listingsRouter.get('/service-bookings', validate({ query: bookingStatusQuery }), myServiceBookings);
@@ -6127,8 +6403,10 @@ async function archivePlatformAnnouncement(req, res) {
 }
 
 // ======================= Settings & audit =======================
-const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string', 'ads.dayOptions': 'string' };
-const SETTING_DEFAULTS = { 'listings.requireApproval': true, 'ads.dayOptions': '3,7,15,30' };
+const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string', 'ads.dayOptions': 'string', 'services.commissionPercent': 'number' };
+const SETTING_DEFAULTS = { 'listings.requireApproval': true, 'ads.dayOptions': '3,7,15,30', 'services.commissionPercent': 0 };
+/** Platform commission on vendor services, in basis points (10% → 1000). */
+const commissionBpsNow = async () => Math.round(Number(await platformSetting('services.commissionPercent', 0)) * 100) || 0;
 /** "3, 7,15" → [3, 7, 15]; null when invalid (each 1–30 days, 1–6 distinct options). */
 function parseDayOptions(v) {
   const days = String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean).map(Number);
@@ -6147,6 +6425,10 @@ async function updateSetting(req, res) {
   const key = req.params.key;
   if (!SETTING_KEYS[key]) throw badRequest('Unknown setting');
   if (typeof req.valid.body.value !== SETTING_KEYS[key]) throw badRequest(`Setting ${key} must be a ${SETTING_KEYS[key]}`);
+  if (key === 'services.commissionPercent') {
+    const v = req.valid.body.value;
+    if (!Number.isFinite(v) || v < 0 || v > 50 || Math.round(v * 100) !== v * 100) throw badRequest('Commission must be between 0 and 50 percent, with at most 2 decimals');
+  }
   if (key === 'ads.dayOptions') {
     const days = parseDayOptions(req.valid.body.value);
     if (!days) throw badRequest('Enter 1 to 6 different day counts between 1 and 30, separated by commas (e.g. 3,7,15,30)');
@@ -6602,6 +6884,12 @@ platformRouter.post('/vendors/:id/reveal', id, reason, revealVendorKyc);
 platformRouter.get('/ads', page, listAdsPlatform);
 platformRouter.get('/ads/:id', id, getAdPlatform);
 platformRouter.post('/ads/:id/review', id, validate({ body: adDecision }), decideAd);
+platformRouter.get('/coupons', page, listCoupons);
+platformRouter.post('/coupons', validate({ body: couponCreate }), createCoupon);
+platformRouter.get('/coupons/:id', id, getCoupon);
+platformRouter.patch('/coupons/:id', id, validate({ body: couponUpdate }), updateCoupon);
+platformRouter.delete('/coupons/:id', id, deleteCoupon);
+platformRouter.get('/service-bookings', page, listServiceBookingsPlatform);
 
 function createApp() {
   const app = express();

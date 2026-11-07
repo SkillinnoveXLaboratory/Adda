@@ -1,43 +1,41 @@
-import { Image, ImageBackground, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { BRAND, TAGLINE } from '../../components/Logo';
+import { SKY, SplashBackdrop, SplashBrand } from '../../components/SplashScene';
 import { T } from '../../components/Text';
 import { colors, shadow } from '../../theme';
 
-// Same building photo and gold mark as the branded splash, so the hand-over is seamless.
-const BG = require('../../../assets/images/splash-bg.jpg');
-const MARK = require('../../../assets/images/logo-gold.png');
-
 const POINTS = [
   ['business-outline', 'Society management', 'Bills, complaints, notices & amenities'],
-  ['key-outline', 'Properties', 'Buy, sell or rent homes near you'],
+  ['key-outline', 'Properties', 'Buy or rent homes from verified vendors'],
   ['construct-outline', 'Home services', 'Plumbing, electrical, cleaning & more'],
 ];
 
-/** Splash / first screen (prototype screen 1). */
+/**
+ * Get Started. Same backdrop and brand block as the branded splash (SplashScene), in the same place, so the splash
+ * dissolves into this screen; only the card and buttons fade up.
+ */
 export default function Welcome() {
   const insets = useSafeAreaInsets();
+  const [enter] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    Animated.timing(enter, { toValue: 1, duration: 500, delay: 250, useNativeDriver: true }).start();
+  }, [enter]);
+  const rise = enter.interpolate({ inputRange: [0, 1], outputRange: [24, 0] });
+
   return (
-    <ImageBackground source={BG} resizeMode="cover" style={[styles.screen, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 20 }]} imageStyle={styles.photo} testID="welcome-bg">
+    <View style={styles.screen} testID="welcome-bg">
       <StatusBar style="light" />
-      {/* Navy fade over the lower half keeps the card and buttons readable on the photo. */}
-      <LinearGradient colors={['rgba(7,22,44,0)', 'rgba(7,22,44,0.55)', 'rgba(7,22,44,0.95)']} locations={[0.35, 0.6, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      <SplashBackdrop />
+      {/* Navy fade at the bottom keeps the card and buttons readable on the photo. */}
+      <LinearGradient colors={['rgba(7,22,44,0)', 'rgba(7,22,44,0.6)', 'rgba(7,22,44,0.96)']} locations={[0.4, 0.62, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      <SplashBrand />
 
-      <View style={styles.brand}>
-        <Image source={MARK} style={{ width: 104, height: 104 }} resizeMode="contain" accessibilityLabel={`${BRAND} logo`} />
-        <T weight="bold" size={34} color={colors.gold} style={{ letterSpacing: 7, marginTop: 12, paddingLeft: 7 }}>
-          {BRAND}
-        </T>
-        <T weight="semibold" size={13} color={colors.white} style={{ letterSpacing: 0.3, marginTop: 4, textAlign: 'center' }}>
-          {TAGLINE}
-        </T>
-      </View>
-
-      <View style={styles.bottom}>
+      <Animated.View style={[styles.bottom, { paddingBottom: insets.bottom + 20, opacity: enter, transform: [{ translateY: rise }] }]}>
         <View style={styles.card}>
           {POINTS.map(([icon, title, sub], i) => (
             <View key={title} style={[styles.point, i < POINTS.length - 1 && styles.pointLine]}>
@@ -65,17 +63,14 @@ export default function Welcome() {
             New here? <T weight="bold" size={12.5} color={colors.gold}>Create an account</T>
           </T>
         </Pressable>
-      </View>
-    </ImageBackground>
+      </Animated.View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // overflow + a full-size photo keep the picture inside the screen (on web it otherwise renders at its natural size).
-  screen: { flex: 1, backgroundColor: colors.navy, paddingHorizontal: 24, justifyContent: 'space-between', overflow: 'hidden' },
-  photo: { width: '100%', height: '100%' },
-  brand: { alignItems: 'center', paddingTop: 40 },
-  bottom: { width: '100%', maxWidth: 440, alignSelf: 'center', gap: 14 },
+  screen: { flex: 1, backgroundColor: SKY, overflow: 'hidden' },
+  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 24, width: '100%', maxWidth: 488, alignSelf: 'center', gap: 14 },
   card: { borderRadius: 16, borderWidth: 1, borderColor: 'rgba(148,163,184,0.25)', backgroundColor: 'rgba(7,22,44,0.72)', paddingHorizontal: 14, ...shadow.button },
   point: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
   pointLine: { borderBottomWidth: 1, borderBottomColor: 'rgba(148,163,184,0.18)' },

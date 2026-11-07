@@ -25,7 +25,7 @@ export default function Societies() {
   ];
   return (
     <div>
-      <PageHeader title="Societies" subtitle="Every society on adda" actions={<Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>Applications</Button>} />
+      <PageHeader title="Societies" subtitle="Every society on Nivasa" actions={<Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>Applications</Button>} />
       <Tabs className="mb-4" tabs={[{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'suspended', label: 'Suspended' }]} value={status} onChange={setStatus} />
       <div className="card">
         <Toolbar right={list.data && <span className="text-[11px] text-brand-muted">{plural(list.data.total, 'society', 'societies')}</span>}>

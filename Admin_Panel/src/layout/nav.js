@@ -53,6 +53,7 @@ export const PLATFORM_NAV = [
       { to: '/admin/members', label: 'Members directory', icon: 'fa-solid fa-address-book', badge: 'pendingMembers' },
       { to: '/admin/users', label: 'Accounts', icon: 'fa-solid fa-users' },
       { to: '/admin/vendors', label: 'Vendors', icon: 'fa-solid fa-id-card', badge: 'pendingKyc' },
+      { to: '/admin/service-bookings', label: 'Service bookings', icon: 'fa-regular fa-calendar-check' },
     ],
   },
   {
@@ -60,6 +61,7 @@ export const PLATFORM_NAV = [
     items: [
       { to: '/admin/listings', label: 'Listings moderation', icon: 'fa-solid fa-store', badge: 'pendingListings' },
       { to: '/admin/ads', label: 'Ads (boosts)', icon: 'fa-solid fa-rocket', badge: 'pendingAds' },
+      { to: '/admin/coupons', label: 'Coupons', icon: 'fa-solid fa-ticket' },
       { to: '/admin/reports', label: 'Content reports', icon: 'fa-regular fa-flag', badge: 'openReports' },
       { to: '/admin/payments', label: 'Payments monitor', icon: 'fa-solid fa-indian-rupee-sign' },
       { to: '/admin/audit', label: 'Audit log', icon: 'fa-solid fa-clock-rotate-left' },

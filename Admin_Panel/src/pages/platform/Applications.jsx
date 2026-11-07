@@ -54,7 +54,7 @@ function ApprovedModal({ result, onClose }) {
               <CopyField label="One-time admin setup link (valid 72 hours)" value={result.setupLink} testId="approve-setup-link" />
             </>
           ) : (
-            <Alert tone="info">The representative already had an active adda account, so they can sign in with their existing password.</Alert>
+            <Alert tone="info">The representative already had an active Nivasa account, so they can sign in with their existing password.</Alert>
           )}
         </div>
       )}

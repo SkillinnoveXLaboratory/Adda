@@ -16,7 +16,7 @@ function Shell({ children }) {
       <aside className="hidden w-[400px] shrink-0 flex-col justify-between bg-sidebar-bg p-10 text-sidebar-text lg:flex">
         <Logo light />
         <div>
-          <h2 className="text-2xl font-bold leading-snug text-white">Master control for every society on adda.</h2>
+          <h2 className="text-2xl font-bold leading-snug text-white">Master control for every society on Nivasa.</h2>
           <ul className="mt-6 space-y-3 text-sm">
             {[
               ['fa-solid fa-building', 'Every society, member and record in one place'],
@@ -61,7 +61,7 @@ export default function Login() {
 
   useEffect(() => {
     clearEndReason();
-    document.title = 'Sign in · adda Master';
+    document.title = 'Sign in · Nivasa Master';
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

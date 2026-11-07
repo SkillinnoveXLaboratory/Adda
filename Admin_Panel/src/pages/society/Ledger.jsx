@@ -38,7 +38,7 @@ function OpeningModal({ open, onClose, onSaved }) {
   return (
     <Modal open={open} onClose={onClose} busy={busy} title="Opening balance" subtitle="Can be recorded only once" icon="fa-solid fa-flag-checkered" footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={submit} loading={busy}>Record opening balance</Button></>}>
       <form onSubmit={submit} noValidate className="space-y-4">
-        <Alert tone="warning">Enter the society’s balance on the day you start using adda. It can’t be edited later — corrections are made with adjustments.</Alert>
+        <Alert tone="warning">Enter the society’s balance on the day you start using Nivasa. It can’t be edited later — corrections are made with adjustments.</Alert>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Balance" required error={errors.amount}>
             <Input name="amount" prefix="₹" inputMode="decimal" value={v.amount || ''} onChange={set('amount')} invalid={Boolean(errors.amount)} />

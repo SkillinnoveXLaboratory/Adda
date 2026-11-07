@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { humanize } from '../lib/format.js';
+import nivasaLogo from '../assets/nivasa-logo.png';
 
 export const cx = (...c) => c.filter(Boolean).join(' ');
 
@@ -302,12 +303,10 @@ export function Avatar({ name, size = 'md' }) {
 
 export function Logo({ light = false, className = '' }) {
   return (
-    <span className={cx('flex items-center space-x-3 overflow-hidden', className)}>
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand text-white">
-        <Icon name="fa-solid fa-play" className="-rotate-90 text-xs" />
-      </span>
-      <span className={cx('sidebar-text text-xl font-bold tracking-tight', light ? 'text-white' : 'text-gray-800')}>
-        adda <span className={cx('align-middle text-[10px] font-semibold uppercase tracking-widest', light ? 'text-sidebar-text' : 'text-gray-400')}>master</span>
+    <span className={cx('flex items-center space-x-2.5 overflow-hidden', className)}>
+      <img src={nivasaLogo} alt="" width="32" height="32" className={cx('h-8 w-8 shrink-0 rounded-lg', light ? 'ring-1 ring-white/30' : 'shadow-sm')} />
+      <span className={cx('sidebar-text whitespace-nowrap text-2xl font-bold tracking-tight', light ? 'text-white' : 'text-gray-800')}>
+        Nivasa <span className={cx('align-middle text-[10px] font-semibold uppercase tracking-widest', light ? 'text-sidebar-text' : 'text-gray-400')}>master</span>
       </span>
     </span>
   );

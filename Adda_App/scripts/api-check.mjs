@@ -355,7 +355,12 @@ check('platform queue lists both vendor offers', pq.body.items?.some((o) => o._i
 const apr1 = await call('POST', `/platform/listings/service/${o1.body._id}/moderate`, { token: SA, body: { decision: 'approved' } });
 const apr3 = await call('POST', `/platform/listings/service/${o3.body._id}/moderate`, { token: SA, body: { decision: 'approved', note: 'Verified' } });
 check('platform owner approves offers', apr1.status === 200 && apr3.status === 200);
-const n3 = await call('GET', '/notifications', { token: R3 });
+// Notifications are written just after the moderation response — poll briefly instead of racing them.
+let n3 = await call('GET', '/notifications', { token: R3 });
+for (let i = 0; i < 5 && !n3.body.items?.some((n) => n.data?.route === 'MyServices'); i += 1) {
+  await new Promise((r) => setTimeout(r, 300));
+  n3 = await call('GET', '/notifications', { token: R3 });
+}
 check('vendor notified with MyServices route', n3.body.items?.some((n) => n.data?.route === 'MyServices'), n3.body.items?.map((n) => n.data?.route));
 
 const b1 = await call('GET', `/service-offers?categoryId=${catId}&q=leak&city=Kol&limit=50`, { token: R2 });

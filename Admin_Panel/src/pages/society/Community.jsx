@@ -70,7 +70,7 @@ function Posts({ refreshCounts }) {
           Official post
         </Button>
       </div>
-      <ListShell q={q} empty={<EmptyState icon="fa-regular fa-comments" title={reported ? 'No reported posts' : 'No posts yet'} message={reported ? 'Posts reported by residents show up here for review.' : 'Residents’ community posts from the adda app appear here.'} />}>
+      <ListShell q={q} empty={<EmptyState icon="fa-regular fa-comments" title={reported ? 'No reported posts' : 'No posts yet'} message={reported ? 'Posts reported by residents show up here for review.' : 'Residents’ community posts from the Nivasa app appear here.'} />}>
         {q.data?.items.map((p) => (
           <article key={p._id} className="card p-5" data-testid="post-card">
             <div className="flex items-start gap-3">

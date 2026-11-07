@@ -271,7 +271,7 @@ export default function Complaints() {
             ))}
           </Select>
         </Toolbar>
-        <DataTable testId="complaints-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={(c) => setParams({ open: c._id })} empty={<EmptyState compact icon="fa-regular fa-face-smile" title={status || priority || categoryId || q ? 'No complaints match these filters' : 'No complaints yet'} message="Residents raise complaints from the adda app; they appear here instantly." />} />
+        <DataTable testId="complaints-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={(c) => setParams({ open: c._id })} empty={<EmptyState compact icon="fa-regular fa-face-smile" title={status || priority || categoryId || q ? 'No complaints match these filters' : 'No complaints yet'} message="Residents raise complaints from the Nivasa app; they appear here instantly." />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
       {list.error && list.error.status === 403 && <Alert tone="warning" className="mt-4">{list.error.message}</Alert>}

@@ -104,7 +104,7 @@ export default function Services() {
       <PageHeader title="Service requests" subtitle="Electrician, plumber, cleaning and other requests raised by residents" actions={<Button variant="outline" icon="fa-solid fa-rotate-right" onClick={list.reload} loading={list.reloading}>Refresh</Button>} />
       <Tabs className="mb-4" tabs={['', 'requested', 'accepted', 'scheduled', 'completed', 'rejected', 'cancelled'].map((s) => ({ value: s, label: s ? humanize(s) : 'All' }))} value={status} onChange={setStatus} />
       <div className="card">
-        <DataTable testId="services-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-solid fa-toolbox" title={status ? `No ${humanize(status).toLowerCase()} requests` : 'No service requests yet'} message="Residents request services from the adda app." />} />
+        <DataTable testId="services-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-solid fa-toolbox" title={status ? `No ${humanize(status).toLowerCase()} requests` : 'No service requests yet'} message="Residents request services from the Nivasa app." />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
       <UpdateModal open={Boolean(item)} item={item} onClose={() => setItem(null)} onDone={() => (list.reload(), refreshCounts())} />

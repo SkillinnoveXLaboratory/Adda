@@ -22,6 +22,8 @@ const PListings = page(() => import('./pages/platform/Listings.jsx'));
 const PVendors = page(() => import('./pages/platform/Vendors.jsx'));
 const PVendorDetail = page(() => import('./pages/platform/VendorDetail.jsx'));
 const PAds = page(() => import('./pages/platform/Ads.jsx'));
+const PCoupons = page(() => import('./pages/platform/Coupons.jsx'));
+const PServiceBookings = page(() => import('./pages/platform/ServiceBookings.jsx'));
 const PReports = page(() => import('./pages/platform/ContentReports.jsx'));
 const PPayments = page(() => import('./pages/platform/Payments.jsx'));
 const PCategories = page(() => import('./pages/platform/Categories.jsx'));
@@ -75,6 +77,8 @@ const platformRoutes = [
   ['vendors/:id', PVendorDetail],
   ['listings', PListings],
   ['ads', PAds],
+  ['coupons', PCoupons],
+  ['service-bookings', PServiceBookings],
   ['reports', PReports],
   ['payments', PPayments],
   ['categories', PCategories],

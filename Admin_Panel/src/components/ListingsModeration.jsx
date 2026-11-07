@@ -88,7 +88,7 @@ export function ListingsModeration({ platform = false, onChanged }) {
   const v = view;
   return (
     <div>
-      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property and service listings from verified vendors, and marketplace listings from members, across adda' : 'Listings linked to your society'} />
+      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property and service listings from verified vendors, and marketplace listings from members, across Nivasa' : 'Listings linked to your society'} />
       <Tabs
         className="mb-4"
         tabs={[

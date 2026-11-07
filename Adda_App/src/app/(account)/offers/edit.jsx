@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { AttachmentPicker } from '../../../components/AttachmentPicker';
+import { CommissionBreakdown } from '../../../components/Pricing';
 import { AsyncView, Button, Chips, DetailHeader, ErrorState, Field, Hint, LoadingList, Screen, SectionTitle, ToggleRow } from '../../../components/ui';
 import { useAuth } from '../../../context/auth';
 import { useToast } from '../../../context/toast';
@@ -18,6 +19,9 @@ export default function OfferForm() {
   const { user } = useAuth();
   const toast = useToast();
   const cats = useApi('/service-offers/categories', { refetchOnFocus: false });
+  // Current platform commission (Master Admin → Settings); saving publishes the service at this rate.
+  const config = useApi('/public/config', { refetchOnFocus: false });
+  const commissionPercent = config.data?.services?.commissionPercent ?? 0;
   const [loading, setLoading] = useState(!!id);
   const [loadError, setLoadError] = useState(null);
   const [f, setF] = useState({ categoryId: '', title: '', description: '', priceType: 'starting_from', price: '', experience: '', serviceArea: '', city: user?.city || '', availabilityNote: '', contactName: user?.name || '', contactPhone: user?.phone || '', whatsappAvailable: true });
@@ -134,6 +138,7 @@ export default function OfferForm() {
       <SectionTitle title="Pricing" />
       <Chips options={OFFER_PRICE_TYPES} value={f.priceType} onChange={set('priceType')} />
       {onQuote ? null : <Field label="Price (₹)" value={f.price} onChangeText={(v) => set('price')(v.replace(/[^\d.]/g, ''))} keyboardType="decimal-pad" placeholder="e.g. 299" error={errors.price} />}
+      <CommissionBreakdown pricePaise={!onQuote && Number(f.price) > 0 ? toPaise(f.price) : 0} percent={commissionPercent} onQuote={onQuote} />
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Field label="Experience (years)" value={f.experience} onChangeText={(v) => set('experience')(v.replace(/[^\d]/g, ''))} keyboardType="number-pad" maxLength={2} placeholder="Optional" error={errors.experience} style={{ flex: 1 }} />
         <Field label="City" value={f.city} onChangeText={set('city')} maxLength={80} error={errors.city} style={{ flex: 1 }} />

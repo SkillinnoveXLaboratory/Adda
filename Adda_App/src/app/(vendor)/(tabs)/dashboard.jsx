@@ -76,6 +76,41 @@ export default function VendorDashboard() {
           </View>
         )}
 
+        {d ? (
+          <View style={styles.settle} testID="vendor-settlement">
+            <T weight="bold" size={13.5} color={colors.navy}>
+              Settlement with NIVASA
+            </T>
+            <T size={11.5} color={colors.muted}>
+              Platform commission now: {d.commissionPercent || 0}% · applies to services you publish or edit
+            </T>
+            <View style={styles.settleRow}>
+              <T size={12.5} color="#475569">
+                Commission on paid jobs
+              </T>
+              <T weight="semibold" size={12.5} color="#334155">
+                {money(d.settlement?.commissionPaise || 0)}
+              </T>
+            </View>
+            <View style={styles.settleRow}>
+              <T size={12.5} color="#475569">
+                Coupon credits (NIVASA pays you)
+              </T>
+              <T weight="semibold" size={12.5} color={colors.green}>
+                − {money(d.settlement?.couponCreditsPaise || 0)}
+              </T>
+            </View>
+            <View style={[styles.settleRow, styles.settleTotal]}>
+              <T weight="bold" size={13} color={colors.navy}>
+                {(d.settlement?.netToPlatformPaise || 0) < 0 ? 'NIVASA owes you' : 'You owe NIVASA'}
+              </T>
+              <T weight="extrabold" size={14} color={(d.settlement?.netToPlatformPaise || 0) > 0 ? colors.amber : colors.green}>
+                {money(Math.abs(d.settlement?.netToPlatformPaise || 0))}
+              </T>
+            </View>
+          </View>
+        ) : null}
+
         <SectionTitle title="Quick actions" />
         <TileGrid columns={3}>
           <GridTile nicon="properties" label={'Add\nproperty'} onPress={needKyc(() => router.push('/properties/edit'))} testID="vendor-add-property" />
@@ -129,4 +164,7 @@ const styles = StyleSheet.create({
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   stat: { width: '48%', flexGrow: 1, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 1, ...shadow.card },
   empty: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14 },
+  settle: { backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 6, ...shadow.card },
+  settleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  settleTotal: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8, marginTop: 2 },
 });

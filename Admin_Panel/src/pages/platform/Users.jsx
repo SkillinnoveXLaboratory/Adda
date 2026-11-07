@@ -64,7 +64,7 @@ export default function Users() {
   ];
   return (
     <div>
-      <PageHeader title="Accounts" subtitle="Every sign-in account on adda — members (residents and customers) and vendors (list properties and services). Contact details are masked — open a profile to reveal them (logged)." />
+      <PageHeader title="Accounts" subtitle="Every sign-in account on Nivasa — members (residents and customers) and vendors (list properties and services). Contact details are masked — open a profile to reveal them (logged)." />
       <Tabs className="mb-4" tabs={[{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'pending_setup', label: 'Setup pending' }, { value: 'disabled', label: 'Disabled' }]} value={status} onChange={setStatus} />
       <div className="card">
         <Toolbar right={list.data && <span className="text-[11px] text-brand-muted">{plural(list.data.total, 'user', 'users')}</span>}>

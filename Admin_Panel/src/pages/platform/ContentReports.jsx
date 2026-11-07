@@ -19,7 +19,7 @@ export default function ContentReports() {
   ];
   return (
     <div>
-      <PageHeader title="Content reports" subtitle="Reports raised by users across adda" />
+      <PageHeader title="Content reports" subtitle="Reports raised by users across Nivasa" />
       <Alert tone="info" className="mb-4">
         Community posts and comments are moderated by each society’s staff. Reported property and marketplace listings can be actioned in{' '}
         <Link to="/admin/listings" className="font-semibold underline">

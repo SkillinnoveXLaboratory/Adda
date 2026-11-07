@@ -65,7 +65,7 @@ function GenerateModal({ open, onClose, buildings, onDone }) {
             ))}
           </div>
           {result.zeroAmount > 0 && <Alert tone="warning">{result.zeroAmount} flat(s) had no applicable charge (no charge heads, override or default amount), so no bill was raised.</Alert>}
-          {result.created > 0 && <Alert tone="success">Residents of billed flats were notified in the adda app.</Alert>}
+          {result.created > 0 && <Alert tone="success">Residents of billed flats were notified in the Nivasa app.</Alert>}
         </div>
       ) : (
         <form onSubmit={submit} noValidate className="space-y-4">
@@ -482,7 +482,7 @@ export default function Billing() {
       )}
       {online?.available && (
         <Alert tone="success" className="mb-5" icon="fa-solid fa-credit-card">
-          Online payments are enabled — residents can pay their bills from the adda app.
+          Online payments are enabled — residents can pay their bills from the Nivasa app.
         </Alert>
       )}
       <Tabs

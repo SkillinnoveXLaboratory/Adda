@@ -338,6 +338,77 @@ const offerAd = await ad({ kind: 'service', listingId: offerId, city: CITY, days
 check('ad with a duration not offered → 400', offerAd.status === 400, `${offerAd.status} ${offerAd.body?.error?.message || ''}`);
 await call('PUT', '/platform/settings/ads.dayOptions', { token: T, body: { value: '3,7,15,30' } });
 
+// ---------------------------------------------------------------- platform commission + coupons
+check('commission must be a number 0–50 → 400', (await call('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 75 } })).status === 400);
+check('commission with 3 decimals → 400', (await call('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 10.125 } })).status === 400);
+check('owner sets 10% commission', (await call('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 10 } })).status === 200);
+check('app config shows the commission', (await call('GET', '/public/config')).body?.services?.commissionPercent === 10);
+const cOffer = await call('POST', '/service-offers', { token: V, body: { ...offerBody, title: `Deep cleaning ${RUN}`, pricePaise: 100000 } });
+check('new service snapshots the commission (1000 bps)', cOffer.status === 201 && cOffer.body?.commissionBps === 1000, `${cOffer.status} ${cOffer.body?.commissionBps}`);
+if (cOffer.body?.moderationStatus === 'pending') await call('POST', `/platform/listings/service/${cOffer.body._id}/moderate`, { token: T, body: { decision: 'approved' } });
+const cId = cOffer.body?._id;
+check('members never see the commission rate', (await call('GET', `/service-offers/${cId}`, { token: M })).body?.commissionBps === undefined);
+check('the vendor sees it on their own service', (await call('GET', `/service-offers/${cId}`, { token: V })).body?.commissionBps === 1000);
+
+const COUPON = `SAVE${RUN}`.toUpperCase().slice(0, 20);
+const mkCoupon = await call('POST', '/platform/coupons', { token: T, body: { code: COUPON.toLowerCase(), discountPaise: 15000, maxUses: 2, description: 'Festive offer' } });
+check('owner creates a coupon (code upper-cased)', mkCoupon.status === 201 && mkCoupon.body?.code === COUPON && mkCoupon.body?.allMembers === true, `${mkCoupon.status} ${mkCoupon.body?.error?.message || ''}`);
+check('duplicate coupon code → 409', (await call('POST', '/platform/coupons', { token: T, body: { code: COUPON, discountPaise: 100, maxUses: 1 } })).status === 409);
+check('coupon with discount below ₹1 → 400', (await call('POST', '/platform/coupons', { token: T, body: { code: `LOW${RUN}`, discountPaise: 50, maxUses: 1 } })).status === 400);
+check('member cannot create coupons → 403', (await call('POST', '/platform/coupons', { token: M, body: { code: `HACK${RUN}`, discountPaise: 100, maxUses: 1 } })).status === 403);
+const cpath = `/service-offers/${cId}/coupon`;
+check('unknown coupon → 400 COUPON_INVALID', (await call('POST', cpath, { token: M, body: { code: 'NOPE-123' } })).body?.error?.code === 'COUPON_INVALID');
+check('vendor cannot use coupons → 403', (await call('POST', cpath, { token: V2, body: { code: COUPON } })).status === 403);
+const chk = await call('POST', cpath, { token: M, body: { code: COUPON.toLowerCase() } });
+check('member checks the coupon: ₹1000 − ₹150 = ₹850', chk.status === 200 && chk.body?.discountPaise === 15000 && chk.body?.payablePaise === 85000, JSON.stringify(chk.body));
+check('coupon on a "price on request" service → 400 COUPON_NEEDS_PRICE', await (async () => {
+  const q = await call('POST', '/service-offers', { token: V, body: { ...offerBody, title: `Quote job ${RUN}`, priceType: 'on_quote' } });
+  if (q.body?.moderationStatus === 'pending') await call('POST', `/platform/listings/service/${q.body._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  return (await call('POST', `/service-offers/${q.body?._id}/coupon`, { token: M, body: { code: COUPON } })).body?.error?.code === 'COUPON_NEEDS_PRICE';
+})());
+const cb1 = await call('POST', `/service-offers/${cId}/bookings`, { token: M, body: { ...bookBody, couponCode: COUPON } });
+check('booking with coupon → discount + payable on the booking', cb1.status === 201 && cb1.body?.pricing?.discountPaise === 15000 && cb1.body?.pricing?.payablePaise === 85000 && cb1.body?.pricing?.commissionPercent === undefined, JSON.stringify(cb1.body?.pricing || cb1.body));
+check('coupon use counted', (await call('GET', `/platform/coupons/${mkCoupon.body?._id}`, { token: T })).body?.usedCount === 1);
+check('same member cannot use it again → 409 COUPON_ALREADY_USED', (await call('POST', cpath, { token: M, body: { code: COUPON } })).body?.error?.code === 'COUPON_ALREADY_USED');
+check('member cancels → coupon use given back', (await call('POST', `/service-bookings/${cb1.body?._id}/cancel`, { token: M, body: {} })).status === 200 && (await call('GET', `/platform/coupons/${mkCoupon.body?._id}`, { token: T })).body?.usedCount === 0);
+const cb2 = await call('POST', `/service-offers/${cId}/bookings`, { token: M, body: { ...bookBody, couponCode: COUPON } });
+check('member can use it again after the cancellation', cb2.status === 201 && cb2.body?.pricing?.discountPaise === 15000);
+const M2 = (await register(7, `Member two ${RUN}`)).body.accessToken;
+const M3 = (await register(8, `Member three ${RUN}`)).body.accessToken;
+check('second member uses the last use', (await call('POST', `/service-offers/${cId}/bookings`, { token: M2, body: { ...bookBody, couponCode: COUPON } })).status === 201);
+check('third member → 409 COUPON_EXHAUSTED', (await call('POST', cpath, { token: M3, body: { code: COUPON } })).body?.error?.code === 'COUPON_EXHAUSTED');
+check('used coupon cannot be deleted → 409', (await call('DELETE', `/platform/coupons/${mkCoupon.body?._id}`, { token: T })).status === 409);
+check("used coupon's code cannot change → 409", (await call('PATCH', `/platform/coupons/${mkCoupon.body?._id}`, { token: T, body: { code: `NEW${RUN}` } })).status === 409);
+check('max uses below used count → 400', (await call('PATCH', `/platform/coupons/${mkCoupon.body?._id}`, { token: T, body: { maxUses: 1 } })).status === 400);
+const off = await call('POST', '/platform/coupons', { token: T, body: { code: `OFF${RUN}`.toUpperCase(), discountPaise: 5000, maxUses: 5, active: false } });
+check('inactive coupon → 400 COUPON_INVALID', (await call('POST', cpath, { token: M3, body: { code: off.body?.code } })).body?.error?.code === 'COUPON_INVALID');
+check('unused coupon can be deleted', (await call('DELETE', `/platform/coupons/${off.body?._id}`, { token: T })).status === 200);
+
+// Settlement: vendor collects ₹850 cash on a ₹1000 job with a ₹150 coupon at 10% → commission ₹100, net ₹100 − ₹150 = −₹50.
+const bId2 = cb2.body?._id;
+await call('POST', `/vendor/bookings/${bId2}/accept`, { token: V, body: {} });
+await call('POST', `/vendor/bookings/${bId2}/complete`, { token: V, body: {} });
+const vb2 = await call('GET', `/vendor/bookings/${bId2}`, { token: V });
+check('vendor sees payable ₹850 and the 10% rate', vb2.body?.pricing?.payablePaise === 85000 && vb2.body?.pricing?.commissionPercent === 10);
+const paid2 = await call('POST', `/vendor/bookings/${bId2}/mark-paid`, { token: V, body: { amountPaise: 85000 } });
+const p2 = paid2.body?.payment || {};
+check('settlement: gross ₹1000, commission ₹100, coupon credit ₹150, net −₹50', p2.grossPaise === 100000 && p2.commissionPaise === 10000 && p2.discountPaise === 15000 && p2.netToPlatformPaise === -5000, JSON.stringify(p2));
+check('member never sees the settlement', (await call('GET', '/service-bookings', { token: M })).body?.items?.find((x) => x._id === bId2)?.payment?.commissionPaise === undefined);
+const vdash = await call('GET', '/vendor/dashboard', { token: V });
+check('vendor dashboard settlement includes it', vdash.body?.settlement?.commissionPaise >= 10000 && vdash.body?.settlement?.couponCreditsPaise >= 15000 && vdash.body?.commissionPercent === 10);
+const pb = await call('GET', `/platform/service-bookings?vendorId=${vId}&paid=true`, { token: T });
+check('owner sees the booking with settlement + totals', pb.status === 200 && pb.body?.items?.some((x) => x._id === bId2 && x.payment?.netToPlatformPaise === -5000) && typeof pb.body?.totals?.netToPlatformPaise === 'number');
+check('rounding: 10% of ₹333.33 → ₹33.33', await (async () => {
+  const o = await call('POST', '/service-offers', { token: V, body: { ...offerBody, title: `Odd price ${RUN}`, pricePaise: 33333 } });
+  if (o.body?.moderationStatus === 'pending') await call('POST', `/platform/listings/service/${o.body._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  const bk = await call('POST', `/service-offers/${o.body?._id}/bookings`, { token: M3, body: bookBody });
+  await call('POST', `/vendor/bookings/${bk.body?._id}/accept`, { token: V, body: {} });
+  await call('POST', `/vendor/bookings/${bk.body?._id}/complete`, { token: V, body: {} });
+  const pd = await call('POST', `/vendor/bookings/${bk.body?._id}/mark-paid`, { token: V, body: { amountPaise: 33333 } });
+  return pd.body?.payment?.commissionPaise === 3333 && pd.body?.payment?.netToPlatformPaise === 3333;
+})());
+await call('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 0 } });
+
 console.log(`\n${passed} passed, ${failed.length} failed`);
 if (failed.length) {
   console.log(failed.map((f) => `  ✗ ${f}`).join('\n'));

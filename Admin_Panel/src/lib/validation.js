@@ -88,3 +88,16 @@ export function focusFirstError(errors, root = typeof document !== 'undefined' ?
   const el = root.querySelector(`[name="${CSS.escape(first)}"]`);
   el?.focus?.();
 }
+
+/**
+ * Platform commission typed by the owner ("12", "12.5", "7.25") → a number 0–50 with at most 2 decimals, or null.
+ * Parsed from the string (never float maths on the input) so "12.50" → 12.5 and "1.005" is rejected.
+ */
+export function parsePercent(input, { max = 50 } = {}) {
+  const s = String(input ?? '').trim().replace(/%$/, '').trim();
+  const m = /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(s);
+  if (!m) return null;
+  const hundredths = Number(m[1]) * 100 + Number((m[2] || '').padEnd(2, '0'));
+  if (hundredths > max * 100) return null;
+  return hundredths / 100;
+}

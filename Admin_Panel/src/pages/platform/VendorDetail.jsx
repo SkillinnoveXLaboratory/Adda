@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { api, mediaHref } from '../../lib/api.js';
 import { useAction, useQuery } from '../../lib/hooks.js';
-import { formatDate, formatDateTime, formatPhone, formatRelative, humanize } from '../../lib/format.js';
+import { formatDate, formatDateTime, formatINR, formatPhone, formatRelative, humanize, plural } from '../../lib/format.js';
 import { Alert, Avatar, Badge, Button, Card, CopyField, Icon, KeyValue, PageHeader, PageSkeleton, QueryState } from '../../components/ui.jsx';
 import { Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { MetricCard } from '../../components/Charts.jsx';
+import { NetAmount, netCaption } from '../../components/Settlement.jsx';
 import { KycBadge } from '../../components/KycBadge.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
@@ -100,7 +101,7 @@ export default function VendorDetail() {
 
   return (
     <QueryState query={q} skeleton={<PageSkeleton cards={4} rows={6} />}>
-      {({ user: u, profile: p, counts, kycAvailable }) => {
+      {({ user: u, profile: p, counts, kycAvailable, settlement }) => {
         const status = p?.kycStatus || 'not_submitted';
         const canApprove = ['pending', 'rejected'].includes(status);
         const canReject = ['pending', 'approved'].includes(status);
@@ -162,6 +163,40 @@ export default function VendorDetail() {
               <MetricCard tone="green" label="Bookings" value={counts.bookings} icon="fa-regular fa-calendar-check" />
               <MetricCard tone="orange" label="Ads" value={counts.ads} icon="fa-solid fa-rocket" />
             </div>
+
+            <Card
+              className="mb-6"
+              title="Bookings & commission"
+              actions={
+                <Link to={`/admin/service-bookings?vendorId=${u._id}`} className="link inline-flex items-center gap-1.5 text-xs" data-testid="vendor-bookings-link">
+                  View service bookings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
+                </Link>
+              }
+            >
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5" data-testid="vendor-settlement">
+                {[
+                  ['Paid bookings', String(settlement?.paidBookings ?? 0)],
+                  ['Cash collected', formatINR(settlement?.cashCollectedPaise ?? 0)],
+                  ['Coupon credits', formatINR(settlement?.couponCreditsPaise ?? 0)],
+                  ['Commission', formatINR(settlement?.commissionPaise ?? 0)],
+                ].map(([k, v]) => (
+                  <div key={k} className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                    <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">{k}</p>
+                    <p className="mt-1 truncate text-base font-bold text-gray-800">{v}</p>
+                  </div>
+                ))}
+                <div className="col-span-2 min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3 lg:col-span-1">
+                  <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">Net payable by vendor</p>
+                  <p className="mt-1 truncate text-base" data-testid="vendor-settlement-net">
+                    <NetAmount paise={settlement?.netToPlatformPaise ?? 0} className="!font-bold" />
+                  </p>
+                  <p className="truncate text-[10px] text-gray-400">{netCaption(settlement?.netToPlatformPaise || 0, true)}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">
+                Fixed when the vendor records cash for a completed booking ({plural(counts.bookings, 'booking')} in total). Commission is charged on the full price (cash + coupon); coupons are funded by NIVASA, so net = commission − coupon credits.
+              </p>
+            </Card>
 
             <div className="mb-6 grid grid-cols-12 gap-6">
               <Card className="col-span-12 lg:col-span-5" title="Account">

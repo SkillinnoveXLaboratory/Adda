@@ -9,7 +9,7 @@ export default function SocietyAnnouncements() {
     <AnnouncementsManager
       basePath="/society/announcements"
       title="Notices"
-      subtitle="Announcements for residents — they appear in the adda app and as notifications"
+      subtitle="Announcements for residents — they appear in the Nivasa app and as notifications"
       canWrite={canWrite}
       writeReason={canWrite ? null : noPermissionReason(role)}
       allowEdit

@@ -20,7 +20,11 @@ export function BookingCard({ booking: b, onChanged }) {
   const toast = useToast();
   const [busy, setBusy] = useState(null);
   const [paying, setPaying] = useState(false);
-  const [amount, setAmount] = useState(b.pricePaise ? String(b.pricePaise / 100) : '');
+  // Prefill what the member should pay: list price minus any coupon (NIVASA pays the coupon back to the vendor).
+  const payable = b.pricing?.payablePaise ?? b.pricePaise;
+  const [amount, setAmount] = useState(payable ? String(payable / 100) : '');
+  const pr = b.pricing || {};
+  const pay = b.payment || {};
   const [amountError, setAmountError] = useState(null);
   const vendorView = b.role === 'vendor';
   const contact = vendorView ? b.customer : b.vendor;
@@ -111,6 +115,26 @@ export function BookingCard({ booking: b, onChanged }) {
           </T>
         </View>
       ) : null}
+      {pr.listPricePaise ? (
+        <View style={styles.row}>
+          <Ionicons name="pricetag-outline" size={14} color="#94a3b8" />
+          <T size={12} color={colors.textSoft} style={{ flex: 1 }}>
+            {money(pr.listPricePaise)}
+            {pr.discountPaise ? ` · Coupon ${pr.couponCode} −${money(pr.discountPaise)} · ${vendorView ? 'Customer pays' : 'You pay'} ${money(pr.payablePaise)}` : ''}
+          </T>
+        </View>
+      ) : null}
+      {vendorView && paid && pay.commissionPaise !== undefined ? (
+        <View style={styles.settle} testID="booking-settlement">
+          <T size={11.5} color={colors.textSoft}>
+            Cash {money(pay.amountPaise)}
+            {pay.discountPaise ? ` + coupon credit ${money(pay.discountPaise)}` : ''} · Commission {money(pay.commissionPaise)}
+          </T>
+          <T weight="bold" size={11.5} color={pay.netToPlatformPaise > 0 ? colors.amber : colors.green}>
+            {pay.netToPlatformPaise > 0 ? `You owe NIVASA ${money(pay.netToPlatformPaise)}` : pay.netToPlatformPaise < 0 ? `NIVASA owes you ${money(-pay.netToPlatformPaise)}` : 'Nothing to settle'}
+          </T>
+        </View>
+      ) : null}
       {b.timeline?.length > 1 ? (
         <T size={11} color="#94a3b8">
           Last update: {titleCase(b.timeline[b.timeline.length - 1].status)} · {formatDateTime(b.timeline[b.timeline.length - 1].at)}
@@ -154,5 +178,6 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   date: { width: 52, borderRadius: 12, backgroundColor: colors.goldLight, alignItems: 'center', paddingVertical: 6 },
   row: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
+  settle: { backgroundColor: colors.bg, borderRadius: 10, padding: 8, gap: 2 },
   actions: { flexDirection: 'row', gap: 8 },
 });

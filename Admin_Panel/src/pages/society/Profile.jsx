@@ -123,7 +123,7 @@ export default function Profile() {
             </div>
             <div className="col-span-12 space-y-6 xl:col-span-4">
               <Card title="Society code">
-                <p className="mb-3 text-xs leading-relaxed text-gray-600">Residents search for this code in the adda app to join your society.</p>
+                <p className="mb-3 text-xs leading-relaxed text-gray-600">Residents search for this code in the Nivasa app to join your society.</p>
                 <CopyField value={s.code} />
                 <div className="mt-4 flex items-center justify-between text-xs">
                   <span className="text-gray-500">Status</span>
@@ -131,7 +131,7 @@ export default function Profile() {
                 </div>
                 {s.status === 'suspended' && s.suspendedReason && <p className="mt-2 text-[11px] text-rose-500">Reason: {s.suspendedReason}</p>}
                 <div className="mt-2 flex items-center justify-between text-xs">
-                  <span className="text-gray-500">On adda since</span>
+                  <span className="text-gray-500">On Nivasa since</span>
                   <span className="font-medium text-gray-700">{formatDate(s.createdAt)}</span>
                 </div>
               </Card>
@@ -143,7 +143,7 @@ export default function Profile() {
                   <span className="text-gray-500">Online collection</span>
                   <Badge tone={s.payments?.onlineEnabled ? 'success' : 'neutral'}>{s.payments?.onlineEnabled ? 'Enabled' : 'Not enabled'}</Badge>
                 </div>
-                <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">Online payments are switched on by the adda platform team after they verify where your society’s money is settled. Until then, record payments offline in Billing.</p>
+                <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">Online payments are switched on by the Nivasa platform team after they verify where your society’s money is settled. Until then, record payments offline in Billing.</p>
               </Card>
             </div>
           </div>

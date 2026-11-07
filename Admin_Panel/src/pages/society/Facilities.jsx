@@ -301,7 +301,7 @@ function BookingsTab({ refreshCounts }) {
           </Button>
         )}
       </Toolbar>
-      <DataTable testId="bookings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-regular fa-calendar" title={status === 'pending' ? 'No bookings waiting for approval' : 'No bookings found'} message="Residents book facilities from the adda app." />} />
+      <DataTable testId="bookings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-regular fa-calendar" title={status === 'pending' ? 'No bookings waiting for approval' : 'No bookings found'} message="Residents book facilities from the Nivasa app." />} />
       {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       <ConfirmDialog open={act?.action === 'approve'} onClose={() => setAct(null)} onConfirm={() => run()} busy={busy} tone="primary" title="Confirm booking" confirmLabel="Confirm" message={`${act?.b?.facility?.name} for ${act?.b?.user?.name} on ${formatDate(act?.b?.date || act?.b?.start)}, ${formatTime(act?.b?.start)}–${formatTime(act?.b?.end)}.`} />
       <ReasonDialog open={act?.action === 'reject'} onClose={() => setAct(null)} onSubmit={(r) => run(r)} busy={busy} required={false} title="Reject booking" confirmLabel="Reject" message="The resident is notified. Adding a reason helps them rebook." />

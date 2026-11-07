@@ -16,6 +16,7 @@ import { ToastProvider, useToast } from '../context/toast';
 import { Button, EmptyState, ErrorState } from '../components/ui';
 import { Logo } from '../components/Logo';
 import { CustomSplash } from '../components/CustomSplash';
+import { SKY } from '../components/SplashScene';
 import { colors } from '../theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -53,6 +54,7 @@ function Gate({ fontsReady }) {
   const ready = fontsReady && status !== 'booting';
   const wasMember = useRef(null);
   const [minElapsed, setMinElapsed] = useState(false);
+  const [splashGone, setSplashGone] = useState(false);
 
   useEffect(() => {
     if (status !== 'signedIn') {
@@ -72,38 +74,46 @@ function Gate({ fontsReady }) {
   }, [fontsReady]);
 
   if (!fontsReady) return <View style={{ flex: 1, backgroundColor: colors.white }} />;
-  if (!ready || !minElapsed) return <CustomSplash />;
 
-  if (status === 'offline') {
-    return (
+  const signedIn = status === 'signedIn';
+  let app = null;
+  if (ready && status === 'offline') {
+    app = (
       <View style={{ flex: 1, backgroundColor: colors.white, justifyContent: 'center', padding: 24 }}>
         <Logo width={120} id="offline" />
         <ErrorState error={bootError} onRetry={retryBoot} />
       </View>
     );
+  } else if (ready) {
+    app = (
+      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right', contentStyle: { backgroundColor: colors.bg } }}>
+        <Stack.Screen name="index" options={{ animation: 'none' }} />
+        <Stack.Protected guard={!signedIn} redirectTo="/">
+          <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
+        </Stack.Protected>
+        <Stack.Protected guard={signedIn && !isMember && !isVendor} redirectTo="/">
+          <Stack.Screen name="(onboarding)" options={{ animation: 'fade' }} />
+        </Stack.Protected>
+        <Stack.Protected guard={signedIn && isMember && !isVendor} redirectTo="/">
+          <Stack.Screen name="(member)" options={{ animation: 'fade' }} />
+        </Stack.Protected>
+        {/* Vendors: their own area only — never society onboarding or member screens. */}
+        <Stack.Protected guard={signedIn && isVendor} redirectTo="/">
+          <Stack.Screen name="(vendor)" options={{ animation: 'fade' }} />
+        </Stack.Protected>
+        <Stack.Protected guard={signedIn} redirectTo="/">
+          <Stack.Screen name="(account)" />
+        </Stack.Protected>
+      </Stack>
+    );
   }
 
-  const signedIn = status === 'signedIn';
+  // The branded splash sits on top and fades out over the first screen (Get Started draws the same backdrop).
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right', contentStyle: { backgroundColor: colors.bg } }}>
-      <Stack.Screen name="index" options={{ animation: 'none' }} />
-      <Stack.Protected guard={!signedIn} redirectTo="/">
-        <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
-      </Stack.Protected>
-      <Stack.Protected guard={signedIn && !isMember && !isVendor} redirectTo="/">
-        <Stack.Screen name="(onboarding)" options={{ animation: 'fade' }} />
-      </Stack.Protected>
-      <Stack.Protected guard={signedIn && isMember && !isVendor} redirectTo="/">
-        <Stack.Screen name="(member)" options={{ animation: 'fade' }} />
-      </Stack.Protected>
-      {/* Vendors: their own area only — never society onboarding or member screens. */}
-      <Stack.Protected guard={signedIn && isVendor} redirectTo="/">
-        <Stack.Screen name="(vendor)" options={{ animation: 'fade' }} />
-      </Stack.Protected>
-      <Stack.Protected guard={signedIn} redirectTo="/">
-        <Stack.Screen name="(account)" />
-      </Stack.Protected>
-    </Stack>
+    <View style={{ flex: 1, backgroundColor: SKY }}>
+      {app}
+      {splashGone ? null : <CustomSplash visible={!(ready && minElapsed)} onHidden={() => setSplashGone(true)} />}
+    </View>
   );
 }
 

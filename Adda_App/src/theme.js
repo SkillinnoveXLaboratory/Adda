@@ -13,6 +13,7 @@ export const colors = {
   goldLight: '#f4ecd8',
   goldText: '#8a6a1f',
   logoBg: '#032143',
+  sky: '#032750', // top edge of the splash photo (splash + Get Started backdrop)
 
   primary: '#07162c',
   blue: '#07162c',

@@ -100,7 +100,7 @@ export default function SocietyDashboard() {
                     }))}
                   />
                 ) : (
-                  <EmptyState compact icon="fa-regular fa-face-smile" title="No complaints yet" message="Complaints raised by residents from the adda app appear here." />
+                  <EmptyState compact icon="fa-regular fa-face-smile" title="No complaints yet" message="Complaints raised by residents from the Nivasa app appear here." />
                 )}
               </Card>
 
