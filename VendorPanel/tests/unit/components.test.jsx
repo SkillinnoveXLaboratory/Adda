@@ -1,25 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { BookingSettlement, CommissionBreakdown, SettlementSummary } from '../../src/components/Pricing.jsx';
+import { BookingSettlement, CommissionHint, SettlementSummary } from '../../src/components/Pricing.jsx';
 import { KycStatusCard } from '../../src/components/KycStatusCard.jsx';
 
-describe('CommissionBreakdown', () => {
-  it('shows price, commission and what the vendor earns', () => {
-    render(<CommissionBreakdown pricePaise={49900} percent={10} />);
-    expect(screen.getByTestId('commission-price')).toHaveTextContent('₹499');
-    expect(screen.getByTestId('commission-amount')).toHaveTextContent('− ₹49.90');
-    expect(screen.getByTestId('commission-earn')).toHaveTextContent('₹449.10');
-    expect(screen.getByText('NIVASA commission (10%)')).toBeInTheDocument();
+describe('CommissionHint', () => {
+  it('says the commission is taken when the customer pays, with no amounts', () => {
+    render(<MemoryRouter><CommissionHint percent={10} /></MemoryRouter>);
+    const hint = screen.getByTestId('commission-hint');
+    expect(hint).toHaveTextContent('NIVASA’s commission (10%) is taken from each payment when the customer pays — see Earnings.');
+    expect(hint).not.toHaveTextContent('₹');
+    expect(screen.getByRole('link', { name: 'Earnings' })).toHaveAttribute('href', '/earnings');
   });
-  it('price on request shows the rate only', () => {
-    render(<CommissionBreakdown pricePaise={0} percent={12.5} onQuote />);
-    expect(screen.getByTestId('commission-breakdown')).toHaveTextContent('12.5% platform commission');
-    expect(screen.queryByTestId('commission-earn')).toBeNull();
-  });
-  it('no commission configured says so', () => {
-    render(<CommissionBreakdown pricePaise={0} percent={0} />);
-    expect(screen.getByTestId('commission-breakdown')).toHaveTextContent('No platform commission');
+  it('shows nothing when no commission is charged', () => {
+    const { container } = render(<MemoryRouter><CommissionHint percent={0} /></MemoryRouter>);
+    expect(container).toBeEmptyDOMElement();
   });
 });
 

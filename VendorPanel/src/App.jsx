@@ -14,6 +14,7 @@ const PropertyForm = lazy(() => import('./pages/PropertyForm.jsx'));
 const Services = lazy(() => import('./pages/Services.jsx'));
 const ServiceForm = lazy(() => import('./pages/ServiceForm.jsx'));
 const Bookings = lazy(() => import('./pages/Bookings.jsx'));
+const Earnings = lazy(() => import('./pages/Earnings.jsx'));
 const Boosts = lazy(() => import('./pages/Boosts.jsx'));
 const BoostForm = lazy(() => import('./pages/BoostForm.jsx'));
 const Notifications = lazy(() => import('./pages/Notifications.jsx'));
@@ -74,6 +75,7 @@ export default function App() {
               <Route path="/services/new" element={<RequireKyc reason="service">{page(ServiceForm)}</RequireKyc>} />
               <Route path="/services/:id/edit" element={page(ServiceForm)} />
               <Route path="/bookings" element={page(Bookings)} />
+              <Route path="/earnings" element={page(Earnings)} />
               <Route path="/boosts" element={page(Boosts)} />
               <Route path="/boosts/new" element={<RequireKyc reason="boost">{page(BoostForm)}</RequireKyc>} />
               <Route path="/notifications" element={page(Notifications)} />

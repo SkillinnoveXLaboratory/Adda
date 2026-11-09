@@ -70,11 +70,19 @@ export default function Dashboard() {
         <Stat icon="fa-solid fa-screwdriver-wrench" value={sum(d.services)} label="Services" note={d.services?.pending ? `${d.services.pending} in review` : null} to="/services" testId="stat-services" />
         <Stat icon="fa-solid fa-building" value={sum(d.properties)} label="Properties" note={d.properties?.pending ? `${d.properties.pending} in review` : null} to="/properties" testId="stat-properties" />
         <Stat icon="fa-regular fa-calendar-check" value={(d.bookings?.requested || 0) + (d.bookings?.accepted || 0)} label="Open bookings" note={d.bookings?.requested ? `${d.bookings.requested} new` : null} to="/bookings" testId="stat-bookings" />
-        <Stat icon="fa-solid fa-indian-rupee-sign" value={money(d.cashCollectedPaise || 0)} label="Cash recorded" note={`${d.paidBookings || 0} paid job${d.paidBookings === 1 ? '' : 's'}`} to="/bookings?tab=completed" testId="stat-cash" />
+        <Stat icon="fa-solid fa-indian-rupee-sign" value={money(d.cashCollectedPaise || 0)} label="Cash recorded" note={`${d.paidBookings || 0} paid job${d.paidBookings === 1 ? '' : 's'}`} to="/earnings" testId="stat-cash" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-5">
-        <Card title="Settlement with NIVASA" className="lg:col-span-3">
+        <Card
+          title="Settlement with NIVASA"
+          className="lg:col-span-3"
+          actions={
+            <Link to="/earnings" className="inline-flex min-h-[40px] items-center gap-1.5 text-xs font-semibold text-azea-purple hover:underline" data-testid="dashboard-earnings-link">
+              View earnings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
+            </Link>
+          }
+        >
           <SettlementSummary settlement={d.settlement} commissionPercent={d.commissionPercent} />
         </Card>
         <Card title="Quick actions" className="lg:col-span-2">

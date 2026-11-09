@@ -24,6 +24,7 @@ const PVendorDetail = page(() => import('./pages/platform/VendorDetail.jsx'));
 const PAds = page(() => import('./pages/platform/Ads.jsx'));
 const PCoupons = page(() => import('./pages/platform/Coupons.jsx'));
 const PServiceBookings = page(() => import('./pages/platform/ServiceBookings.jsx'));
+const PEarnings = page(() => import('./pages/platform/Earnings.jsx'));
 const PReports = page(() => import('./pages/platform/ContentReports.jsx'));
 const PPayments = page(() => import('./pages/platform/Payments.jsx'));
 const PCategories = page(() => import('./pages/platform/Categories.jsx'));
@@ -82,6 +83,7 @@ const platformRoutes = [
   ['ads', PAds, 'ads'],
   ['coupons', PCoupons, 'coupons'],
   ['service-bookings', PServiceBookings, 'service_bookings'],
+  ['earnings', PEarnings, 'earnings'],
   ['reports', PReports, 'reports'],
   ['payments', PPayments, 'payments'],
   ['categories', PCategories, 'categories'],

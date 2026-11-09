@@ -173,10 +173,19 @@ export default function VendorDetail() {
               className="mb-6"
               title="Bookings & commission"
               actions={
-                canView('service_bookings') && (
-                <Link to={`/admin/service-bookings?vendorId=${u._id}`} className="link inline-flex items-center gap-1.5 text-xs" data-testid="vendor-bookings-link">
-                  View service bookings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
-                </Link>
+                (canView('earnings') || canView('service_bookings')) && (
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {canView('earnings') && (
+                      <Link to={`/admin/earnings?vendorId=${u._id}`} className="link inline-flex items-center gap-1.5 text-xs" data-testid="vendor-earnings-link">
+                        View earnings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
+                      </Link>
+                    )}
+                    {canView('service_bookings') && (
+                      <Link to={`/admin/service-bookings?vendorId=${u._id}`} className="link inline-flex items-center gap-1.5 text-xs" data-testid="vendor-bookings-link">
+                        View service bookings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
+                      </Link>
+                    )}
+                  </div>
                 )
               }
             >

@@ -3741,6 +3741,7 @@ const PLATFORM_PERMISSIONS = [
   { area: 'accounts', label: 'Accounts', view: 'See all accounts', manage: 'Enable / disable accounts' },
   { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors and KYC (masked)', manage: 'Approve / reject KYC, reveal KYC details' },
   { area: 'service_bookings', label: 'Service bookings', viewOnly: true, view: 'See service bookings and settlement' },
+  { area: 'earnings', label: 'Earnings', viewOnly: true, view: 'See NIVASA commission earnings and vendor earnings' },
   { area: 'listings', label: 'Listings moderation', view: 'See listings', manage: 'Approve, reject, remove listings' },
   { area: 'ads', label: 'Ads (boosts)', view: 'See boost requests', manage: 'Approve / reject boosts' },
   { area: 'coupons', label: 'Coupons', view: 'See coupons and who used them', manage: 'Create, edit, turn on/off, delete coupons' },
@@ -4937,6 +4938,93 @@ async function markBookingPaid(req, res) {
 // ---------- coupons & settlement ----------
 /** $group stage summing recorded payments: cash received, coupon credits, commission, net due to NIVASA. */
 const SETTLEMENT_GROUP = { _id: null, n: { $sum: 1 }, cash: { $sum: '$payment.amountPaise' }, discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } }, commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } }, net: { $sum: { $ifNull: ['$payment.netToPlatformPaise', 0] } } };
+/**
+ * Earnings from PAID service bookings (fixed at "mark paid"): service value (gross = cash + coupon), NIVASA
+ * commission on it, coupon cost NIVASA funds, the vendor's earnings (gross − commission) and NIVASA's net
+ * (commission − coupons). Dates are India time; `to` is inclusive.
+ */
+const EARNINGS_GROUP = {
+  n: { $sum: 1 },
+  gross: { $sum: { $ifNull: ['$payment.grossPaise', '$payment.amountPaise'] } },
+  cash: { $sum: '$payment.amountPaise' },
+  commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } },
+  discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } },
+};
+const presentEarnings = (g) => ({
+  paidJobs: g?.n || 0,
+  grossPaise: g?.gross || 0,
+  cashCollectedPaise: g?.cash || 0,
+  commissionPaise: g?.commission || 0,
+  couponCostPaise: g?.discount || 0,
+  vendorEarningsPaise: (g?.gross || 0) - (g?.commission || 0),
+  platformNetPaise: (g?.commission || 0) - (g?.discount || 0),
+});
+
+function earningsMatch(query, base = {}) {
+  const match = { ...base, 'payment.status': 'paid' };
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  const from = day.test(String(query.from || '')) ? istDate(query.from) : null;
+  const to = day.test(String(query.to || '')) ? new Date(istDate(query.to).getTime() + 86400_000) : null;
+  if (from && to && from >= to) throw badRequest('“From” must be on or before “To”.');
+  if (from || to) match['payment.paidAt'] = { ...(from ? { $gte: from } : {}), ...(to ? { $lt: to } : {}) };
+  return { match, range: { from: from ? query.from : null, to: to ? query.to : null } };
+}
+
+const presentEarningItem = (b, withVendor) => ({
+  _id: b._id,
+  offerTitle: b.offerTitle,
+  customer: { name: b.customer?.name || null },
+  ...(withVendor ? { vendor: { _id: b.vendor?._id, name: b.vendor?.name || null } } : {}),
+  paidAt: b.payment?.paidAt || null,
+  listPricePaise: b.pricePaise ?? null,
+  grossPaise: b.payment?.grossPaise ?? b.payment?.amountPaise ?? 0,
+  cashPaise: b.payment?.amountPaise ?? 0,
+  couponCode: b.couponCode || null,
+  discountPaise: b.payment?.discountPaise || 0,
+  commissionPercent: (b.payment?.commissionBps || 0) / 100,
+  commissionPaise: b.payment?.commissionPaise || 0,
+  vendorEarningsPaise: (b.payment?.grossPaise ?? b.payment?.amountPaise ?? 0) - (b.payment?.commissionPaise || 0),
+  netToPlatformPaise: b.payment?.netToPlatformPaise || 0,
+});
+
+async function earningsReport(req, base, { withVendors }) {
+  const { match, range } = earningsMatch(req.query, base);
+  const month = { $dateToString: { format: '%Y-%m', date: '$payment.paidAt', timezone: '+05:30' } };
+  const q = { ...req.valid.query, sort: '-payment.paidAt' };
+  const [totals, months, page, vendors] = await Promise.all([
+    ServiceBooking.aggregate([{ $match: match }, { $group: { _id: null, ...EARNINGS_GROUP } }]),
+    ServiceBooking.aggregate([{ $match: match }, { $group: { _id: month, ...EARNINGS_GROUP } }, { $sort: { _id: -1 } }, { $limit: 24 }]),
+    pagedFind(ServiceBooking, match, q, { sortable: ['payment.paidAt'], populate: [{ path: 'customer', select: 'name' }, ...(withVendors ? [{ path: 'vendor', select: 'name' }] : [])] }),
+    withVendors
+      ? ServiceBooking.aggregate([{ $match: match }, { $group: { _id: '$vendor', ...EARNINGS_GROUP } }, { $sort: { commission: -1, gross: -1 } }, { $limit: 10 }])
+      : Promise.resolve(null),
+  ]);
+  let topVendors;
+  if (vendors) {
+    const [users, profiles] = await Promise.all([User.find({ _id: { $in: vendors.map((v) => v._id) } }).select('name').lean(), VendorProfile.find({ user: { $in: vendors.map((v) => v._id) } }).select('user businessName').lean()]);
+    const name = Object.fromEntries(users.map((u) => [String(u._id), u.name]));
+    const biz = Object.fromEntries(profiles.map((p) => [String(p.user), p.businessName]));
+    topVendors = vendors.map((v) => ({ vendor: { _id: v._id, name: name[String(v._id)] || null, businessName: biz[String(v._id)] || null }, ...presentEarnings(v) }));
+  }
+  return {
+    range,
+    totals: presentEarnings(totals[0]),
+    months: months.map((m) => ({ month: m._id, ...presentEarnings(m) })),
+    ...(topVendors ? { topVendors } : {}),
+    ...page,
+    items: page.items.map((b) => presentEarningItem(b, withVendors)),
+  };
+}
+
+async function vendorEarnings(req, res) {
+  res.json(await earningsReport(req, { vendor: req.user._id }, { withVendors: false }));
+}
+
+async function platformEarnings(req, res) {
+  const base = isObjectId(req.query.vendorId) ? { vendor: new mongoose.Types.ObjectId(req.query.vendorId) } : {};
+  res.json(await earningsReport(req, base, { withVendors: true }));
+}
+
 const presentSettlement = (g) => ({ paidBookings: g?.n || 0, cashCollectedPaise: g?.cash || 0, couponCreditsPaise: g?.discount || 0, commissionPaise: g?.commission || 0, netToPlatformPaise: g?.net || 0 });
 
 /** Checks a code for this member and service; returns the coupon and the discount (never more than the price). */
@@ -5427,6 +5515,7 @@ vendorRouter.use(authenticate, requireVendor);
 vendorRouter.get('/profile', getVendorProfile);
 vendorRouter.put('/kyc', validate({ body: kycSubmit }), submitKyc);
 vendorRouter.get('/dashboard', vendorDashboard);
+vendorRouter.get('/earnings', page$1, vendorEarnings);
 vendorRouter.get('/bookings', validate({ query: bookingStatusQuery }), vendorBookings);
 vendorRouter.get('/bookings/:id', id$1, vendorBooking);
 vendorRouter.post('/bookings/:id/mark-paid', id$1, validate({ body: bookingMarkPaid }), markBookingPaid);
@@ -7161,6 +7250,7 @@ platformRouter.get('/coupons/:id', requirePlatformPerm('coupons.view'), id, getC
 platformRouter.patch('/coupons/:id', requirePlatformPerm('coupons.manage'), id, validate({ body: couponUpdate }), updateCoupon);
 platformRouter.delete('/coupons/:id', requirePlatformPerm('coupons.manage'), id, deleteCoupon);
 platformRouter.get('/service-bookings', requirePlatformPerm('service_bookings.view'), page, listServiceBookingsPlatform);
+platformRouter.get('/earnings', requirePlatformPerm('earnings.view'), page, platformEarnings);
 
 // Sub-admins: owner only, never grantable.
 platformRouter.get('/subadmins', requireOwner, listSubAdmins);

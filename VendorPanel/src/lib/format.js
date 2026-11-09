@@ -32,9 +32,6 @@ export function paiseToRupeesInput(paise) {
   return n % 100 === 0 ? String(n / 100) : (n / 100).toFixed(2);
 }
 
-/** Commission in paise for a price and a percentage (same rounding as the server: basis points, half up, whole paise). */
-export const commissionOf = (pricePaise, percent) => Math.round((Number(pricePaise || 0) * Math.round((Number(percent) || 0) * 100)) / 10_000);
-
 export const formatNumber = (n) => (Number.isFinite(Number(n)) ? num.format(Number(n)) : '—');
 
 const dFmt = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ });

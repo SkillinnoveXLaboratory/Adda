@@ -1,4 +1,5 @@
-import { commissionOf, money } from '../lib/format.js';
+import { Link } from 'react-router';
+import { money } from '../lib/format.js';
 import { cx } from './ui.jsx';
 
 function Row({ label, value, strong, tone, testId }) {
@@ -13,26 +14,19 @@ function Row({ label, value, strong, tone, testId }) {
 }
 
 /**
- * Vendor's view while publishing a service: price, the platform commission at the admin's current rate,
- * and what the vendor earns. "Price on request" services show the rate only.
+ * One neutral line under the service price: the price is what members see; NIVASA's commission is taken from each
+ * payment when the customer pays (not from the price). Nothing is shown when no commission is charged.
  */
-export function CommissionBreakdown({ pricePaise, percent = 0, onQuote }) {
-  if (onQuote || !(pricePaise > 0)) {
-    return (
-      <div className="rounded-xl border border-violet-100 bg-azea-purpleLight/40 p-4 text-xs leading-relaxed text-gray-600" data-testid="commission-breakdown">
-        {percent > 0 ? `NIVASA keeps a ${percent}% platform commission on the amount you collect for each booking.` : 'No platform commission is charged right now.'}
-      </div>
-    );
-  }
-  const commission = commissionOf(pricePaise, percent);
+export function CommissionHint({ percent = 0 }) {
+  if (!(Number(percent) > 0)) return null;
   return (
-    <div className="space-y-2 rounded-xl border border-violet-100 bg-azea-purpleLight/40 p-4" data-testid="commission-breakdown">
-      <Row label="Price members see" value={money(pricePaise)} testId="commission-price" />
-      <Row label={`NIVASA commission (${percent}%)`} value={percent > 0 ? `− ${money(commission)}` : money(0)} tone={percent > 0 ? 'text-rose-600' : undefined} testId="commission-amount" />
-      <div className="border-t border-violet-100" />
-      <Row label="You earn" value={money(pricePaise - commission)} strong testId="commission-earn" />
-      <p className="pt-1 text-[11px] leading-relaxed text-azea-muted">Members pay you directly. The commission is settled with NIVASA later. Coupons members use are paid back to you by NIVASA.</p>
-    </div>
+    <p className="text-[11px] leading-relaxed text-azea-muted" data-testid="commission-hint">
+      NIVASA’s commission ({percent}%) is taken from each payment when the customer pays — see{' '}
+      <Link to="/earnings" className="font-semibold text-azea-purple hover:underline">
+        Earnings
+      </Link>
+      .
+    </p>
   );
 }
 

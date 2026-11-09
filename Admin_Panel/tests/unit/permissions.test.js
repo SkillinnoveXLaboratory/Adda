@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allPermissions, canManageArea, canViewArea, isPlatformAdminUser, normalizePermissions, orderedPermissions, togglePermission } from '../../src/lib/permissions.js';
+import { allPermissions, canManageArea, canViewArea, isPlatformAdminUser, normalizePermissions, orderedPermissions, togglePermission, VIEW_ONLY_AREAS } from '../../src/lib/permissions.js';
 import { areaForPath, PLATFORM_NAV, visibleSections } from '../../src/layout/nav.js';
 
 const owner = { platformRole: 'super_admin' };
@@ -61,6 +61,22 @@ describe('platform permissions', () => {
     expect(areaForPath('/admin/service-bookings')).toBe('service_bookings');
     expect(areaForPath('/admin/subadmins')).toBe('owner');
     expect(areaForPath('/admin/users')).toBe('accounts');
+  });
+
+  it('earnings is a view-only area with its own page and sidebar item', () => {
+    expect(VIEW_ONLY_AREAS.has('earnings')).toBe(true);
+    expect(normalizePermissions(['earnings.manage'])).toEqual([]);
+    expect(normalizePermissions(['earnings.view'])).toEqual(['earnings.view']);
+    const u = sub(['earnings.view']);
+    expect(canViewArea(u, 'earnings')).toBe(true);
+    expect(canManageArea(u, 'earnings')).toBe(false);
+    expect(canViewArea(sub(['service_bookings.view']), 'earnings')).toBe(false);
+    expect(areaForPath('/admin/earnings')).toBe('earnings');
+    const items = visibleSections(PLATFORM_NAV, (a) => canViewArea(u, a)).flatMap((s) => s.items);
+    expect(items.map((i) => i.to)).toEqual(['/admin/earnings', '/admin/security']);
+    const people = PLATFORM_NAV.find((s) => s.title === 'People').items.map((i) => i.to);
+    expect(people.indexOf('/admin/earnings')).toBe(people.indexOf('/admin/service-bookings') + 1);
+    expect(allPermissions([{ area: 'earnings', viewOnly: true }])).toEqual(['earnings.view']);
   });
 
   it('permission grid: Manage ticks View, unticking View unticks Manage', () => {

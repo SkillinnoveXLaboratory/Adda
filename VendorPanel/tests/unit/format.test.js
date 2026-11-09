@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commissionOf, dayParts, money, offerPrice, paiseToRupeesInput, time12, toPaise } from '../../src/lib/format.js';
+import { dayParts, money, offerPrice, paiseToRupeesInput, time12, toPaise } from '../../src/lib/format.js';
 
 describe('money is integer paise', () => {
   it('toPaise converts rupee text exactly (no float drift)', () => {
@@ -28,20 +28,6 @@ describe('money is integer paise', () => {
     expect(money(49950)).toBe('₹499.50');
     expect(money(0)).toBe('₹0');
     expect(money(undefined)).toBe('—');
-  });
-});
-
-describe('commission preview (same rule as the server)', () => {
-  it('rounds percent to basis points and the commission to whole paise, half up', () => {
-    expect(commissionOf(49900, 10)).toBe(4990);
-    expect(commissionOf(99900, 12.5)).toBe(12488); // 12487.5 → 12488
-    expect(commissionOf(33333, 7.25)).toBe(2417); // 2416.64 → 2417
-    expect(commissionOf(49900, 0)).toBe(0);
-    expect(commissionOf(0, 10)).toBe(0);
-  });
-  it('vendor earns price − commission', () => {
-    const price = toPaise('1,250.75');
-    expect(price - commissionOf(price, 15)).toBe(125075 - 18761);
   });
 });
 

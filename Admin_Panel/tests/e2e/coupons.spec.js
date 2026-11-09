@@ -25,6 +25,7 @@ test.beforeAll(async () => {
   const q = await apiCall('GET', `/platform/society-registrations?q=${reg.referenceCode}`, { token: T });
   await apiCall('POST', `/platform/society-registrations/${q.items[0]._id}/approve`, { token: T, body: {} });
 
+  seed.commissionBefore = (await apiCall('GET', '/public/config')).services?.commissionPercent ?? 0;
   // 10% commission, then an approved vendor publishes a ₹1,000 service (snapshots 10%).
   await apiCall('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 10 } });
   seed.v = await seedVendorWithKyc(`Settle Vendor ${RUN}`, `Settle Cleaners ${RUN}`);
@@ -43,7 +44,7 @@ test.beforeAll(async () => {
   await apiCall('POST', `/vendor/bookings/${b._id}/complete`, { token: seed.v.token, body: {} });
   const paid = await apiCall('POST', `/vendor/bookings/${b._id}/mark-paid`, { token: seed.v.token, body: { amountPaise: 85000 } });
   expect(paid.payment).toMatchObject({ grossPaise: 100000, commissionPaise: 10000, netToPlatformPaise: -5000 });
-  await apiCall('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 0 } });
+  await apiCall('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: seed.commissionBefore } });
 });
 
 test.beforeAll(async ({ browser }) => {
@@ -143,6 +144,43 @@ test('vendor detail → Service bookings shows the paid booking’s commission a
   await expect(page.getByTestId('settle-commission-value')).toHaveText('₹0.00');
 });
 
+test('vendor detail → View earnings: commission, coupon cost, net and what the vendor earned', async () => {
+  await page.goto(`/admin/vendors/${seed.v.id}`);
+  await page.getByTestId('vendor-earnings-link').click();
+  await expect(page).toHaveURL(new RegExp(`/admin/earnings\\?vendorId=${seed.v.id}`));
+  await expect(page.getByRole('heading', { name: 'Earnings' })).toBeVisible();
+  await expect(page.getByTestId('earnings-vendor-filter')).toContainText(seed.v.business);
+  // ₹1,000 service: member paid ₹850 cash + ₹150 coupon (NIVASA funds it); 10% commission on ₹1,000.
+  await expect(page.getByTestId('earn-commission-value')).toHaveText('₹100.00');
+  await expect(page.getByTestId('earn-coupons-value')).toHaveText('₹150.00');
+  await expect(page.getByTestId('earn-net-value')).toContainText('-₹50.00');
+  await expect(page.getByTestId('earn-vendors-value')).toHaveText('₹900.00');
+  await expect(page.getByTestId('earn-gross-value')).toHaveText('₹1,000.00');
+  await expect(page.getByTestId('earn-jobs-value')).toHaveText('1');
+  await expect(page.getByTestId('earnings-months')).toContainText('₹900.00');
+  const row = page.getByTestId('earnings-jobs').locator('tr', { hasText: seed.title });
+  for (const t of ['₹1,000.00', seed.usedCode, '−₹150.00', '₹100.00', '10%', '-₹50.00', '₹900.00']) await expect(row).toContainText(t);
+  // Custom range validation, then all vendors: the vendor shows in Top vendors with a link to their page.
+  await page.getByRole('tab', { name: 'Custom' }).click();
+  const tomorrow = istInDays(1);
+  await page.getByTestId('earnings-custom').locator('[name=from]').fill(tomorrow);
+  await page.getByTestId('earnings-custom').locator('[name=to]').fill(istInDays(0));
+  await page.getByTestId('earnings-apply').click();
+  await expect(page.getByTestId('earnings-range-error')).toHaveText('“From” must be on or before “To”');
+  await page.getByRole('tab', { name: 'All time' }).click();
+  await page.getByLabel('Show all vendors').click();
+  await expect(page.getByTestId('earnings-vendor-picker')).toBeVisible();
+  const top = page.getByTestId('earnings-top-vendors');
+  await expect(top).toBeVisible();
+  const all = await apiCall('GET', '/platform/earnings', { token: T });
+  await expect(page.getByTestId('earn-commission-value')).toHaveText(new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 }).format(all.totals.commissionPaise / 100));
+  // Pick the vendor back through the search box.
+  await page.getByTestId('earnings-vendor-picker').locator('input').fill(seed.v.business);
+  await page.getByRole('option').filter({ hasText: seed.v.business }).first().click();
+  await expect(page.getByTestId('earnings-vendor-filter')).toContainText(seed.v.business);
+  await expect(page.getByTestId('earn-vendors-value')).toHaveText('₹900.00');
+});
+
 test('settings: commission % is validated and saved as a number', async () => {
   await page.locator('a[href="/admin/settings"]').click();
   const input = page.getByTestId('setting-services.commissionPercent');
@@ -160,5 +198,5 @@ test('settings: commission % is validated and saved as a number', async () => {
   const s = await apiCall('GET', '/platform/settings', { token: T });
   expect(s.items.find((i) => i.key === 'services.commissionPercent').value).toBe(12.5);
   expect((await apiCall('GET', '/public/config')).services.commissionPercent).toBe(12.5);
-  await apiCall('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 0 } });
+  await apiCall('PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: seed.commissionBefore } });
 });

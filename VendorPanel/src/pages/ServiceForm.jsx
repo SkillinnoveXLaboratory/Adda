@@ -8,7 +8,7 @@ import { OFFER_PRICE_TYPES, paiseToRupeesInput, toPaise } from '../lib/format.js
 import { focusFirstError, normalizePhone, phoneError, phoneInput, PHONE_INPUT_MAX, rupeeError } from '../lib/validation.js';
 import { Alert, Button, Card, ErrorState, Icon, PageHeader, PageSkeleton } from '../components/ui.jsx';
 import { Field, Input, PhotoUploader, Segmented, Select, Textarea, Toggle } from '../components/Form.jsx';
-import { CommissionBreakdown } from '../components/Pricing.jsx';
+import { CommissionHint } from '../components/Pricing.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { useCounts } from '../layout/counts.js';
 
@@ -71,7 +71,6 @@ function OfferForm({ id, offer, back }) {
   const [serverError, setServerError] = useState(null);
   const set = (k) => (v) => (setF((x) => ({ ...x, [k]: v })), setErrors((e) => ({ ...e, [k]: undefined })));
   const onQuote = f.priceType === 'on_quote';
-  const pricePaise = onQuote ? 0 : toPaise(f.price) || 0;
 
   // A category that the platform switched off is still shown for an existing service.
   const categories = cats.data?.items || [];
@@ -195,11 +194,11 @@ function OfferForm({ id, offer, back }) {
             <div className="space-y-4">
               <Segmented name="priceType" label="Price type" options={OFFER_PRICE_TYPES} value={f.priceType} onChange={set('priceType')} />
               {!onQuote && (
-                <Field label="Price (₹)" error={errors.price} htmlFor={ids.price} required hint="Up to ₹10,00,000">
+                <Field label="Price (₹)" error={errors.price} htmlFor={ids.price} required hint="The price members see · up to ₹10,00,000">
                   <Input id={ids.price} name="price" prefix="₹" inputMode="decimal" value={f.price} onChange={(e) => set('price')(e.target.value.replace(/[^\d.]/g, ''))} maxLength={10} invalid={Boolean(errors.price)} placeholder="e.g. 499" />
                 </Field>
               )}
-              {config.error && !config.data ? <Alert tone="warning">Couldn’t load the current commission rate: {config.error.message}</Alert> : <CommissionBreakdown pricePaise={pricePaise} percent={commissionPercent} onQuote={onQuote} />}
+              <CommissionHint percent={config.data ? commissionPercent : 0} />
             </div>
           </Card>
           <Card className="lg:col-span-2 lg:row-start-2" title="Photos of your work (optional)">

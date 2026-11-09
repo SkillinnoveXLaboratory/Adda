@@ -5,7 +5,7 @@
  */
 
 /** Areas with only a "view" permission (no buttons to manage). */
-export const VIEW_ONLY_AREAS = new Set(['dashboard', 'service_bookings', 'reports', 'payments', 'audit']);
+export const VIEW_ONLY_AREAS = new Set(['dashboard', 'service_bookings', 'earnings', 'reports', 'payments', 'audit']);
 
 export const isOwnerUser = (user) => user?.platformRole === 'super_admin';
 export const isSubAdminUser = (user) => user?.platformRole === 'sub_admin';

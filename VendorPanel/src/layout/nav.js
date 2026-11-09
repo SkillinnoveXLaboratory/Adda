@@ -5,6 +5,7 @@ export const VENDOR_NAV = [
     items: [
       { to: '/dashboard', label: 'Dashboard', icon: 'fa-solid fa-gauge-high', end: true },
       { to: '/bookings', label: 'Bookings', icon: 'fa-regular fa-calendar-check', badge: 'newBookings' },
+      { to: '/earnings', label: 'Earnings', icon: 'fa-solid fa-wallet' },
     ],
   },
   {

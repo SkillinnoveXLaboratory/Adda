@@ -79,6 +79,7 @@ const AREAS = {
   accounts: { read: ['GET', '/platform/users'], write: ['POST', `/platform/users/${FAKE}/disabled`, { reason: 'dry check' }] },
   vendors: { read: ['GET', '/platform/vendors'], write: ['POST', `/platform/vendors/${FAKE}/kyc`, {}] },
   service_bookings: { read: ['GET', '/platform/service-bookings'] },
+  earnings: { read: ['GET', '/platform/earnings'] },
   listings: { read: ['GET', '/platform/listings'], write: ['POST', `/platform/listings/property/${FAKE}/moderate`, {}] },
   ads: { read: ['GET', '/platform/ads'], write: ['POST', `/platform/ads/${FAKE}/review`, {}] },
   coupons: { read: ['GET', '/platform/coupons'], write: ['POST', '/platform/coupons', {}] },

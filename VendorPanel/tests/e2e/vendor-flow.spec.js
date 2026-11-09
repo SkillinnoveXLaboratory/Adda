@@ -3,8 +3,8 @@ import { apiCall, dialog, expectToast, istDay, ownerToken, panelSession, png, ra
 
 /**
  * Full vendor journey against the LOCAL backend:
- * create account → KYC needed → KYC with 3 photos → owner approves (API) → add a service with commission preview →
- * member books (API) → accept → complete → mark cash paid → settlement → boost request → sign out.
+ * create account → KYC needed → KYC with 3 photos → owner approves (API) → add a service (price + commission hint) →
+ * member books (API) → accept → complete → mark cash paid → settlement → Earnings page → boost request → sign out.
  */
 test('vendor: sign-up → KYC → service → booking → cash → settlement → boost → sign out', async ({ page }) => {
   const owner = await ownerToken();
@@ -37,7 +37,7 @@ test('vendor: sign-up → KYC → service → booking → cash → settlement �
     await expect(page.getByTestId('kyc-summary')).toContainText('XXXX XXXX'); // masked Aadhaar
     await expect(page.getByTestId('kyc-form')).toHaveCount(0);
 
-    // 5. Add a service with a price → live commission preview.
+    // 5. Add a service with a price: only the price members see + a neutral commission hint (no breakdown).
     await page.goto('/services/new');
     const form = page.getByTestId('service-form');
     await expect(form.locator('[name=categoryId] option')).not.toHaveCount(1);
@@ -45,8 +45,10 @@ test('vendor: sign-up → KYC → service → booking → cash → settlement �
     await form.locator('[name=title]').fill(`Tap & leak repair ${RUN}`);
     await page.getByTestId('priceType-fixed').click();
     await form.locator('[name=price]').fill('499');
-    await expect(page.getByTestId('commission-amount')).toHaveText('− ₹49.90');
-    await expect(page.getByTestId('commission-earn')).toHaveText('₹449.10');
+    await expect(page.getByTestId('commission-hint')).toHaveText('NIVASA’s commission (10%) is taken from each payment when the customer pays — see Earnings.');
+    await expect(form).not.toContainText('You earn');
+    await expect(form).not.toContainText('₹449.10');
+    await expect(page.getByTestId('commission-breakdown')).toHaveCount(0);
     await form.locator('[name=city]').fill('Pune');
     await page.getByTestId('service-photos-input').setInputFiles(png(0, 'work.png'));
     await expect(page.getByTestId('service-photos').locator('img')).toHaveCount(1);
@@ -104,8 +106,32 @@ test('vendor: sign-up → KYC → service → booking → cash → settlement �
     await expect(totals.getByTestId('settle-net')).toHaveText('₹49.90');
     await expect(totals).toContainText('You owe NIVASA');
 
+    // 8b. Earnings page (sidebar): the member paid the full ₹499; 10% commission comes out of that payment.
+    await page.locator('#sidebar a[href="/earnings"]').click();
+    await page.waitForURL('**/earnings');
+    await expect(page.getByTestId('earn-you-value')).toHaveText('₹449.10');
+    await expect(page.getByTestId('earn-commission-value')).toHaveText('₹49.90');
+    await expect(page.getByTestId('earn-gross-value')).toHaveText('₹499');
+    await expect(page.getByTestId('earn-jobs-value')).toHaveText('1');
+    await expect(page.getByTestId('earnings-settlement')).toContainText('you owe NIVASA ₹49.90');
+    await expect(page.getByTestId('earnings-months')).toContainText('₹449.10');
+    const job = page.getByTestId('earnings-jobs').locator('tr', { hasText: `Tap & leak repair ${RUN}` });
+    for (const t of [`Member ${RUN}`, '₹499', '10%', '₹49.90', '₹449.10']) await expect(job).toContainText(t);
+    // Custom range: "From" after "To" is refused in place; a valid range keeps the job.
+    await page.getByTestId('tab-custom').click();
+    await page.getByTestId('earnings-custom').locator('[name=from]').fill(istDay(1));
+    await page.getByTestId('earnings-custom').locator('[name=to]').fill(istDay(0));
+    await page.getByTestId('earnings-apply').click();
+    await expect(page.getByTestId('earnings-range-error')).toHaveText('“From” must be on or before “To”');
+    await page.getByTestId('earnings-custom').locator('[name=from]').fill(istDay(-1));
+    await page.getByTestId('earnings-apply').click();
+    await expect(page.getByTestId('earnings-range-error')).toHaveCount(0);
+    await expect(page.getByTestId('earnings-range')).toContainText('–');
+    await expect(page.getByTestId('earn-you-value')).toHaveText('₹449.10');
+
     await page.goto('/dashboard');
     await expect(page.getByTestId('stat-cash')).toContainText('₹499');
+    await expect(page.getByTestId('dashboard-earnings-link')).toHaveAttribute('href', '/earnings');
     await expect(page.getByTestId('kyc-banner')).toHaveCount(0);
 
     // 9. Boost request for the live service.
