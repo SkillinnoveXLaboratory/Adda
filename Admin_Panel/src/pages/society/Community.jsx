@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useState } from 'react';
+import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, mediaHref } from '../../lib/api.js';
 import { useAction, usePaged } from '../../lib/hooks.js';
-import { formatDateTime, formatNumber, formatRelative, humanize, istDateTimeISO } from '../../lib/format.js';
+import { formatDateTime, formatNumber, formatRelative, humanize } from '../../lib/format.js';
 import { Avatar, Badge, Button, cx, EmptyState, ErrorState, Icon, PageHeader, Skeleton, Tabs } from '../../components/ui.jsx';
 import { DataTable, Pagination } from '../../components/DataTable.jsx';
-import { Checkbox, Field, Input, Select, Textarea } from '../../components/Form.jsx';
+import { Checkbox, Field, Select, Textarea } from '../../components/Form.jsx';
 import { ConfirmDialog, Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
@@ -206,145 +206,35 @@ function Reports({ refreshCounts }) {
   );
 }
 
-function PollModal({ open, onClose, onSaved }) {
-  const toast = useToast();
-  const [question, setQuestion] = useState('');
-  const [options, setOptions] = useState(['', '']);
-  const [closes, setCloses] = useState('');
-  const [errors, setErrors] = useState({});
-  useEffect(() => {
-    if (open) {
-      setQuestion('');
-      setOptions(['', '']);
-      setCloses('');
-      setErrors({});
-    }
-  }, [open]);
-  const [save, busy] = useAction(() => api.post('/society/polls', { question: question.trim(), options: options.map((o) => o.trim()), closesAt: closes ? istDateTimeISO(closes, '23:59') : undefined }), { toast, success: 'Poll published', onDone: () => (onSaved(), onClose()) });
-  const submit = (e) => {
-    e?.preventDefault();
-    const errs = {};
-    if (question.trim().length < 5) errs.question = 'Question must be at least 5 characters';
-    const opts = options.map((o) => o.trim());
-    if (opts.some((o) => !o)) errs.options = 'Fill in every option (or remove empty ones)';
-    else if (new Set(opts.map((o) => o.toLowerCase())).size !== opts.length) errs.options = 'Options must be unique';
-    if (closes && closes < new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10)) errs.closes = 'Choose a future date';
-    setErrors(errs);
-    if (!Object.keys(errs).length) save();
-  };
-  return (
-    <Modal open={open} onClose={onClose} busy={busy} title="New poll" subtitle="Residents vote once; results show after voting or closing" icon="fa-solid fa-square-poll-vertical" footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={submit} loading={busy}>Publish poll</Button></>}>
-      <form onSubmit={submit} noValidate className="space-y-4">
-        <Field label="Question" required error={errors.question}>
-          <Input name="question" value={question} maxLength={300} onChange={(e) => (setQuestion(e.target.value), setErrors((x) => ({ ...x, question: undefined })))} invalid={Boolean(errors.question)} />
-        </Field>
-        <div>
-          <p className="form-label">Options (2–8)</p>
-          <div className="space-y-2">
-            {options.map((o, i) => (
-              <div key={i} className="flex gap-2">
-                <Input aria-label={`Option ${i + 1}`} value={o} maxLength={120} onChange={(e) => (setOptions(options.map((x, j) => (j === i ? e.target.value : x))), setErrors((x) => ({ ...x, options: undefined })))} placeholder={`Option ${i + 1}`} />
-                <button type="button" onClick={() => setOptions(options.filter((_, j) => j !== i))} disabled={options.length <= 2} className="flex w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-30" aria-label={`Remove option ${i + 1}`} title={options.length <= 2 ? 'A poll needs at least 2 options' : 'Remove option'}>
-                  <Icon name="fa-solid fa-xmark" />
-                </button>
-              </div>
-            ))}
-          </div>
-          {errors.options && <p className="mt-1 text-[11px] font-medium text-rose-500">{errors.options}</p>}
-          <Button size="xs" variant="ghost" icon="fa-solid fa-plus" className="mt-2" disabled={options.length >= 8} onClick={() => setOptions([...options, ''])}>
-            Add option
-          </Button>
-        </div>
-        <Field label="Closes on (optional)" error={errors.closes} hint="Leave empty to close it manually">
-          <Input type="date" name="closes" value={closes} onChange={(e) => setCloses(e.target.value)} invalid={Boolean(errors.closes)} />
-        </Field>
-      </form>
-    </Modal>
-  );
-}
-
-function Polls() {
-  const toast = useToast();
-  const q = usePaged((p) => api.get('/society/polls', { ...p, sort: '-createdAt' }), {}, 10);
-  const [modal, setModal] = useState(null);
-  const [close, closing] = useAction(() => api.post(`/society/polls/${modal.item._id}/close`), { toast, success: 'Poll closed', onDone: () => (setModal(null), q.reload()) });
-  return (
-    <>
-      <div className="mb-4 flex justify-end">
-        <Button icon="fa-solid fa-plus" onClick={() => setModal({ type: 'new' })} data-testid="new-poll">
-          New poll
-        </Button>
-      </div>
-      <ListShell q={q} grid empty={<EmptyState icon="fa-solid fa-square-poll-vertical" title="No polls yet" message="Ask residents a quick question — results update as they vote." action={<Button icon="fa-solid fa-plus" onClick={() => setModal({ type: 'new' })}>New poll</Button>} />}>
-        {q.data?.items.map((p) => {
-          const total = p.totalVotes || p.options.reduce((s, o) => s + (o.votes || 0), 0);
-          const open = p.status === 'open' && (!p.closesAt || new Date(p.closesAt) > new Date());
-          const max = Math.max(...p.options.map((o) => o.votes || 0));
-          return (
-            <article key={p._id} className="card flex flex-col p-5" data-testid="poll-card">
-              <div className="flex items-start justify-between gap-3">
-                <h3 className="text-sm font-bold text-gray-800">{p.question}</h3>
-                <Badge status={open ? 'open' : 'closed'}>{open ? 'Open' : 'Closed'}</Badge>
-              </div>
-              <p className="mt-0.5 text-[11px] text-gray-400">
-                {formatNumber(total)} vote{total === 1 ? '' : 's'} · created {formatRelative(p.createdAt)}
-                {p.closesAt ? ` · closes ${formatDateTime(p.closesAt)}` : ''}
-              </p>
-              <ul className="mt-4 flex-1 space-y-3">
-                {p.options.map((o) => {
-                  const pct = total ? Math.round(((o.votes || 0) / total) * 100) : 0;
-                  return (
-                    <li key={o._id}>
-                      <div className="mb-1 flex items-center justify-between text-xs">
-                        <span className={cx('font-medium', o.votes && o.votes === max ? 'text-brand' : 'text-gray-700')}>{o.label}</span>
-                        <span className="text-[11px] text-gray-500">
-                          {formatNumber(o.votes || 0)} · {pct}%
-                        </span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-gray-100">
-                        <div className={cx('h-full rounded-full', o.votes && o.votes === max ? 'bg-brand' : 'bg-brand-cyan')} style={{ width: `${pct}%` }} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-              {p.status === 'open' && (
-                <div className="mt-4 flex justify-end border-t border-gray-50 pt-3">
-                  <Button size="xs" variant="danger-outline" icon="fa-solid fa-lock" onClick={() => setModal({ type: 'close', item: p })}>
-                    Close poll
-                  </Button>
-                </div>
-              )}
-            </article>
-          );
-        })}
-      </ListShell>
-      <PollModal open={modal?.type === 'new'} onClose={() => setModal(null)} onSaved={q.reload} />
-      <ConfirmDialog open={modal?.type === 'close'} onClose={() => setModal(null)} onConfirm={() => close()} busy={closing} title="Close poll" confirmLabel="Close poll" message="Residents won’t be able to vote any more. Results stay visible." />
-    </>
-  );
-}
-
 export default function Community() {
   const { counts, refreshCounts } = useCounts();
   const [params, setParams] = useSearchParams();
-  const tab = ['posts', 'reports', 'polls'].includes(params.get('tab')) ? params.get('tab') : 'posts';
+  const navigate = useNavigate();
+  // Polls moved to their own Voting page; old links (?tab=polls) land there.
+  if (params.get('tab') === 'polls') return <Navigate to="/society/voting" replace />;
+  const tab = ['posts', 'reports'].includes(params.get('tab')) ? params.get('tab') : 'posts';
   return (
     <div>
-      <PageHeader title="Community" subtitle="Moderate the resident feed, handle reports and run polls" />
+      <PageHeader
+        title="Community"
+        subtitle="Moderate the resident feed and handle reports"
+        actions={
+          <Button variant="outline" icon="fa-solid fa-square-poll-vertical" iconRight="fa-solid fa-chevron-right" onClick={() => navigate('/society/voting')} data-testid="community-voting-link">
+            Votes & polls
+          </Button>
+        }
+      />
       <Tabs
         className="mb-4"
         tabs={[
           { value: 'posts', label: 'Posts', icon: 'fa-regular fa-comments' },
           { value: 'reports', label: 'Reports', icon: 'fa-regular fa-flag', count: counts.openReports || undefined },
-          { value: 'polls', label: 'Polls', icon: 'fa-solid fa-square-poll-vertical' },
         ]}
         value={tab}
         onChange={(v) => setParams({ tab: v })}
       />
       {tab === 'posts' && <Posts refreshCounts={refreshCounts} />}
       {tab === 'reports' && <Reports refreshCounts={refreshCounts} />}
-      {tab === 'polls' && <Polls />}
     </div>
   );
 }

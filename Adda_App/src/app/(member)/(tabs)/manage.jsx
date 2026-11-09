@@ -16,6 +16,7 @@ const MODULES = [
   ['Complaints', 'complaints', '/complaints'],
   ['Notices', 'notices', '/notices'],
   ['Community', 'people', '/community'],
+  ['Voting', 'vote', '/polls'],
   ['Amenities', 'amenities', '/facilities'],
   ['My Bookings', 'calendar', '/bookings'],
   ['Service\nRequests', 'requests', '/service-requests'],
@@ -60,7 +61,7 @@ export default function SocietyHub() {
               nicon={nicon}
               label={label}
               testID={`module-${href.slice(1)}`}
-              badge={href === '/complaints' && d?.openComplaints ? String(d.openComplaints) : href === '/community' && d?.openPolls ? String(d.openPolls) : undefined}
+              badge={href === '/complaints' && d?.openComplaints ? String(d.openComplaints) : href === '/polls' && d?.openPolls ? String(d.openPolls) : undefined}
               onPress={() => router.push(href)}
             />
           ))}

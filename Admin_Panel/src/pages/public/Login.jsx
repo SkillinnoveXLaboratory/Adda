@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../../lib/auth.jsx';
+import { canViewArea } from '../../lib/permissions.js';
+import { areaForPath } from '../../layout/nav.js';
 import { isEmail } from '../../lib/validation.js';
 import { Alert, Button, Icon, Logo } from '../../components/ui.jsx';
 import { Field, Input } from '../../components/Form.jsx';
@@ -47,7 +49,7 @@ function Shell({ children }) {
 }
 
 export default function Login() {
-  const { login, isAuthenticated, isSuperAdmin, clearEndReason } = useAuth();
+  const { login, isAuthenticated, isPlatformAdmin, clearEndReason } = useAuth();
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -65,7 +67,7 @@ export default function Login() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (isAuthenticated && isSuperAdmin && !busy) return <Navigate to="/admin" replace />;
+  if (isAuthenticated && isPlatformAdmin && !busy) return <Navigate to="/admin" replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -77,9 +79,11 @@ export default function Login() {
     if (Object.keys(errs).length) return;
     setBusy(true);
     try {
-      await login(email.trim().toLowerCase(), password);
+      const res = await login(email.trim().toLowerCase(), password);
       const from = location.state?.from;
-      navigate(from && from.startsWith('/admin') ? from : '/admin', { replace: true });
+      // Back to the page they were on — unless this account may not open it (e.g. another admin signed out there).
+      const ok = from && from.startsWith('/admin') && canViewArea(res.user, areaForPath(from));
+      navigate(ok ? from : '/admin', { replace: true });
     } catch (err) {
       setError(err);
       setBusy(false);
@@ -89,7 +93,7 @@ export default function Login() {
   return (
     <Shell>
       <h1 className="text-xl font-bold text-gray-800">Master Admin sign in</h1>
-      <p className="mt-1 text-xs text-brand-muted">Platform owner access.</p>
+      <p className="mt-1 text-xs text-brand-muted">Platform owner and sub-admin access.</p>
       <div className="mt-5">
         {reason && !error && (
           <Alert tone={reason[0]} className="mb-4">

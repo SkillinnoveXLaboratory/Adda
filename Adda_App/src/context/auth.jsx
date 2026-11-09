@@ -6,12 +6,14 @@ const AuthContext = createContext(null);
 
 /**
  * Session + profile state. status: 'booting' | 'signedOut' | 'signedIn' | 'offline'.
- * Members: an approved membership unlocks the society area. Vendors (accountType vendor) get the vendor area and never a society.
+ * Members only: an approved membership unlocks the society area. Vendor accounts use the NIVASA Vendor Panel
+ * website — the server refuses them here (VENDOR_USE_PANEL) and `vendorNotice` tells the person where to go.
  */
 export function AuthProvider({ children, onSessionExpired }) {
   const [status, setStatus] = useState('booting');
   const [profile, setProfile] = useState(null);
   const [bootError, setBootError] = useState(null);
+  const [vendorNotice, setVendorNotice] = useState(false);
   const expiredRef = useRef(onSessionExpired);
   useEffect(() => {
     expiredRef.current = onSessionExpired;
@@ -41,13 +43,14 @@ export function AuthProvider({ children, onSessionExpired }) {
         return { status: 'offline', error: err };
       }
       await session.clear();
-      return { status: 'signedOut' };
+      return { status: 'signedOut', vendor: err?.code === 'VENDOR_USE_PANEL' };
     }
   }, []);
 
   const applyOutcome = useCallback(
     async (o) => {
       if (o.profile) await applyProfile(o.profile);
+      if (o.vendor) setVendorNotice(true);
       setBootError(o.error || null);
       setStatus(o.status);
     },
@@ -62,10 +65,12 @@ export function AuthProvider({ children, onSessionExpired }) {
 
   useEffect(() => {
     let alive = true;
-    session.onEnded(() => {
+    session.onEnded((reason) => {
       setProfile(null);
       setStatus('signedOut');
-      expiredRef.current?.();
+      // An old vendor session from before vendors moved to the Vendor Panel: say where to go, not "session ended".
+      if (reason === 'VENDOR_USE_PANEL') setVendorNotice(true);
+      else expiredRef.current?.();
     });
     resolveSession().then((o) => alive && applyOutcome(o));
     return () => {
@@ -76,34 +81,26 @@ export function AuthProvider({ children, onSessionExpired }) {
   const finishSignIn = useCallback(
     async (result) => {
       await session.save(result);
-      await applyProfile({ user: result.user, vendor: result.vendor, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
+      await applyProfile({ user: result.user, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
+      setVendorNotice(false);
       setStatus('signedIn');
     },
     [applyProfile],
   );
 
+  /** Phone + password sign-in. Vendor accounts get 403 VENDOR_USE_PANEL (thrown; no session is created). */
   const signIn = useCallback(
-    async (phone, password, expectedType) => {
+    async (phone, password) => {
       const result = await api('/auth/resident/login', { method: 'POST', auth: false, body: { phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
-      const actual = result.user?.accountType || 'member';
-      if (expectedType && actual !== expectedType) {
-        // Signed in to the wrong kind of account: end that new session on the server, keep nothing locally.
-        await session.save(result);
-        await api('/auth/logout', { method: 'POST' }).catch(() => {});
-        await session.clear();
-        const err = new Error(actual === 'vendor' ? 'This number is registered as a vendor account. Switch to Vendor to sign in.' : 'This number is registered as a member account. Switch to Member to sign in.');
-        err.code = 'WRONG_ACCOUNT_TYPE';
-        err.accountType = actual;
-        throw err;
-      }
       await finishSignIn(result);
     },
     [finishSignIn],
   );
 
+  /** Member sign-up (the app never sends an account type: vendors sign up on the Vendor Panel). */
   const register = useCallback(
-    async ({ name, phone, password, accountType = 'member' }) => {
-      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body: { name: name.trim(), phone: normalizePhone(phone), password, accountType, deviceName: 'NIVASA app' } });
+    async ({ name, phone, password }) => {
+      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body: { name: name.trim(), phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
       await finishSignIn(result);
     },
     [finishSignIn],
@@ -123,8 +120,7 @@ export function AuthProvider({ children, onSessionExpired }) {
   const value = useMemo(() => {
     const memberships = profile?.memberships || [];
     const approved = memberships.filter((m) => m.status === 'approved' && m.society?.status !== 'suspended');
-    const isVendor = profile?.user?.accountType === 'vendor';
-    const active = isVendor ? null : approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
+    const active = approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
     return {
       status,
       bootError,
@@ -133,10 +129,9 @@ export function AuthProvider({ children, onSessionExpired }) {
       memberships,
       activeMembership: active,
       isMember: !!active,
-      isVendor,
-      accountType: profile?.user?.accountType || 'member',
-      vendor: profile?.vendor || null,
       pendingMembership: memberships.find((m) => m.status === 'pending') || null,
+      vendorNotice,
+      dismissVendorNotice: () => setVendorNotice(false),
       signIn,
       register,
       signOut,
@@ -146,7 +141,7 @@ export function AuthProvider({ children, onSessionExpired }) {
         setProfile((p) => ({ ...p }));
       },
     };
-  }, [status, bootError, boot, profile, signIn, register, signOut, loadProfile]);
+  }, [status, bootError, boot, profile, vendorNotice, signIn, register, signOut, loadProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

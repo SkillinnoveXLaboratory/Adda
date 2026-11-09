@@ -28,7 +28,7 @@ const DECISION = { approved: ['Approve', 'success-outline', 'fa-solid fa-check']
  * society: GET /society/listings, POST /society/listings/:kind/:id/moderate
  * platform: GET /platform/listings (+scope, reported), POST /platform/listings/:kind/:id/moderate
  */
-export function ListingsModeration({ platform = false, onChanged }) {
+export function ListingsModeration({ platform = false, onChanged, readOnly = false }) {
   const toast = useToast();
   const base = platform ? '/platform/listings' : '/society/listings';
   const [kind, setKind] = useState('property');
@@ -51,7 +51,8 @@ export function ListingsModeration({ platform = false, onChanged }) {
       : kind === 'service'
         ? [l.category?.name, l.experienceYears ? `${l.experienceYears} yrs exp.` : null].filter(Boolean).join(' · ')
         : humanize(l.condition);
-  const decisions = (l) => ['approved', 'rejected', 'removed'].filter((d) => d !== l.moderationStatus && !(d === 'rejected' && l.moderationStatus === 'removed'));
+  // readOnly (Listings · view only): no moderation buttons.
+  const decisions = (l) => (readOnly ? [] : ['approved', 'rejected', 'removed']).filter((d) => d !== l.moderationStatus && !(d === 'rejected' && l.moderationStatus === 'removed'));
   const columns = [
     {
       key: 'title',

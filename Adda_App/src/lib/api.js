@@ -107,7 +107,8 @@ async function refreshTokens() {
   return refreshInFlight;
 }
 
-const SESSION_ENDING_CODES = new Set(['SESSION_INVALID', 'ACCOUNT_DISABLED', 'TOKEN_INVALID']);
+/** Vendor accounts now use the Vendor Panel website: the server ends their old app sessions with 401 VENDOR_USE_PANEL. */
+const SESSION_ENDING_CODES = new Set(['SESSION_INVALID', 'ACCOUNT_DISABLED', 'TOKEN_INVALID', 'VENDOR_USE_PANEL']);
 
 /**
  * JSON API request. Options: method, body (object or FormData), auth (default true), query (object).
@@ -136,23 +137,24 @@ export async function api(path, { method = 'GET', body, auth = true, query, retr
       try {
         await refreshTokens();
       } catch (err) {
-        await endSession();
+        await endSession(err?.code);
+        if (err?.code === 'VENDOR_USE_PANEL') throw err;
         throw err instanceof ApiError ? new ApiError(401, 'SESSION_INVALID', 'Your session has ended. Please sign in again.') : err;
       }
       return api(path, { method, body, auth, query, retry: false, timeoutMs });
     }
     // Only end a session that still exists — a late response after a deliberate logout must not show "session ended".
     if (SESSION_ENDING_CODES.has(code) && refreshToken) {
-      await endSession();
+      await endSession(code);
     }
   }
   return parse(res);
 }
 
-async function endSession() {
+async function endSession(reason) {
   if (!refreshToken && !accessToken) return; // already signed out
   await session.clear();
-  onSessionEnded();
+  onSessionEnded(reason);
 }
 
 /** Seconds until the access token expires (JWT `exp`), or 0 when unknown/expired. */
@@ -216,7 +218,7 @@ export async function uploadFile(asset, purpose) {
       await refreshTokens();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        await endSession();
+        await endSession(err.code);
         throw new ApiError(401, 'SESSION_INVALID', 'Your session has ended. Please sign in again.');
       }
       throw err;

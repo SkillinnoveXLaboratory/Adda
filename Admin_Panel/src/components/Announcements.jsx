@@ -104,7 +104,9 @@ function AnnouncementModal({ open, onClose, item, basePath, attachments: allowAt
  * Notices list for society (`/society/announcements`) and platform (`/platform/announcements`).
  * Edit exists only for society notices (the platform API has no PATCH).
  */
-export function AnnouncementsManager({ basePath, title, subtitle, canWrite, writeReason, allowEdit, allowAttachments, emptyMessage, statusTabs = true }) {
+export function AnnouncementsManager({ basePath, title, subtitle, canWrite: canWriteProp, writeReason, allowEdit, allowAttachments, emptyMessage, statusTabs = true, readOnly = false }) {
+  // readOnly (Master Admin sub-admin with "Platform notices · view"): no publish / edit / archive buttons at all.
+  const canWrite = canWriteProp && !readOnly;
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const [status, setStatus] = useState(statusTabs ? 'published' : '');
@@ -119,7 +121,7 @@ export function AnnouncementsManager({ basePath, title, subtitle, canWrite, writ
 
   return (
     <div>
-      <PageHeader title={title} subtitle={subtitle} actions={<Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({ type: 'edit' })} data-testid="new-announcement">New notice</Button>} />
+      <PageHeader title={title} subtitle={subtitle} actions={!readOnly && <Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({ type: 'edit' })} data-testid="new-announcement">New notice</Button>} />
       {statusTabs && <Tabs
         className="mb-4"
         tabs={[
@@ -181,7 +183,7 @@ export function AnnouncementsManager({ basePath, title, subtitle, canWrite, writ
                     )}
                     {!a.eventDate && !a.attachments?.length && `Posted ${formatDate(a.createdAt)}`}
                   </span>
-                  {a.status === 'published' && (
+                  {a.status === 'published' && !readOnly && (
                     <div className="flex gap-2">
                       {allowEdit && (
                         <Button size="xs" variant="secondary" icon="fa-regular fa-pen-to-square" disabledReason={writeReason} onClick={() => setModal({ type: 'edit', item: a })}>

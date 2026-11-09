@@ -70,7 +70,7 @@ export const withVerhoeff = (base11) => base11 + VINV[base11.split('').reverse()
 /** Registers a vendor and submits KYC (status pending). Returns ids, token and the plain KYC numbers. */
 export async function seedVendorWithKyc(name, business) {
   const phone = randPhone();
-  const reg = await apiCall('POST', '/auth/resident/register', { body: { phone, name, password: PASSWORD, accountType: 'vendor' } });
+  const reg = await apiCall('POST', '/auth/vendor/register', { body: { phone, name, password: PASSWORD } });
   const token = reg.accessToken;
   const docs = [await upload(token, 'kyc'), await upload(token, 'kyc'), await upload(token, 'kyc')];
   const stamp = String(Date.now() + Math.floor(Math.random() * 1e6));

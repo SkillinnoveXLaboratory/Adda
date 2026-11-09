@@ -61,7 +61,7 @@ export default function Home() {
 
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <StatTile icon="megaphone-outline" tone="rose" value={d.openComplaints} label="Open complaints" onPress={() => router.push('/complaints')} />
-              <StatTile icon="stats-chart-outline" tone="purple" value={d.openPolls} label="Open polls" onPress={() => router.push('/community')} />
+              <StatTile icon="stats-chart-outline" tone="purple" value={d.openPolls} label="Open votes" onPress={() => router.push('/polls')} />
             </View>
 
             <SectionTitle title="Latest announcements" action={d.announcements.length ? 'See all' : undefined} onAction={() => router.push('/notices')} />

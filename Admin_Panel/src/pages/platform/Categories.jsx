@@ -1,5 +1,7 @@
 import { CategoriesManager } from '../../components/Categories.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 
 export default function PlatformCategories() {
-  return <CategoriesManager platform />;
+  const { canManage } = useAuth();
+  return <CategoriesManager platform readOnly={!canManage('categories')} />;
 }

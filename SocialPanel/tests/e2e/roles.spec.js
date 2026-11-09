@@ -15,6 +15,7 @@ test('treasurer sees finance, cannot manage buildings or open complaints', async
   await expect(nav.getByText('Billing & invoices')).toBeVisible();
   await expect(nav.getByText('Complaints')).toHaveCount(0);
   await expect(nav.getByText('Community')).toHaveCount(0);
+  await expect(nav.getByText('Voting')).toHaveCount(0);
 
   // Read-only structure: write buttons disabled with the reason.
   await page.goto('/society/structure');
@@ -24,6 +25,8 @@ test('treasurer sees finance, cannot manage buildings or open complaints', async
 
   // Direct URL to a forbidden module shows a designed lock state, not a broken page.
   await page.goto('/society/complaints');
+  await expect(page.getByText('Not available for your role')).toBeVisible();
+  await page.goto('/society/voting');
   await expect(page.getByText('Not available for your role')).toBeVisible();
 
   // Finance works.

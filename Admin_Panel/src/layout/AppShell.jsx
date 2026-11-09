@@ -148,7 +148,7 @@ function QuickSearch({ sections }) {
 }
 
 function UserMenu() {
-  const { user, logout } = useAuth();
+  const { user, logout, isOwner, canView } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const ref = useOutsideClose(open, setOpen);
@@ -167,16 +167,18 @@ function UserMenu() {
             <div className="min-w-0">
               <p className="truncate text-xs font-semibold text-gray-800">{user?.name || 'Signed in'}</p>
               <p className="truncate text-[11px] text-gray-400">{user?.email}</p>
-              <p className="mt-1 inline-flex rounded-full bg-brand-light px-2 py-0.5 text-[10px] font-semibold text-brand">Platform owner</p>
+              <p className="mt-1 inline-flex rounded-full bg-brand-light px-2 py-0.5 text-[10px] font-semibold text-brand" data-testid="role-label">{isOwner ? 'Platform owner' : 'Sub-admin'}</p>
             </div>
           </div>
           <div className="py-1">
             <button type="button" role="menuitem" onClick={() => (setOpen(false), navigate('/admin/security'))} className="flex w-full items-center gap-3 px-4 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 hover:text-brand">
               <Icon name="fa-solid fa-shield-halved" className="w-4 text-center" /> My security
             </button>
-            <button type="button" role="menuitem" onClick={() => (setOpen(false), navigate('/admin/settings'))} className="flex w-full items-center gap-3 px-4 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 hover:text-brand">
-              <Icon name="fa-solid fa-sliders" className="w-4 text-center" /> Platform settings
-            </button>
+            {canView('settings') && (
+              <button type="button" role="menuitem" onClick={() => (setOpen(false), navigate('/admin/settings'))} className="flex w-full items-center gap-3 px-4 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 hover:text-brand">
+                <Icon name="fa-solid fa-sliders" className="w-4 text-center" /> Platform settings
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"

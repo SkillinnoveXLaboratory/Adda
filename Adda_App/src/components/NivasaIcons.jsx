@@ -125,6 +125,15 @@ const ICONS = {
     </>,
   ],
   // ---- extra features in the same style (no template icon exists for these)
+  vote: [
+    40,
+    <>
+      <Rect x={13} y={6} width={14} height={15} rx={2} stroke={G} strokeWidth={2.2} />
+      <Path d="M16.5 13.5L19 16L23.5 11" stroke={N} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M8 21H32V31C32 32.7 30.7 34 29 34H11C9.3 34 8 32.7 8 31V21Z" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
+      <Path d="M15 27H25" stroke={G} strokeWidth={2.2} strokeLinecap="round" />
+    </>,
+  ],
   market: [
     40,
     <>
@@ -139,29 +148,6 @@ const ICONS = {
       <Rect x={9} y={8} width={22} height={25} rx={3} stroke={N} strokeWidth={2.2} />
       <Path d="M14 15L16 17L20 13" stroke={G} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
       <Path d="M14 23H26M14 28H22" stroke={N} strokeWidth={2} strokeLinecap="round" />
-    </>,
-  ],
-  boost: [
-    40,
-    <>
-      <Path d="M20 7L24 17H33L26 23L29 33L20 27L11 33L14 23L7 17H16L20 7Z" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
-      <Circle cx={20} cy={20} r={3} fill={G} />
-    </>,
-  ],
-  shield: [
-    40,
-    <>
-      <Path d="M20 6L31 10V19C31 26 26 31 20 34C14 31 9 26 9 19V10L20 6Z" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
-      <Path d="M15 20L18.5 23.5L25 16" stroke={G} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
-    </>,
-  ],
-  cash: [
-    40,
-    <>
-      <Rect x={6} y={12} width={28} height={17} rx={3} stroke={N} strokeWidth={2.2} />
-      <Circle cx={20} cy={20.5} r={4} stroke={G} strokeWidth={2.2} />
-      <Circle cx={11} cy={20.5} r={1.5} fill={G} />
-      <Circle cx={29} cy={20.5} r={1.5} fill={G} />
     </>,
   ],
 };

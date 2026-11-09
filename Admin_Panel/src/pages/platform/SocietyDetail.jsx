@@ -14,7 +14,8 @@ import { MetricCard } from '../../components/Charts.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { SetupLinkModal } from '../../components/SetupLinkModal.jsx';
 
-function PaymentsConfig({ society, onSaved }) {
+/** Online payment settings; `readOnly` (Societies · view only) shows the values without Save. */
+function PaymentsConfig({ society, onSaved, readOnly = false }) {
   const toast = useToast();
   const [v, setV] = useState({});
   const [error, setError] = useState(null);
@@ -34,10 +35,10 @@ function PaymentsConfig({ society, onSaved }) {
       <p className="text-xs leading-relaxed text-gray-600">
         Residents can pay maintenance online only when (1) the server has payment-gateway keys configured, and (2) you have verified where this society’s money settles and enabled it here. Until then residents see “online payment unavailable” and the society records payments offline.
       </p>
-      <Toggle label="Enable online collection" description="Turn on only after verifying the society’s bank / Razorpay account." checked={v.onlineEnabled} onChange={(x) => (setV({ ...v, onlineEnabled: x }), setError(null))} />
+      <Toggle label="Enable online collection" description="Turn on only after verifying the society’s bank / Razorpay account." checked={v.onlineEnabled} disabled={readOnly} onChange={(x) => (setV({ ...v, onlineEnabled: x }), setError(null))} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Settlement mode">
-          <Select value={v.settlementMode || 'none'} onChange={(e) => (setV({ ...v, settlementMode: e.target.value }), setError(null))}>
+          <Select value={v.settlementMode || 'none'} disabled={readOnly} onChange={(e) => (setV({ ...v, settlementMode: e.target.value }), setError(null))}>
             <option value="none">None (not verified)</option>
             <option value="razorpay_route">Razorpay Route (linked account)</option>
             <option value="society_merchant">Society’s own merchant account</option>
@@ -45,7 +46,7 @@ function PaymentsConfig({ society, onSaved }) {
         </Field>
         {v.settlementMode === 'razorpay_route' && (
           <Field label="Linked account id">
-            <Input value={v.linkedAccountId || ''} onChange={(e) => (setV({ ...v, linkedAccountId: e.target.value }), setError(null))} placeholder="acc_XXXXXXXXXXXX" className="font-mono" />
+            <Input value={v.linkedAccountId || ''} readOnly={readOnly} onChange={(e) => (setV({ ...v, linkedAccountId: e.target.value }), setError(null))} placeholder="acc_XXXXXXXXXXXX" className="font-mono" />
           </Field>
         )}
       </div>
@@ -55,11 +56,13 @@ function PaymentsConfig({ society, onSaved }) {
           Last changed {formatRelative(society.payments.verifiedAt)}
         </p>
       )}
-      <div className="flex justify-end">
-        <Button type="submit" loading={busy} icon="fa-regular fa-floppy-disk">
-          Save payment settings
-        </Button>
-      </div>
+      {!readOnly && (
+        <div className="flex justify-end">
+          <Button type="submit" loading={busy} icon="fa-regular fa-floppy-disk">
+            Save payment settings
+          </Button>
+        </div>
+      )}
     </form>
   );
 }
@@ -131,7 +134,8 @@ export default function SocietyDetail() {
   const { id } = useParams();
   const toast = useToast();
   const navigate = useNavigate();
-  const { enterSociety } = useAuth();
+  const { enterSociety, canManage } = useAuth();
+  const manage = canManage('societies'); // view-only: no suspend / payments / add admin / reset link / workspace
   const q = useQuery(() => api.get(`/platform/societies/${id}`), [id]);
   const [modal, setModal] = useState(null);
   const [suspend, suspending] = useAction((reason) => api.post(`/platform/societies/${id}/suspend`, { reason }), { toast, success: 'Society suspended', onDone: () => (setModal(null), q.reload()) });
@@ -148,8 +152,8 @@ export default function SocietyDetail() {
           { key: 'role', header: 'Role', render: (st) => <Badge tone={st.role === 'admin' ? 'purple' : 'info'}>{ROLE_LABELS[st.role]}</Badge> },
           { key: 'status', header: 'Access', render: (st) => (st.status === 'disabled' ? <Badge status="disabled" /> : st.user?.status === 'pending_setup' ? <Badge tone="warning">Setup pending</Badge> : st.user?.status === 'disabled' ? <Badge status="disabled">Account disabled</Badge> : <Badge status="active" />) },
           { key: 'last', header: 'Last sign-in', render: (st) => (st.user?.lastLoginAt ? formatRelative(st.user.lastLoginAt) : <span className="text-gray-300">Never</span>) },
-          { key: 'actions', header: '', align: 'right', render: (st) => <Button size="xs" variant="outline" icon="fa-solid fa-key" onClick={() => setModal({ type: 'reset', item: st })}>Reset link</Button> },
-        ];
+          manage && { key: 'actions', header: '', align: 'right', render: (st) => <Button size="xs" variant="outline" icon="fa-solid fa-key" onClick={() => setModal({ type: 'reset', item: st })}>Reset link</Button> },
+        ].filter(Boolean);
         return (
           <div>
             <PageHeader
@@ -161,6 +165,7 @@ export default function SocietyDetail() {
               title={s.name}
               subtitle={`${s.code} · ${[s.area, s.city, s.state].filter(Boolean).join(', ')}`}
               actions={
+                manage && (
                 <>
                   <Button icon="fa-solid fa-arrow-right-to-bracket" onClick={() => open()} data-testid="open-workspace">
                     Open workspace
@@ -178,6 +183,7 @@ export default function SocietyDetail() {
                     </Button>
                   )}
                 </>
+                )
               }
             />
             {s.status === 'suspended' && (
@@ -191,6 +197,7 @@ export default function SocietyDetail() {
               <MetricCard tone="green" label="Collected" value={formatINR(fs.collectedPaise || 0, { whole: true })} title={formatINR(fs.collectedPaise || 0)} footer={fs.billedPaise ? `${Math.round(((fs.collectedPaise || 0) / fs.billedPaise) * 100)}% of billed` : 'Nothing billed yet'} footerIcon="fa-solid fa-chart-line" icon="fa-solid fa-indian-rupee-sign" />
               <MetricCard tone="orange" label="Outstanding" value={formatINR((fs.billedPaise || 0) - (fs.collectedPaise || 0), { whole: true })} footer={`Billed ${formatINR(fs.billedPaise || 0, { whole: true })}`} footerIcon="fa-solid fa-hourglass-half" icon="fa-solid fa-hourglass-half" />
             </div>
+            {manage && (
             <Card title="Manage this society" className="mb-6">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" data-testid="workspace-tiles">
                 {WORKSPACE.map(([section, label, icon]) => (
@@ -204,13 +211,14 @@ export default function SocietyDetail() {
               </div>
               <p className="mt-3 text-[11px] text-brand-muted">Opens the same screens the society admin uses, for this society. Every change asks you for a reason and is logged.</p>
             </Card>
+            )}
             <div className="grid grid-cols-12 gap-6">
               <div className="col-span-12 space-y-6 xl:col-span-8">
                 <Card title="Staff" padded={false}>
-                  <DataTable columns={staffCols} rows={s.staff} empty={<EmptyState compact icon="fa-solid fa-user-shield" title="No staff" action={<Button size="xs" onClick={() => setModal({ type: 'admin' })}>Add admin</Button>} />} />
+                  <DataTable columns={staffCols} rows={s.staff} empty={<EmptyState compact icon="fa-solid fa-user-shield" title="No staff" action={manage ? <Button size="xs" onClick={() => setModal({ type: 'admin' })}>Add admin</Button> : undefined} />} />
                 </Card>
                 <Card title="Online payments">
-                  <PaymentsConfig society={s} onSaved={q.reload} />
+                  <PaymentsConfig society={s} onSaved={q.reload} readOnly={!manage} />
                 </Card>
               </div>
               <Card className="col-span-12 self-start xl:col-span-4" title="Profile">

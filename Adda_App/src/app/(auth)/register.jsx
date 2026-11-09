@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthHeading, AuthShell, FormError, LineField, OutlineAuthButton, PrimaryAuthButton, Steps, StrengthMeter } from '../../components/AuthKit';
 import { T } from '../../components/Text';
-import { AccountTypePicker } from '../../components/AccountTypePicker';
 import { Hint } from '../../components/ui';
 import { useAuth } from '../../context/auth';
 import { useAction } from '../../hooks/useApi';
@@ -12,14 +11,11 @@ import { isValidPhone, nameError, passwordError, passwordStrength, PHONE_INPUT_M
 import { colors } from '../../theme';
 
 /**
- * Two-step sign-up: 1) account type + name + mobile, 2) password.
- * Members then join their society; vendors go to KYC (vendors never join a society).
+ * Two-step member sign-up: 1) name + mobile, 2) password; then the member joins their society.
+ * Vendors sign up on the NIVASA Vendor Panel website, so no account type is sent.
  */
 export default function Register() {
   const { register } = useAuth();
-  const params = useLocalSearchParams();
-  const [accountType, setAccountType] = useState(params.type === 'vendor' ? 'vendor' : 'member');
-  const vendor = accountType === 'vendor';
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({ name: '', phone: '', password: '', confirm: '' });
   const [agree, setAgree] = useState(false);
@@ -49,7 +45,7 @@ export default function Register() {
     if (e.password || e.confirm) return;
     if (!agree) return setFormError('Please accept the terms to continue.');
     try {
-      await register({ ...form, accountType });
+      await register(form);
     } catch (err) {
       if (err.code === 'ACCOUNT_EXISTS') {
         setFormError('An account with this mobile number already exists. Sign in instead.');
@@ -82,11 +78,11 @@ export default function Register() {
           </T>
         </Pressable>
       ) : null}
-      <AuthHeading lead="Create your" strong={vendor ? 'vendor account' : 'account'} sub={step === 1 ? 'Choose how you’ll use NIVASA.' : 'Choose a password to secure it.'} />
+      <AuthHeading lead="Create your" strong="account" sub={step === 1 ? 'Tell us who you are — your society office will verify it.' : 'Choose a password to secure it.'} />
       <View style={{ marginTop: 18, marginBottom: 20 }}>
         <Steps total={3} current={step} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-          {['Your details', 'Password', vendor ? 'Verify (KYC)' : 'Join society'].map((l, i) => (
+          {['Your details', 'Password', 'Join society'].map((l, i) => (
             <T key={l} weight={i + 1 === step ? 'bold' : 'medium'} size={11.5} color={i + 1 <= step ? colors.navy : '#94a3b8'} style={{ width: 90, textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center' }}>
               {l}
             </T>
@@ -96,8 +92,7 @@ export default function Register() {
 
       {step === 1 ? (
         <View style={{ gap: 16 }}>
-          <AccountTypePicker value={accountType} onChange={setAccountType} />
-          <LineField label="Full name" value={form.name} onChangeText={set('name')} placeholder={vendor ? 'As on your PAN card' : 'As per your society records'} autoCapitalize="words" autoComplete="name" textContentType="name" error={errors.name} returnKeyType="next" maxLength={120} />
+          <LineField label="Full name" value={form.name} onChangeText={set('name')} placeholder="As per your society records" autoCapitalize="words" autoComplete="name" textContentType="name" error={errors.name} returnKeyType="next" maxLength={120} />
           <LineField
             label="Mobile number"
             prefix="+91"
@@ -127,9 +122,7 @@ export default function Register() {
               {agree ? <Ionicons name="checkmark" size={15} color={colors.white} /> : null}
             </View>
             <T size={13} color="#64748b" style={{ flex: 1 }}>
-              {vendor
-                ? 'I confirm these details are mine and agree that NIVASA may verify my identity (KYC) before I can list properties or services.'
-                : 'I confirm these details are mine and agree that my society may verify them before approving access.'}
+              I confirm these details are mine and agree that my society may verify them before approving access.
             </T>
           </Pressable>
           <FormError message={formError} />

@@ -555,7 +555,7 @@ async function main() {
   ok('badge drops to 0 after moderation', ov.counts.pendingListings === 0, ov.counts.pendingListings);
 
   head('Vendor accounts (no society access, platform-moderated listings)');
-  const vReg = await expect('vendor register', 201, 'POST', '/auth/resident/register', { body: { phone: randPhone(), name: `Sharma Services ${RUN}`, password: PASSWORD, accountType: 'vendor' } });
+  const vReg = await expect('vendor register', 201, 'POST', '/auth/vendor/register', { body: { phone: randPhone(), name: `Sharma Services ${RUN}`, password: PASSWORD } });
   ok('account type vendor, KYC not submitted', vReg?.user?.accountType === 'vendor' && vReg?.vendor?.kycStatus === 'not_submitted', { user: vReg?.user, vendor: vReg?.vendor });
   const V = vReg.accessToken;
   const vJoin = await expect('vendor requests membership', 403, 'POST', '/memberships', { token: V, body: { societyId, buildingId: bA._id, flatNumber: 'A-201', residentType: 'owner' } });

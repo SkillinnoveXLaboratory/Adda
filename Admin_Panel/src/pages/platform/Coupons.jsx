@@ -9,6 +9,7 @@ import { Field, Input, SearchInput, Textarea, Toggle } from '../../components/Fo
 import { Drawer, Modal } from '../../components/Modal.jsx';
 import { SocietyPicker } from '../../components/SocietyPicker.jsx';
 import { useToast } from '../../components/Toast.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 
 const EMPTY = {
   '': ['No coupons yet', 'Create a coupon to give members a flat discount on vendor services. NIVASA pays the discount to the vendor.'],
@@ -131,7 +132,7 @@ function CouponModal({ open, coupon, onClose, onSaved }) {
 }
 
 /** Coupon numbers + every redemption (member, masked mobile, booking). */
-function CouponDrawer({ couponId, onClose, onEdit }) {
+function CouponDrawer({ couponId, onClose, onEdit, readOnly }) {
   const q = useQuery(() => (couponId ? api.get(`/platform/coupons/${couponId}`) : Promise.resolve(null)), [couponId]);
   const c = q.data;
   return (
@@ -141,7 +142,8 @@ function CouponDrawer({ couponId, onClose, onEdit }) {
       title={c ? c.code : 'Coupon'}
       subtitle={c ? `${formatINR(c.discountPaise)} off · created ${formatDate(c.createdAt)}` : ''}
       footer={
-        c && (
+        c &&
+        !readOnly && (
           <Button variant="secondary" icon="fa-regular fa-pen-to-square" onClick={() => onEdit(c)}>
             Edit coupon
           </Button>
@@ -299,6 +301,8 @@ function DeleteCouponDialog({ coupon, onClose, onDeleted, onTurnOff, turningOff 
 /** Platform coupons: flat discounts on vendor services, funded by NIVASA. GET/POST/PATCH/DELETE /platform/coupons */
 export default function Coupons() {
   const toast = useToast();
+  const { canManage } = useAuth();
+  const manage = canManage('coupons'); // create, edit, on/off, delete
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
   const q = useDebounced(search.trim());
@@ -364,7 +368,7 @@ export default function Coupons() {
     },
     { key: 'expires', header: 'Last day', render: (c) => (c.expiresAt ? <span className="whitespace-nowrap">{formatDate(c.expiresAt)}</span> : <span className="text-gray-300">No expiry</span>) },
     { key: 'status', header: 'Status', render: (c) => <CouponStatus status={c.status} /> },
-    {
+    manage && {
       key: 'actions',
       header: '',
       align: 'right',
@@ -380,7 +384,7 @@ export default function Coupons() {
         </div>
       ),
     },
-  ];
+  ].filter(Boolean);
   const [emptyTitle, emptyMessage] = q ? ['No coupons match', 'Try a different code.'] : EMPTY[status];
   return (
     <div>
@@ -388,9 +392,11 @@ export default function Coupons() {
         title="Coupons"
         subtitle="Flat discounts members apply when booking vendor services. NIVASA funds every discount — it is credited to the vendor when the booking is settled."
         actions={
-          <Button icon="fa-solid fa-plus" onClick={() => setModal({})} data-testid="coupon-new">
-            New coupon
-          </Button>
+          manage && (
+            <Button icon="fa-solid fa-plus" onClick={() => setModal({})} data-testid="coupon-new">
+              New coupon
+            </Button>
+          )
         }
       />
       <Tabs
@@ -417,12 +423,12 @@ export default function Coupons() {
           onRetry={list.reload}
           dim={list.reloading}
           onRowClick={(c) => setView(c._id)}
-          empty={<EmptyState compact icon="fa-solid fa-ticket" title={emptyTitle} message={emptyMessage} action={!q && status === '' ? <Button icon="fa-solid fa-plus" onClick={() => setModal({})}>New coupon</Button> : undefined} />}
+          empty={<EmptyState compact icon="fa-solid fa-ticket" title={emptyTitle} message={emptyMessage} action={manage && !q && status === '' ? <Button icon="fa-solid fa-plus" onClick={() => setModal({})}>New coupon</Button> : undefined} />}
         />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
       <CouponModal open={Boolean(modal)} coupon={modal?.coupon} onClose={() => setModal(null)} onSaved={list.reload} />
-      <CouponDrawer couponId={view} onClose={() => setView(null)} onEdit={(c) => (setView(null), setModal({ coupon: c }))} />
+      <CouponDrawer couponId={view} onClose={() => setView(null)} onEdit={(c) => (setView(null), setModal({ coupon: c }))} readOnly={!manage} />
       <DeleteCouponDialog
         coupon={removing}
         onClose={() => setRemoving(null)}

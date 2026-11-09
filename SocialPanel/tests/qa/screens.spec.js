@@ -63,7 +63,7 @@ test('society admin pages', async ({ page }) => {
     ['society-complaints', '/society/complaints'],
     ['society-announcements', '/society/announcements'],
     ['society-community', '/society/community'],
-    ['society-polls', '/society/community?tab=polls'],
+    ['society-voting', '/society/voting?status=all'],
     ['society-facilities', '/society/facilities'],
     ['society-facility-list', '/society/facilities?tab=facilities'],
     ['society-services', '/society/services'],

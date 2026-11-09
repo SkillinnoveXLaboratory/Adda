@@ -105,7 +105,7 @@ export function ListingDetailView({ item, kind, onChanged }) {
       </View>
 
       {item.mine && item.moderationStatus === 'pending' ? <Hint tone="amber" icon="hourglass-outline">Your listing is being reviewed by moderators. It becomes visible to others once approved.</Hint> : null}
-      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}. Edit it to resubmit.`}</Hint> : null}
+      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}.${kind === 'marketplace' ? ' Edit it to resubmit.' : ''}`}</Hint> : null}
 
       <Card>
         {kind === 'property' ? (
@@ -139,10 +139,8 @@ export function ListingDetailView({ item, kind, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
-          {kind === 'property' && item.verifiedVendor && item.moderationStatus === 'approved' && item.availability === 'available' ? (
-            <Button title="Boost this property" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'property', id: item._id } })} />
-          ) : null}
-          <Button title="Edit listing" icon="create-outline" onPress={() => router.push({ pathname: `${base}/edit`, params: { id: item._id } })} />
+          {/* Members edit their marketplace items; property listings are managed by vendors on the Vendor Panel. */}
+          {kind === 'marketplace' ? <Button title="Edit listing" icon="create-outline" onPress={() => router.push({ pathname: '/marketplace/edit', params: { id: item._id } })} /> : null}
           {kind === 'property' ? (
             item.availability === 'available' ? (
               <Button title={item.listingType === 'rent' ? 'Mark as rented' : 'Mark as sold'} variant="alt" onPress={() => setAvailability(item.listingType === 'rent' ? 'rented' : 'sold')} />

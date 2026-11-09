@@ -49,9 +49,9 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (email, password) => {
     const res = await api.post('/auth/admin/login', { email, password }, { auth: false });
     // The platform owner works in the Master Admin panel: end the session the server just opened and say where to go.
-    if (res?.user?.platformRole === 'super_admin') {
+    if (res?.user?.platformRole === 'super_admin' || res?.user?.platformRole === 'sub_admin') {
       await api.post('/auth/logout', {}, { auth: false, headers: { Authorization: `Bearer ${res.accessToken}` } }).catch(() => {});
-      throw new ApiError(403, 'USE_MASTER_PANEL', 'The platform owner signs in at the Master Admin panel, not here.');
+      throw new ApiError(403, 'USE_MASTER_PANEL', 'Platform owner and sub-admin accounts sign in at the Master Admin panel, not here.');
     }
     const societyId = resolveSocietyId(res.staffRoles);
     session.set({ accessToken: res.accessToken, refreshToken: res.refreshToken, user: res.user, staffRoles: res.staffRoles || [], memberships: res.memberships || [], societyId }, 'login');

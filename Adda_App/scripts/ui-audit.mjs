@@ -5,14 +5,16 @@
  *
  *   node scripts/ui-audit.mjs [--build] [--widths=360,390,412]
  *
- * 1. Seeds a society + an approved resident with a bill, a notice, an amenity and a property listing (local API only).
+ * 1. Seeds a society + an approved resident with a bill, a notice, an amenity, society votes (open / voted / ended with a
+ *    result), one extra voter per width, and a KYC-verified vendor's property + service (local API only).
  * 2. Builds the web bundle (EXPO_PUBLIC_API_URL = local API) when --build is given or dist-web/ is missing.
  * 3. Serves it on http://localhost:8099 and, at each phone width, signs in through the UI and opens every screen.
  *
  * Per screen (fails the run):  page crash / error screen · horizontal overflow · a control outside the screen ·
  *                              tap target smaller than 24 px · the bottom tab bar covering content it shouldn't.
  * Warnings (listed):           tap targets under 44 px (hitSlop may cover them on device) · console errors.
- * Workflows: every bottom tab, every home module card and Society tile must open its screen.
+ * Workflows: every bottom tab, every home module card and Society tile must open its screen; a member votes through the
+ *            Voting screen; a vendor account signing in to the app sees the "use the Vendor Panel" message.
  * Screenshots → qa-screenshots/<width>/<screen>.png (gitignored).
  */
 import { spawnSync } from 'node:child_process';
@@ -96,8 +98,9 @@ async function seed() {
   await call('POST', '/society/announcements', { token: A, body: { title: 'Water tank cleaning on Sunday', body: 'Water supply will be off from 10 AM to 1 PM.', category: 'maintenance', important: true } });
   await call('POST', '/society/facilities', { token: A, body: { name: 'Clubhouse', description: 'Party hall', icon: 'home', feePaise: 50000, openTime: '09:00', closeTime: '21:00', slotMinutes: 60, maxAdvanceDays: 30, requiresApproval: false, active: true } });
   // Properties and services come from a KYC-approved vendor (members can't list them).
+  // Vendors sign up on the Vendor Panel website (vendor session), never in the app.
   const vendorPhone = randPhone();
-  const v = await call('POST', '/auth/resident/register', { body: { phone: vendorPhone, name: 'Ravi Sharma', password: PASSWORD, accountType: 'vendor' } });
+  const v = await call('POST', '/auth/vendor/register', { body: { phone: vendorPhone, name: 'Ravi Sharma', businessName: 'Sharma Home Services', password: PASSWORD } });
   const V = v.accessToken;
   const docs = [];
   for (let i = 0; i < 3; i += 1) docs.push((await uploadPng(V, 'kyc'))._id);
@@ -115,7 +118,27 @@ async function seed() {
   await call('PATCH', '/me', { token: r.accessToken, body: { city: 'Pune' } });
   await call('POST', `/service-offers/${offer._id}/bookings`, { token: r.accessToken, body: { preferredDate: istDay(2), preferredTime: '11:00', address: 'A-101, Green Valley Residency, Baner', note: 'Kitchen tap leaking' } });
   const inv = await call('GET', '/resident/invoices', { token: r.accessToken });
-  return { phone, vendorPhone, invoiceId: inv.items?.[0]?._id, propertyId: prop._id, offerId: offer._id };
+
+  // Society votes: one open (nobody here has voted), one open the member voted on, one ended with a published result.
+  const inHours = (h) => new Date(Date.now() + h * 3600_000).toISOString();
+  const pOpen = await call('POST', '/society/polls', { token: A, body: { question: 'Should we install solar panels on the roof?', description: 'The cost is shared by all flats. Vote Interested if you want the committee to get quotes.', options: ['Interested', 'Not interested'], closesAt: inHours(52) } });
+  const pVoted = await call('POST', '/society/polls', { token: A, body: { question: 'Repaint the building exterior this winter?', options: ['Yes, this winter', 'Next year', 'Need more details'], closesAt: inHours(20) } });
+  await call('POST', `/resident/polls/${pVoted._id}/vote`, { token: r.accessToken, body: { optionId: pVoted.options[0]._id } });
+  const pEnded = await call('POST', '/society/polls', { token: A, body: { question: 'Hold the Diwali celebration on the clubhouse lawn?', description: 'Last year it was in the parking area.', options: ['Interested', 'Not interested'] } });
+  await call('POST', `/resident/polls/${pEnded._id}/vote`, { token: r.accessToken, body: { optionId: pEnded.options[0]._id } });
+  // One voter per width so every width sees the open vote before and after voting.
+  const voters = [];
+  for (let i = 0; i < WIDTHS.length; i += 1) {
+    const vp = randPhone();
+    const vr = await call('POST', '/auth/resident/register', { body: { phone: vp, name: `Voter ${i + 1}`, password: PASSWORD } });
+    const vm = await call('POST', '/memberships', { token: vr.accessToken, body: { societyId: sid, buildingId: b._id, flatNumber: flats.items[(i + 1) % flats.items.length].number, residentType: 'tenant' } });
+    await call('POST', `/society/memberships/${vm._id}/approve`, { token: A, body: {} });
+    if (i === 0) await call('POST', `/resident/polls/${pEnded._id}/vote`, { token: vr.accessToken, body: { optionId: pEnded.options[1]._id } });
+    voters.push(vp);
+  }
+  await call('POST', `/society/polls/${pEnded._id}/close`, { token: A });
+  await call('PUT', `/society/polls/${pEnded._id}/result`, { token: A, body: { result: 'Approved — the celebration will be on the clubhouse lawn on 1 Nov, 6 PM.' } });
+  return { phone, vendorPhone, voters, invoiceId: inv.items?.[0]?._id, propertyId: prop._id, offerId: offer._id, polls: { open: pOpen._id, voted: pVoted._id, ended: pEnded._id } };
 }
 
 function build() {
@@ -239,13 +262,8 @@ async function main() {
     ['memberships', '/memberships'], ['edit-profile', '/edit-profile'], ['change-password', '/change-password'], ['service-bookings', '/service-bookings'],
     ...(data.invoiceId ? [['invoice', `/invoice/${data.invoiceId}`]] : []),
     ['property-detail', `/properties/${data.propertyId}`],
-    ['services-list', '/offers'], ['service-detail', `/offers/${data.offerId}`], ['service-book', `/offers/book?id=${data.offerId}`], ['my-services', '/my-listings?tab=service'],
-  ];
-  // Vendor area (signed in through the Member / Vendor switch on the login screen).
-  const vendorScreens = [
-    ['v-dashboard', '/dashboard'], ['v-listings', '/vendor-listings'], ['v-listings-services', '/vendor-listings?tab=service'], ['v-bookings', '/vendor-bookings'], ['v-ads', '/ads'], ['v-profile', '/vendor-profile'],
-    ['v-kyc', '/kyc'], ['v-boost', `/boost?kind=property&id=${data.propertyId}`], ['v-property-new', '/properties/edit'], ['v-property-edit', `/properties/edit?id=${data.propertyId}`],
-    ['v-service-new', '/offers/edit'], ['v-service-edit', `/offers/edit?id=${data.offerId}`], ['v-property-detail', `/properties/${data.propertyId}`], ['v-service-detail', `/offers/${data.offerId}`], ['v-notifications', '/notifications'],
+    ['services-list', '/offers'], ['service-detail', `/offers/${data.offerId}`], ['service-book', `/offers/book?id=${data.offerId}`],
+    ['polls', '/polls'], ['poll-open', `/polls/${data.polls.open}`], ['poll-voted', `/polls/${data.polls.voted}`], ['poll-ended', `/polls/${data.polls.ended}`],
   ];
   try {
     for (const w of WIDTHS) {
@@ -288,32 +306,56 @@ async function main() {
       if (await page.getByText('Sell', { exact: true }).isVisible().catch(() => false)) fail(w, 'properties', 'members must not see the Sell tab');
       await go(page, `http://localhost:${PORT}/services`);
       await expectRoute(page, w, 'services → provider card', () => page.getByRole('button', { name: /Leak repair/ }).first().click(), /\/offers\/[a-f0-9]{24}$/);
-      for (const href of ['bills', 'payments', 'complaints', 'notices', 'community', 'facilities', 'bookings', 'service-requests', 'marketplace']) {
+      for (const href of ['bills', 'payments', 'complaints', 'notices', 'community', 'facilities', 'bookings', 'service-requests', 'marketplace', 'polls']) {
         await go(page, `http://localhost:${PORT}/manage`);
         await expectRoute(page, w, `society tile ${href}`, () => page.getByTestId(`module-${href}`).click(), new RegExp(`/${href}$`));
       }
       await ctx.close();
 
+      // Voting: a fresh member votes on the open vote through the UI (confirm dialog → "You voted").
+      const pctx = await browser.newContext({ viewport: { width: w, height: Math.round(w * 2.05) }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      const ppage = await pctx.newPage();
+      ppage.on('console', (m) => m.type() === 'error' && !/Failed to load resource|401|403|404/.test(m.text()) && warn(w, 'console', m.text().slice(0, 160)));
+      const dialogs = [];
+      ppage.on('dialog', (d) => {
+        dialogs.push(d.message());
+        d.accept().catch(() => {});
+      });
+      await go(ppage, `http://localhost:${PORT}/login`);
+      await ppage.getByLabel('Mobile number').fill(data.voters[WIDTHS.indexOf(w)]);
+      await ppage.getByLabel('Password', { exact: true }).fill(PASSWORD);
+      await ppage.getByRole('button', { name: 'Login', exact: true }).click();
+      await ppage.waitForURL(/\/home$/, { timeout: 15000 });
+      await check(ppage, w, 'polls-before-vote', '/polls');
+      try {
+        const card = ppage.getByTestId(`poll-${data.polls.open}`);
+        await card.getByRole('button', { name: 'Vote Interested', exact: true }).click();
+        await card.getByText(/^You voted: Interested$/).waitFor({ timeout: 8000 });
+        if (!dialogs.some((m) => /can't change your vote/i.test(m))) fail(w, 'polls', 'no "You can\'t change your vote" confirmation before voting');
+        if (!(await card.getByText(/^\d+ votes? · \d+(\.\d)?%$/).first().isVisible())) fail(w, 'polls', 'result bars (votes · %) not shown after voting');
+      } catch (e) {
+        fail(w, 'polls', `voting through the UI failed: ${String(e.message).split('\n')[0].slice(0, 160)}`);
+      }
+      await check(ppage, w, 'polls-after-vote');
+      await check(ppage, w, 'poll-ended-result', `/polls/${data.polls.ended}`);
+      if (!(await ppage.getByTestId('poll-result').isVisible().catch(() => false))) fail(w, 'poll-ended-result', 'published result box not shown');
+      await pctx.close();
+
+      // Vendors use the Vendor Panel website: signing in here shows that message (with a link) and stores no session.
       const vctx = await browser.newContext({ viewport: { width: w, height: Math.round(w * 2.05) }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
       const vpage = await vctx.newPage();
-      vpage.on('console', (m) => m.type() === 'error' && !/Failed to load resource|401|404/.test(m.text()) && warn(w, 'console', m.text().slice(0, 160)));
       await go(vpage, `http://localhost:${PORT}/login`);
-      await vpage.getByTestId('login-as-vendor').click();
+      if (await vpage.getByText('Vendor', { exact: true }).isVisible().catch(() => false)) fail(w, 'login', 'Member / Vendor switch still shown');
       await vpage.getByLabel('Mobile number').fill(data.vendorPhone);
       await vpage.getByLabel('Password', { exact: true }).fill(PASSWORD);
       await vpage.getByRole('button', { name: 'Login', exact: true }).click();
-      await vpage.waitForURL(/\/dashboard$/, { timeout: 15000 });
-      for (const [name, url] of vendorScreens) {
-        await check(vpage, w, name, url);
-        process.stdout.write('v');
-      }
-      await go(vpage, `http://localhost:${PORT}/dashboard`);
-      for (const [tab, re] of [['vendor-listings', /\/vendor-listings$/], ['vendor-bookings', /\/vendor-bookings$/], ['ads', /\/ads$/], ['vendor-profile', /\/vendor-profile$/], ['dashboard', /\/dashboard$/]]) {
-        await expectRoute(vpage, w, `vendor tab ${tab}`, () => vpage.getByTestId(`tab-${tab}`).click(), re);
-      }
-      // Vendors never reach society screens.
-      await go(vpage, `http://localhost:${PORT}/manage`);
-      if (/\/manage$/.test(new URL(vpage.url()).pathname)) fail(w, 'vendor', 'vendor could open the society hub');
+      const shown = await vpage.getByText(/Vendor accounts now use the NIVASA Vendor Panel website/).first().waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
+      if (!shown) fail(w, 'login-vendor', 'vendor sign-in did not show the Vendor Panel message');
+      if (!(await vpage.getByRole('link', { name: /Open the Vendor Panel/ }).isVisible().catch(() => false))) fail(w, 'login-vendor', 'no Vendor Panel link (config.vendorPanelUrl is set on the audit API?)');
+      await check(vpage, w, 'login-vendor');
+      if (!/\/login$/.test(new URL(vpage.url()).pathname)) fail(w, 'login-vendor', `vendor got past sign-in (at ${new URL(vpage.url()).pathname})`);
+      const stored = await vpage.evaluate(() => Object.keys(sessionStorage).filter((k) => /token/i.test(k) && sessionStorage.getItem(k)));
+      if (stored.length) fail(w, 'login-vendor', `a session was stored for the vendor: ${stored.join(', ')}`);
       await vctx.close();
     }
   } finally {

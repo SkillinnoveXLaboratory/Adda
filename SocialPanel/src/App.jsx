@@ -21,6 +21,7 @@ const SStructure = page(() => import('./pages/society/Structure.jsx'));
 const SComplaints = page(() => import('./pages/society/Complaints.jsx'));
 const SAnnouncements = page(() => import('./pages/society/Announcements.jsx'));
 const SCommunity = page(() => import('./pages/society/Community.jsx'));
+const SVoting = page(() => import('./pages/society/Voting.jsx'));
 const SFacilities = page(() => import('./pages/society/Facilities.jsx'));
 const SServices = page(() => import('./pages/society/Services.jsx'));
 const SListings = page(() => import('./pages/society/Listings.jsx'));
@@ -81,6 +82,7 @@ export default function App() {
               <Route path="complaints" element={<Lazy el={SComplaints} perm="complaints" />} />
               <Route path="announcements" element={<Lazy el={SAnnouncements} />} />
               <Route path="community" element={<Lazy el={SCommunity} perm="community" />} />
+              <Route path="voting" element={<Lazy el={SVoting} perm="community" />} />
               <Route path="facilities" element={<Lazy el={SFacilities} perm="facilities" />} />
               <Route path="services" element={<Lazy el={SServices} perm="services" />} />
               <Route path="listings" element={<Lazy el={SListings} perm="listings" />} />

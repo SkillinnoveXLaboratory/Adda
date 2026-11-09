@@ -80,6 +80,8 @@ const schema = z.object({
   // Interim resident sign-in with phone + password while no SMS provider is configured.
   // Phone numbers are NOT verified in this mode; society admins' membership approval is the identity check.
   RESIDENT_PASSWORD_LOGIN: bool(false),
+  // Public address of the Vendor Panel website (shown to vendors who open the member app). Optional.
+  VENDOR_PANEL_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   // Sign-in attempts allowed per IP per 15 minutes (accounts also lock after 5 wrong passwords).
   LOGIN_RATE_LIMIT: z.coerce.number().int().min(5).max(10000).default(20),
   // Public form submissions (society applications, document uploads) allowed per IP per hour.
@@ -187,7 +189,9 @@ const userSchema = new Schema$6(
     email: { type: String, trim: true, lowercase: true, maxlength: 200 },
     passwordHash: { type: String, select: false },
     // Platform role only. Society-level roles live in SocietyStaff / SocietyMembership.
-    platformRole: { type: String, enum: ['user', 'super_admin'], default: 'user' },
+    platformRole: { type: String, enum: ['user', 'super_admin', 'sub_admin'], default: 'user' },
+    // sub_admin only: what this Master Admin helper may see / do (see PLATFORM_PERMISSIONS). The owner has everything.
+    platformPermissions: { type: [String], default: undefined },
     // member: residents & customers (societies, bookings). vendor: lists properties/services, never joins a society.
     accountType: { type: String, enum: ['member', 'vendor'], default: 'member' },
     status: { type: String, enum: ['active', 'pending_setup', 'disabled'], default: 'active' },
@@ -225,7 +229,8 @@ const User = model$6('User', userSchema);
 const sessionSchema = new Schema$6(
   {
     user: { type: ObjectId$6, ref: 'User', required: true, index: true },
-    client: { type: String, enum: ['mobile', 'panel'], required: true },
+    // mobile = member app, panel = SocialPanel / Master Admin, vendor = Vendor Panel website.
+    client: { type: String, enum: ['mobile', 'panel', 'vendor'], required: true },
     refreshTokenHash: { type: String, required: true },
     previousTokenHash: String,
     deviceName: { type: String, maxlength: 120 },
@@ -557,6 +562,8 @@ const pollSchema = new Schema$4(
   {
     society: { type: ObjectId$4, ref: 'Society', required: true },
     question: { type: String, required: true, trim: true, maxlength: 300 },
+    // Voting: an optional note under the question, and the result staff publish after the vote ends.
+    description: { type: String, trim: true, maxlength: 2000 },
     options: [
       {
         label: { type: String, required: true, trim: true, maxlength: 120 },
@@ -566,6 +573,11 @@ const pollSchema = new Schema$4(
     closesAt: Date,
     status: { type: String, enum: ['open', 'closed', 'removed'], default: 'open' },
     totalVotes: { type: Number, default: 0 },
+    closedAt: Date,
+    closedBy: { type: ObjectId$4, ref: 'User' },
+    result: { type: String, trim: true, maxlength: 2000 },
+    resultPublishedAt: Date,
+    resultBy: { type: ObjectId$4, ref: 'User' },
     createdBy: { type: ObjectId$4, ref: 'User', required: true },
   },
   { timestamps: true },
@@ -578,6 +590,7 @@ const pollVoteSchema = new Schema$4(
     poll: { type: ObjectId$4, ref: 'Poll', required: true },
     society: { type: ObjectId$4, ref: 'Society', required: true },
     user: { type: ObjectId$4, ref: 'User', required: true },
+    flat: { type: ObjectId$4, ref: 'Flat' },
     option: { type: ObjectId$4, required: true },
   },
   { timestamps: true },
@@ -1157,7 +1170,7 @@ const notificationSchema = new Schema(
     society: { type: ObjectId, ref: 'Society' },
     type: {
       type: String,
-      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad'],
+      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad', 'poll'],
       required: true,
     },
     title: { type: String, required: true, maxlength: 160 },
@@ -1549,6 +1562,10 @@ async function rotateRefreshToken(refreshToken) {
   if (session.revokedAt || session.expiresAt < new Date()) throw unauthorized('Session expired. Please sign in again.', 'SESSION_INVALID');
   const user = await User.findById(session.user);
   if (!user || user.status === 'disabled') throw unauthorized('This account has been disabled.', 'ACCOUNT_DISABLED');
+  if (user.accountType === 'vendor' && session.client !== 'vendor') {
+    await UserSession.updateOne({ _id: session._id }, { revokedAt: new Date(), revokedReason: 'vendor_app_retired' });
+    throw unauthorized(vendorUsePanel().message, 'VENDOR_USE_PANEL');
+  }
 
   const next = randomToken(48);
   const updated = await UserSession.findOneAndUpdate(
@@ -1823,7 +1840,7 @@ async function profilePayload(user) {
   const accountType = u.accountType || 'member';
   const vendor = accountType === 'vendor' ? await VendorProfile.findOne({ user: u._id }).select('businessName kycStatus kycNote submittedAt reviewedAt').lean() : null;
   return {
-    user: { _id: u._id, name: u.name, phone: u.phone, email: u.email, city: u.city, platformRole: u.platformRole, accountType, status: u.status, settings: u.settings, createdAt: u.createdAt },
+    user: { _id: u._id, name: u.name, phone: u.phone, email: u.email, city: u.city, platformRole: u.platformRole, ...(u.platformRole === 'sub_admin' ? { platformPermissions: normalizePlatformPermissions(u.platformPermissions) } : {}), accountType, status: u.status, settings: u.settings, createdAt: u.createdAt },
     vendor: accountType === 'vendor' ? { businessName: vendor?.businessName || null, kycStatus: vendor?.kycStatus || 'not_submitted', kycNote: vendor?.kycNote || null, submittedAt: vendor?.submittedAt || null, reviewedAt: vendor?.reviewedAt || null, kycAvailable: !!env.kycKey } : null,
     needsProfile: !u.name,
     memberships: memberships.map((m) => ({ _id: m._id, status: m.status, residentType: m.residentType, decisionReason: m.decisionReason, society: m.society, building: m.building, flat: m.flat, createdAt: m.createdAt, decidedAt: m.decidedAt })),
@@ -1840,6 +1857,7 @@ async function requestOtp(req, res) {
 async function verifyOtp(req, res) {
   const { phone, challengeId, code, deviceName } = req.valid.body;
   const { user, isNew } = await verifyOtp$1(phone, challengeId, code);
+  if (user.accountType === 'vendor') throw vendorUsePanel();
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.json({ ...tokens, isNewUser: isNew, ...(await profilePayload(user)) });
 }
@@ -1860,17 +1878,39 @@ async function logoutAll(req, res) {
   res.json({ ok: true });
 }
 
+const vendorUsePanel = () =>
+  new AppError(403, 'VENDOR_USE_PANEL', `Vendor accounts use the NIVASA Vendor Panel website${env.VENDOR_PANEL_URL ? ` (${env.VENDOR_PANEL_URL})` : ''}, not the app.`);
+
 /** Interim resident sign-up / sign-in without SMS (enabled by RESIDENT_PASSWORD_LOGIN). */
 async function residentRegister(req, res) {
   const { phone, name, password, accountType, deviceName } = req.valid.body;
+  if (accountType === 'vendor') throw vendorUsePanel();
   const user = await registerResidentWithPassword(phone, name, password, accountType);
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.status(201).json({ ...tokens, isNewUser: true, ...(await profilePayload(user)) });
 }
 
+async function vendorRegister(req, res) {
+  const { phone, name, businessName, password } = req.valid.body;
+  validatePasswordStrength(password);
+  if (await User.exists({ phone })) throw conflict('An account with this mobile number already exists. Sign in instead.', 'ACCOUNT_EXISTS');
+  const user = await User.create({ phone, name, accountType: 'vendor', passwordHash: await hashPassword(password) });
+  await VendorProfile.create({ user: user._id, businessName: businessName || name });
+  const tokens = await createSession(user, 'vendor', meta(req));
+  res.status(201).json({ ...tokens, isNewUser: true, ...(await profilePayload(user)) });
+}
+
+async function vendorLogin(req, res) {
+  const user = await passwordLogin({ phone: req.valid.body.phone }, req.valid.body.password, 'Incorrect mobile number or password.');
+  if (user.accountType !== 'vendor') throw new AppError(403, 'NOT_VENDOR', 'This is a member account. Members use the NIVASA app. To sell or offer services, create a vendor account with another mobile number.');
+  const tokens = await createSession(user, 'vendor', meta(req));
+  res.json({ ...tokens, isNewUser: false, ...(await profilePayload(user)) });
+}
+
 async function residentLogin(req, res) {
   const { phone, password, deviceName } = req.valid.body;
   const user = await residentPasswordLogin(phone, password);
+  if (user.accountType === 'vendor') throw vendorUsePanel();
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.json({ ...tokens, isNewUser: false, ...(await profilePayload(user)) });
 }
@@ -1879,7 +1919,7 @@ async function residentLogin(req, res) {
 async function adminLogin$1(req, res) {
   const user = await adminPasswordLogin(req.valid.body.email, req.valid.body.password);
   const isStaff = await SocietyStaff.exists({ user: user._id, status: 'active' });
-  if (user.platformRole !== 'super_admin' && !isStaff) throw forbidden('This account has no management access.', 'NO_PANEL_ACCESS');
+  if (!isPlatformAdmin(user) && !isStaff) throw forbidden('This account has no management access.', 'NO_PANEL_ACCESS');
   const tokens = await createSession(user, 'panel', meta(req));
   req.user = user;
   await audit(req, { action: 'auth.panel_login', targetType: 'User', targetId: user._id });
@@ -2654,6 +2694,7 @@ async function config(_req, res) {
     environment: env.NODE_ENV,
     otp: otpStatus$1(),
     passwordLogin: { available: env.RESIDENT_PASSWORD_LOGIN },
+    vendorPanelUrl: env.VENDOR_PANEL_URL || null,
     payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: env.paymentsConfigured ? 'razorpay' : null },
     uploads: { maxMb: env.MAX_UPLOAD_MB, types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] },
     ads: { dayOptions },
@@ -3457,7 +3498,11 @@ async function listPolls(req, res) {
       return {
         _id: p._id,
         question: p.question,
+        description: p.description || null,
+        result: p.result || null,
+        resultPublishedAt: p.resultPublishedAt || null,
         closesAt: p.closesAt,
+        closedAt: p.closedAt || null,
         open,
         myVote: mine[String(p._id)] || null,
         totalVotes: voted || !open ? p.totalVotes : undefined,
@@ -3469,15 +3514,37 @@ async function listPolls(req, res) {
   });
 }
 
+async function getPollResident(req, res) {
+  const p = await Poll.findOne({ _id: req.valid.params.id, society: req.societyId, status: { $in: ['open', 'closed'] } }).lean();
+  if (!p) throw notFound('Vote');
+  const v = await PollVote.findOne({ poll: p._id, user: req.user._id }).select('option').lean();
+  const open = p.status === 'open' && (!p.closesAt || p.closesAt > new Date());
+  const show = Boolean(v) || !open;
+  res.json({
+    _id: p._id,
+    question: p.question,
+    description: p.description || null,
+    result: p.result || null,
+    resultPublishedAt: p.resultPublishedAt || null,
+    closesAt: p.closesAt,
+    closedAt: p.closedAt || null,
+    open,
+    myVote: v ? String(v.option) : null,
+    totalVotes: show ? p.totalVotes : undefined,
+    options: p.options.map((o) => ({ _id: o._id, label: o.label, votes: show ? o.votes : undefined })),
+    createdAt: p.createdAt,
+  });
+}
+
 async function votePoll(req, res) {
   const { optionId } = req.valid.body;
   await mongoose.connection.transaction(async (session) => {
     const poll = await Poll.findOne({ _id: req.valid.params.id, society: req.societyId }).session(session);
     if (!poll) throw notFound('Poll');
-    if (poll.status !== 'open' || (poll.closesAt && poll.closesAt < new Date())) throw badRequest('This poll is closed');
+    if (poll.status !== 'open' || (poll.closesAt && poll.closesAt < new Date())) throw new AppError(409, 'POLL_ENDED', 'Voting has ended.');
     if (!poll.options.some((o) => String(o._id) === optionId)) throw badRequest('Invalid option');
     try {
-      await PollVote.create([{ poll: poll._id, society: req.societyId, user: req.user._id, option: optionId }], { session });
+      await PollVote.create([{ poll: poll._id, society: req.societyId, user: req.user._id, flat: req.membership.flat, option: optionId }], { session });
     } catch (err) {
       if (err.code === 11000) throw conflict('You have already voted in this poll', 'ALREADY_VOTED');
       throw err;
@@ -3649,6 +3716,7 @@ async function authenticate(req, _res, next) {
     throw unauthorized('Session has ended. Please sign in again.', 'SESSION_INVALID');
   }
   if (!user || user.status === 'disabled') throw unauthorized('This account has been disabled.', 'ACCOUNT_DISABLED');
+  if (user.accountType === 'vendor' && session.client !== 'vendor') throw unauthorized(vendorUsePanel().message, 'VENDOR_USE_PANEL');
   req.user = user;
   req.session = session;
   req.client = session.client;
@@ -3660,11 +3728,63 @@ async function optionalAuth(req, res, next) {
   return authenticate(req, res, next);
 }
 
+/**
+ * Master Admin permissions. Each area has "view" (see the page) and, unless view-only, "manage" (use its buttons).
+ * "manage" always includes "view". The platform owner (super_admin) has every permission; sub-admins only what the
+ * owner ticked. Sub-admin management itself is owner-only and is never grantable.
+ */
+const PLATFORM_PERMISSIONS = [
+  { area: 'dashboard', label: 'Dashboard', viewOnly: true, view: 'See platform totals and insights' },
+  { area: 'applications', label: 'Society applications', view: 'See applications', manage: 'Approve, reject, mark under review' },
+  { area: 'societies', label: 'Societies', view: 'See societies and open their workspace (read only)', manage: 'Suspend / reactivate, payments, add society admins, act inside a society' },
+  { area: 'members', label: 'Members directory', view: 'See members and profiles (masked)', manage: 'Reveal details, set password, sign out, change mobile, move membership' },
+  { area: 'accounts', label: 'Accounts', view: 'See all accounts', manage: 'Enable / disable accounts' },
+  { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors and KYC (masked)', manage: 'Approve / reject KYC, reveal KYC details' },
+  { area: 'service_bookings', label: 'Service bookings', viewOnly: true, view: 'See service bookings and settlement' },
+  { area: 'listings', label: 'Listings moderation', view: 'See listings', manage: 'Approve, reject, remove listings' },
+  { area: 'ads', label: 'Ads (boosts)', view: 'See boost requests', manage: 'Approve / reject boosts' },
+  { area: 'coupons', label: 'Coupons', view: 'See coupons and who used them', manage: 'Create, edit, turn on/off, delete coupons' },
+  { area: 'reports', label: 'Content reports', viewOnly: true, view: 'See reported content' },
+  { area: 'payments', label: 'Payments monitor', viewOnly: true, view: 'See payments' },
+  { area: 'audit', label: 'Audit log', viewOnly: true, view: 'See the audit log' },
+  { area: 'categories', label: 'Categories', view: 'See categories', manage: 'Add, edit, delete categories' },
+  { area: 'announcements', label: 'Platform notices', view: 'See notices', manage: 'Publish and archive notices' },
+  { area: 'settings', label: 'Settings', view: 'See settings', manage: 'Change settings (commission, approvals, …)' },
+];
+const PLATFORM_PERMISSION_KEYS = new Set(PLATFORM_PERMISSIONS.flatMap((p) => (p.viewOnly ? [`${p.area}.view`] : [`${p.area}.view`, `${p.area}.manage`])));
+
+/** Unique, known permissions; every "x.manage" also grants "x.view". Sorted in catalogue order. */
+function normalizePlatformPermissions(list) {
+  const set = new Set();
+  for (const p of list || []) {
+    if (!PLATFORM_PERMISSION_KEYS.has(p)) continue;
+    set.add(p);
+    if (p.endsWith('.manage')) set.add(p.replace(/\.manage$/, '.view'));
+  }
+  return [...PLATFORM_PERMISSION_KEYS].filter((k) => set.has(k));
+}
+
+const isPlatformAdmin = (user) => user?.platformRole === 'super_admin' || user?.platformRole === 'sub_admin';
+const platformAllows = (user, perm) => user?.platformRole === 'super_admin' || (user?.platformRole === 'sub_admin' && normalizePlatformPermissions(user.platformPermissions).includes(perm));
+
+/** Any Master Admin user (owner or sub-admin) signed in through a panel. Per-route permissions follow (`can`). */
 function requireSuperAdmin(req, _res, next) {
-  if (req.user?.platformRole !== 'super_admin' || req.client !== 'panel') throw forbidden('Super admin access required');
-  req.actorRole = 'super_admin';
+  if (!isPlatformAdmin(req.user) || req.client !== 'panel') throw forbidden('Super admin access required');
+  req.actorRole = req.user.platformRole;
   next();
 }
+
+/** Owner-only routes (sub-admin management). */
+function requireOwner(req, _res, next) {
+  if (req.user?.platformRole !== 'super_admin') throw forbidden('Only the platform owner can do this.', 'OWNER_ONLY');
+  next();
+}
+
+/** Route guard: the caller must hold this Master Admin permission. */
+const requirePlatformPerm = (perm) => (req, _res, next) => {
+  if (!platformAllows(req.user, perm)) throw forbidden("You don't have permission for this. Ask the platform owner.", 'PERMISSION_DENIED');
+  next();
+};
 
 /**
  * Resolves the resident's society context from an APPROVED membership owned by the caller.
@@ -3708,7 +3828,7 @@ const hasPermission = (role, perm) => {
 function requireStaff(permission = 'society.read') {
   return async (req, _res, next) => {
     // Platform owner acting on a society: context was set (and authorised) by loadPlatformSociety.
-    if (req.platformSociety === true && req.user?.platformRole === 'super_admin') return next();
+    if (req.platformSociety === true && isPlatformAdmin(req.user)) return next();
     if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts have no society access.', 'VENDOR_NO_SOCIETY');
     if (req.client !== 'panel') throw forbidden('Use the SocialPanel to access management features');
     const requested = req.get('x-society-id');
@@ -3880,6 +4000,8 @@ const refresh = z.object({ refreshToken: z.string().min(20).max(200) });
 const adminLogin = z.object({ email, password: z.string().min(1).max(200) });
 const changePasswordBody = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(10).max(200) });
 const residentRegisterBody = z.object({ phone, name: text(120, 2), password: z.string().min(10).max(200), accountType: z.enum(['member', 'vendor']).default('member'), deviceName: optText(120) });
+const vendorRegisterBody = z.object({ phone, name: text(120, 2), businessName: optText(120), password: z.string().min(10).max(200) });
+const vendorLoginBody = z.object({ phone, password: z.string().min(1).max(200) });
 const residentLoginBody = z.object({ phone, password: z.string().min(1).max(200), deviceName: optText(120) });
 const passwordSetup = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(200) });
 const passwordResetRequest = z.object({ email });
@@ -3924,7 +4046,13 @@ const serviceRequestUpdate = z.object({ status: z.enum(['accepted', 'scheduled',
 const postCreate = z.object({ body: text(4000, 2), media: mediaIds });
 const commentCreate = z.object({ body: text(2000, 1) });
 const reportCreate = z.object({ reason: text(500, 3) });
-const pollCreate = z.object({ question: text(300, 5), options: z.array(text(120)).min(2).max(8), closesAt: z.string().datetime({ offset: true }).optional() });
+const pollCloseTime = z
+  .string()
+  .datetime({ offset: true })
+  .refine((v) => new Date(v).getTime() > Date.now() + 4 * 60_000, 'Voting must stay open for at least 5 minutes')
+  .refine((v) => new Date(v).getTime() < Date.now() + 366 * 86400_000, 'Voting can stay open for up to a year');
+const pollCreate = z.object({ question: text(300, 5), description: optText(2000), options: z.array(text(120)).min(2).max(8), closesAt: pollCloseTime.optional() });
+const pollResult = z.object({ result: text(2000, 3) }).strict();
 const pollVote = z.object({ optionId: objectId });
 const announcementCreate = z.object({ title: text(160, 3), body: text(8000, 5), category: z.enum(['general', 'maintenance', 'meeting', 'event', 'finance', 'security', 'emergency']).default('general'), important: z.boolean().default(false), eventDate: z.string().datetime({ offset: true }).optional(), attachments: mediaIds });
 const moderation = z.object({ action: z.enum(['hide', 'remove', 'restore']), note: optText(500) });
@@ -4121,6 +4249,8 @@ router.post('/auth/refresh', refreshLimiter, validate({ body: refresh }), refres
 router.post('/auth/admin/login', loginLimiter, validate({ body: adminLogin }), adminLogin$1);
 router.post('/auth/resident/register', loginLimiter, validate({ body: residentRegisterBody }), residentRegister);
 router.post('/auth/resident/login', loginLimiter, validate({ body: residentLoginBody }), residentLogin);
+router.post('/auth/vendor/register', loginLimiter, validate({ body: vendorRegisterBody }), vendorRegister);
+router.post('/auth/vendor/login', loginLimiter, validate({ body: vendorLoginBody }), vendorLogin);
 router.post('/auth/password/setup', loginLimiter, validate({ body: passwordSetup }), completePasswordSetup);
 router.post('/auth/password/reset-request', loginLimiter, validate({ body: passwordResetRequest }), requestPasswordReset);
 router.post('/auth/logout', authenticate, logout);
@@ -4512,7 +4642,7 @@ const adDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: 
 const AD_FILTERS = ['pending', 'active', 'expired', 'rejected', 'cancelled', 'all'];
 
 function requireVendor(req, _res, next) {
-  if (req.user.accountType !== 'vendor') throw new AppError(403, 'VENDOR_ONLY', 'This is available to vendor accounts only.');
+  if (req.user.accountType !== 'vendor' || req.client !== 'vendor') throw new AppError(403, 'VENDOR_ONLY', 'This is available to vendor accounts only.');
   next();
 }
 
@@ -5232,6 +5362,7 @@ residentRouter.post('/posts/:id/report', id$1, validate({ body: reportCreate }),
 residentRouter.post('/comments/:id/report', id$1, validate({ body: reportCreate }), reportPostOrComment('comment'));
 
 residentRouter.get('/polls', listPolls);
+residentRouter.get('/polls/:id', id$1, getPollResident);
 residentRouter.post('/polls/:id/vote', id$1, validate({ body: pollVote }), votePoll);
 
 residentRouter.get('/service-categories', serviceCategories);
@@ -5523,7 +5654,7 @@ async function listStaff(req, res) {
 async function inviteStaff(req, res) {
   const { name, email, phone, role, title } = req.valid.body;
   let user = await User.findOne({ email });
-  if (user?.platformRole === 'super_admin') throw badRequest('Platform administrators cannot be added as society staff');
+  if (isPlatformAdmin(user)) throw badRequest('Platform administrators cannot be added as society staff');
   if (!user) user = await User.create({ name, email, phone: phone || undefined, status: 'pending_setup' });
   const exists = await SocietyStaff.findOne({ society: sid$1(req), user: user._id });
   if (exists) throw conflict('This person is already on the staff list');
@@ -5756,24 +5887,82 @@ async function dismissReport(req, res) {
   res.json(r);
 }
 
+/** Ended = closed by staff, or its closing time has passed. */
+const pollEnded = (p, now = new Date()) => p.status !== 'open' || Boolean(p.closesAt && new Date(p.closesAt) <= now);
+const eligibleVoters = async (societyId) => (await SocietyMembership.distinct('user', { society: societyId, status: 'approved' })).length;
+const pct = (n, of) => (of ? Math.round((n * 1000) / of) / 10 : 0);
+
+/** Staff view of a vote: counts, share of votes per option, turnout. */
+const presentPollStaff = (p, eligible) => ({
+  ...p,
+  ended: pollEnded(p),
+  options: p.options.map((o) => ({ ...o, percent: pct(o.votes || 0, p.totalVotes || 0) })),
+  eligibleVoters: eligible,
+  turnoutPercent: pct(p.totalVotes || 0, eligible),
+});
+
 async function listPollsAdmin(req, res) {
-  res.json(await pagedFind(Poll, { society: sid$1(req), status: { $ne: 'removed' } }, req.valid.query, { populate: { path: 'createdBy', select: 'name' } }));
+  const now = new Date();
+  const filter = { society: sid$1(req), status: { $ne: 'removed' } };
+  if (req.valid.query.status === 'open') Object.assign(filter, { status: 'open', $or: [{ closesAt: null }, { closesAt: { $gt: now } }] });
+  if (req.valid.query.status === 'ended') Object.assign(filter, { $or: [{ status: 'closed' }, { status: 'open', closesAt: { $lte: now } }] });
+  const [data, eligible] = await Promise.all([pagedFind(Poll, filter, req.valid.query, { populate: { path: 'createdBy', select: 'name' } }), eligibleVoters(sid$1(req))]);
+  res.json({ ...data, items: data.items.map((p) => presentPollStaff(p, eligible)) });
+}
+
+/** One vote with who voted what (name, flat, option, time). */
+async function getPollAdmin(req, res) {
+  const p = await Poll.findOne({ _id: req.valid.params.id, society: sid$1(req), status: { $ne: 'removed' } }).populate('createdBy', 'name').populate('resultBy', 'name').populate('closedBy', 'name').lean();
+  if (!p) throw notFound('Vote');
+  const [eligible, votes] = await Promise.all([eligibleVoters(sid$1(req)), PollVote.find({ poll: p._id }).sort({ createdAt: -1 }).limit(5000).populate('user', 'name').populate('flat', 'number').lean()]);
+  const label = Object.fromEntries(p.options.map((o) => [String(o._id), o.label]));
+  res.json({
+    ...presentPollStaff(p, eligible),
+    votes: votes.map((v) => ({ _id: v._id, name: v.user?.name || 'Member', flat: v.flat?.number || null, option: String(v.option), optionLabel: label[String(v.option)] || '—', votedAt: v.createdAt })),
+  });
+}
+
+/** Result text, only once the vote has ended. Editing it later is allowed (audited); members are notified once. */
+async function publishPollResult(req, res) {
+  const p = await Poll.findOne({ _id: req.valid.params.id, society: sid$1(req), status: { $ne: 'removed' } });
+  if (!p) throw notFound('Vote');
+  if (!pollEnded(p)) throw conflict('Publish the result after the vote ends (or end it now).', 'POLL_OPEN');
+  const first = !p.resultPublishedAt;
+  p.result = req.valid.body.result;
+  p.resultPublishedAt = new Date();
+  p.resultBy = req.user._id;
+  await p.save();
+  await audit(req, { action: first ? 'poll.result_published' : 'poll.result_updated', targetType: 'Poll', targetId: p._id, summary: p.question });
+  if (first) notifySocietyResidents(sid$1(req), { type: 'poll', title: `Vote result: ${p.question}`.slice(0, 160), body: p.result.slice(0, 140), route: 'Poll', id: p._id }).catch(() => {});
+  await p.populate('resultBy', 'name');
+  res.json(presentPollStaff(p.toObject(), await eligibleVoters(sid$1(req))));
+}
+
+/** Only a vote nobody has voted in can be deleted; otherwise it stays for the records. */
+async function deletePoll(req, res) {
+  const p = await Poll.findOneAndUpdate({ _id: req.valid.params.id, society: sid$1(req), status: { $ne: 'removed' }, totalVotes: 0 }, { status: 'removed' }, { returnDocument: 'after' }).lean();
+  if (!p) {
+    if (!(await Poll.exists({ _id: req.valid.params.id, society: sid$1(req), status: { $ne: 'removed' } }))) throw notFound('Vote');
+    throw conflict('Members have already voted, so this vote is kept for the records. End it instead.', 'POLL_HAS_VOTES');
+  }
+  await audit(req, { action: 'poll.deleted', targetType: 'Poll', targetId: p._id, summary: p.question });
+  res.json({ ok: true });
 }
 
 async function createPoll(req, res) {
-  const { question, options, closesAt } = req.valid.body;
+  const { question, description, options, closesAt } = req.valid.body;
   if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) throw badRequest('Poll options must be unique');
-  const p = await Poll.create({ society: sid$1(req), question, options: options.map((label) => ({ label })), closesAt, createdBy: req.user._id });
+  const p = await Poll.create({ society: sid$1(req), question, description, options: options.map((label) => ({ label })), closesAt, createdBy: req.user._id });
   await audit(req, { action: 'poll.created', targetType: 'Poll', targetId: p._id, summary: question });
-  notifySocietyResidents(sid$1(req), { type: 'community', title: 'New community poll', body: question, route: 'Community' }).catch(() => {});
-  res.status(201).json(p);
+  notifySocietyResidents(sid$1(req), { type: 'poll', title: 'New vote in your society', body: question, route: 'Poll', id: p._id }).catch(() => {});
+  res.status(201).json(presentPollStaff(p.toObject(), await eligibleVoters(sid$1(req))));
 }
 
 async function closePoll(req, res) {
-  const p = await Poll.findOneAndUpdate({ _id: req.valid.params.id, society: sid$1(req), status: 'open' }, { status: 'closed' }, { returnDocument: 'after' });
+  const p = await Poll.findOneAndUpdate({ _id: req.valid.params.id, society: sid$1(req), status: 'open' }, { status: 'closed', closedAt: new Date(), closedBy: req.user._id }, { returnDocument: 'after' }).lean();
   if (!p) throw notFound('Open poll');
   await audit(req, { action: 'poll.closed', targetType: 'Poll', targetId: p._id });
-  res.json(p);
+  res.json(presentPollStaff(p, await eligibleVoters(sid$1(req))));
 }
 
 // ======================= Facilities & bookings =======================
@@ -6117,6 +6306,8 @@ async function report(req, res) {
 }
 
 // ======================= Overview =======================
+const OVERVIEW_COUNT_PERMS = { societies: 'societies.view', suspended: 'societies.view', openComplaints: 'societies.view', pendingRegistrations: 'applications.view', users: 'accounts.view', newUsers30d: 'accounts.view', members: 'members.view', pendingMembers: 'members.view', pendingListings: 'listings.view', openReports: 'reports.view', vendors: 'vendors.view', pendingKyc: 'vendors.view', pendingAds: 'ads.view' };
+
 async function overview(_req, res) {
   const since = new Date(Date.now() - 30 * 86400_000);
   const [societies, suspended, pendingRegistrations, users, newUsers, members, pendingMembers, openComplaints, pendingListings, openReports, payments30, invoiceTotals, vendors, pendingKyc, pendingAds] = await Promise.all([
@@ -6136,11 +6327,20 @@ async function overview(_req, res) {
     VendorProfile.countDocuments({ kycStatus: 'pending' }),
     AdCampaign.countDocuments({ status: 'pending' }),
   ]);
-  res.json({
+  const body = {
     counts: { societies, suspended, pendingRegistrations, users, newUsers30d: newUsers, members, pendingMembers, openComplaints, pendingListings, openReports, vendors, pendingKyc, pendingAds },
     payments30d: payments30.map((p) => ({ channel: p._id.channel, status: p._id.status, totalPaise: p.total, count: p.n })),
     billing: { billedPaise: invoiceTotals[0]?.billed || 0, collectedPaise: invoiceTotals[0]?.collected || 0 },
-  });
+  };
+  // Sidebar badges for sub-admins: drop every number from an area they can't see.
+  if (_req.user.platformRole !== 'super_admin') {
+    for (const [key, perm] of Object.entries(OVERVIEW_COUNT_PERMS)) if (!platformAllows(_req.user, perm)) delete body.counts[key];
+    if (!platformAllows(_req.user, 'payments.view')) {
+      delete body.payments30d;
+      delete body.billing;
+    }
+  }
+  res.json(body);
 }
 
 // ======================= Registrations =======================
@@ -6178,7 +6378,7 @@ async function approveRegistration(req, res) {
     const r = await SocietyRegistration.findOne({ _id: req.valid.params.id, status: { $in: ['submitted', 'under_review'] } }).session(session);
     if (!r) throw badRequest('This application is not awaiting a decision');
     let user = await User.findOne({ email: r.representative.email }).session(session);
-    if (user?.platformRole === 'super_admin') throw badRequest('The representative email belongs to a platform administrator');
+    if (isPlatformAdmin(user)) throw badRequest('The representative email belongs to a platform administrator');
     if (!user) [user] = await User.create([{ name: r.representative.name, email: r.representative.email, status: 'pending_setup' }], { session });
     const [society] = await Society.create(
       [{ name: r.societyName, code: `SOC${shortCode(5)}`, addressLine: r.addressLine, area: r.area, city: r.city, state: r.state, pincode: r.pincode, phone: r.phone, email: r.email, registration: r._id }],
@@ -6259,7 +6459,7 @@ async function addSocietyAdmin(req, res) {
   if (!s) throw notFound('Society');
   const { name, email, phone, role } = req.valid.body;
   let user = await User.findOne({ email });
-  if (user?.platformRole === 'super_admin') throw badRequest('Platform administrators cannot be added as society staff');
+  if (isPlatformAdmin(user)) throw badRequest('Platform administrators cannot be added as society staff');
   if (!user) user = await User.create({ name, email, phone: phone || undefined, status: 'pending_setup' });
   if (await SocietyStaff.exists({ society: s._id, user: user._id })) throw conflict('Already a staff member of this society');
   const staff = await SocietyStaff.create({ society: s._id, user: user._id, role, addedBy: req.user._id });
@@ -6287,7 +6487,7 @@ async function listUsers(req, res) {
   const q = req.valid.query;
   const filter = {};
   if (q.status) filter.status = q.status;
-  if (req.query.role === 'super_admin' || req.query.role === 'user') filter.platformRole = req.query.role;
+  if (['super_admin', 'sub_admin', 'user'].includes(req.query.role)) filter.platformRole = req.query.role;
   if (req.query.accountType === 'member' || req.query.accountType === 'vendor') filter.accountType = req.query.accountType;
   if (q.q) filter.$or = [{ name: new RegExp(escapeRegex(q.q), 'i') }, { phone: new RegExp(escapeRegex(q.q)) }, { email: new RegExp(escapeRegex(q.q), 'i') }];
   res.json(maskPersonalData(await pagedFind(User, filter, q, { sortable: ['createdAt', 'lastLoginAt', 'name'] })));
@@ -6300,6 +6500,7 @@ async function setUserStatus(req, res) {
   const u = await User.findById(req.valid.params.id);
   if (!u) throw notFound('User');
   if (u.platformRole === 'super_admin') throw forbidden('Super admin accounts are managed from the server console');
+  if (u.platformRole === 'sub_admin') throw forbidden('Sub-admin accounts are managed on the Sub-admins page');
   if (status === 'active' && u.status === 'pending_setup') throw badRequest('This account has not completed setup');
   u.status = status;
   u.disabledReason = status === 'disabled' ? req.valid.body?.reason : undefined;
@@ -6511,6 +6712,9 @@ societyRouter.post('/content-reports/:id/dismiss', can('community'), id, dismiss
 societyRouter.get('/polls', can('community'), page, listPollsAdmin);
 societyRouter.post('/polls', can('community'), validate({ body: pollCreate }), createPoll);
 societyRouter.post('/polls/:id/close', can('community'), id, closePoll);
+societyRouter.get('/polls/:id', can('community'), id, getPollAdmin);
+societyRouter.put('/polls/:id/result', can('community'), id, validate({ body: pollResult }), publishPollResult);
+societyRouter.delete('/polls/:id', can('community'), id, deletePoll);
 
 societyRouter.get('/facilities', can('facilities'), listFacilitiesAdmin);
 societyRouter.post('/facilities', can('facilities'), validate({ body: facilityUpsert }), createFacility);
@@ -6600,10 +6804,12 @@ const readActionReason = (req) => {
  * Responses are passed through the personal-data mask.
  */
 async function loadPlatformSociety(req, res, next) {
+  const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+  // Permission first, so a sub-admin without access learns nothing about which societies exist.
+  if (!platformAllows(req.user, write ? 'societies.manage' : 'societies.view')) throw forbidden("You don't have permission for this. Ask the platform owner.", 'PERMISSION_DENIED');
   if (!isObjectId(req.params.sid)) throw badRequest('Invalid society id');
   const society = await Society.findById(req.params.sid).lean();
   if (!society) throw notFound('Society');
-  const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
   const why = write ? readActionReason(req) : undefined;
   req.platformSociety = true;
   req.society = society;
@@ -6704,7 +6910,7 @@ const notSelfOrOwner = async (req) => {
   if (String(req.valid.params.id) === String(req.user._id)) throw forbidden('Use your own account settings for your account');
   const u = await User.findById(req.valid.params.id);
   if (!u) throw notFound('User');
-  if (u.platformRole === 'super_admin') throw forbidden('Platform administrator accounts cannot be changed here');
+  if (isPlatformAdmin(u)) throw forbidden('Platform administrator accounts cannot be changed here');
   return u;
 };
 
@@ -6825,71 +7031,143 @@ const reasonedPassword = z.object({ password: z.string().min(10).max(200), reaso
 const reasonedPhone = z.object({ phone, reason: text(500, 3) });
 const membershipMove = z.object({ flatId: objectId, residentType: z.enum(['owner', 'tenant', 'family']).optional(), reason: text(500, 3) });
 
+const subAdminPermissions = z.array(z.string().max(40)).max(60).transform(normalizePlatformPermissions);
+const subAdminCreate = z.object({ name: text(120, 2), email, password: z.string().min(10).max(200), permissions: subAdminPermissions });
+const subAdminUpdate = z.object({ name: text(120, 2).optional(), permissions: subAdminPermissions.optional() }).refine((b) => b.name !== undefined || b.permissions !== undefined, 'Nothing to change');
+const subAdminStatus = z.object({ status: z.enum(['active', 'disabled']) });
+const subAdminPassword = z.object({ password: z.string().min(10).max(200) });
+
+const presentSubAdmin = (u) => ({ _id: u._id, name: u.name, email: u.email, status: u.status, permissions: normalizePlatformPermissions(u.platformPermissions), lastLoginAt: u.lastLoginAt || null, createdAt: u.createdAt });
+
+async function findSubAdmin(id) {
+  const u = await User.findOne({ _id: id, platformRole: 'sub_admin' });
+  if (!u) throw notFound('Sub-admin');
+  return u;
+}
+
+async function listSubAdmins(_req, res) {
+  const items = await User.find({ platformRole: 'sub_admin' }).sort({ createdAt: -1 }).lean();
+  res.json({ items: items.map(presentSubAdmin), catalogue: PLATFORM_PERMISSIONS });
+}
+
+async function createSubAdmin(req, res) {
+  const { name, email: mail, password, permissions } = req.valid.body;
+  if (!permissions.length) throw badRequest('Tick at least one permission');
+  validatePasswordStrength(password);
+  if (await User.exists({ email: mail })) throw conflict('This email already has an account. Use a different email for the sub-admin.', 'EMAIL_TAKEN');
+  const u = await User.create({ name, email: mail, passwordHash: await hashPassword(password), platformRole: 'sub_admin', platformPermissions: permissions, status: 'active' });
+  await audit(req, { action: 'platform.subadmin_created', targetType: 'User', targetId: u._id, summary: `${mail} · ${permissions.join(', ')}` });
+  res.status(201).json(presentSubAdmin(u));
+}
+
+async function updateSubAdmin(req, res) {
+  const u = await findSubAdmin(req.valid.params.id);
+  const { name, permissions } = req.valid.body;
+  if (permissions && !permissions.length) throw badRequest('Tick at least one permission (or disable the sub-admin)');
+  if (name !== undefined) u.name = name;
+  if (permissions) u.platformPermissions = permissions;
+  await u.save();
+  await audit(req, { action: 'platform.subadmin_updated', targetType: 'User', targetId: u._id, summary: permissions ? permissions.join(', ') : 'name' });
+  res.json(presentSubAdmin(u));
+}
+
+async function setSubAdminStatus(req, res) {
+  const u = await findSubAdmin(req.valid.params.id);
+  u.status = req.valid.body.status;
+  await u.save();
+  if (u.status === 'disabled') await revokeAllSessions(u._id, 'account_disabled');
+  await audit(req, { action: `platform.subadmin_${u.status === 'disabled' ? 'disabled' : 'enabled'}`, targetType: 'User', targetId: u._id });
+  res.json(presentSubAdmin(u));
+}
+
+async function setSubAdminPassword(req, res) {
+  const u = await findSubAdmin(req.valid.params.id);
+  validatePasswordStrength(req.valid.body.password);
+  const withHash = await User.findById(u._id).select('+passwordHash');
+  withHash.passwordHash = await hashPassword(req.valid.body.password);
+  withHash.passwordChangedAt = new Date();
+  withHash.failedLoginCount = 0;
+  withHash.lockedUntil = undefined;
+  await withHash.save();
+  await revokeAllSessions(u._id, 'admin_reset');
+  await audit(req, { action: 'platform.subadmin_password_set', targetType: 'User', targetId: u._id });
+  res.json({ ok: true });
+}
+
 /** Super Admin routes. */
 const platformRouter = Router();
 platformRouter.use(authenticate, requireSuperAdmin);
 
-platformRouter.get('/overview', overview);
-platformRouter.get('/overview/insights', masterOverview);
+// Every route names the Master Admin permission it needs (owner: all; sub-admins: what the owner ticked).
+platformRouter.get('/overview', overview); // badge counts, filtered to the caller's permissions
+platformRouter.get('/overview/insights', requirePlatformPerm('dashboard.view'), masterOverview);
 // Society 360°: every society-admin endpoint, for the society in the URL (reason header required for writes).
+// Permission (societies.view for reads, societies.manage for writes) is checked in loadPlatformSociety.
 platformRouter.use('/societies/:sid/manage', loadPlatformSociety, societyRouter);
-platformRouter.get('/members', page, listMembers);
-platformRouter.get('/users/:id/profile', id, getUserProfile);
-platformRouter.post('/users/:id/reveal', id, reason, revealUser);
-platformRouter.post('/users/:id/password', id, validate({ body: reasonedPassword }), setUserPassword);
-platformRouter.post('/users/:id/sign-out-all', id, reason, signOutUserEverywhere);
-platformRouter.post('/users/:id/phone', id, validate({ body: reasonedPhone }), changeUserPhone);
-platformRouter.post('/memberships/:id/move', id, validate({ body: membershipMove }), moveMembership);
-platformRouter.get('/society-registrations', page, listRegistrations);
-platformRouter.get('/society-registrations/:id', id, getRegistration);
-platformRouter.post('/society-registrations/:id/review', id, markUnderReview);
-platformRouter.post('/society-registrations/:id/approve', id, validate({ body: decision }), approveRegistration);
-platformRouter.post('/society-registrations/:id/reject', id, reason, rejectRegistration);
+platformRouter.get('/members', requirePlatformPerm('members.view'), page, listMembers);
+platformRouter.get('/users/:id/profile', requirePlatformPerm('members.view'), id, getUserProfile);
+platformRouter.post('/users/:id/reveal', requirePlatformPerm('members.manage'), id, reason, revealUser);
+platformRouter.post('/users/:id/password', requirePlatformPerm('members.manage'), id, validate({ body: reasonedPassword }), setUserPassword);
+platformRouter.post('/users/:id/sign-out-all', requirePlatformPerm('members.manage'), id, reason, signOutUserEverywhere);
+platformRouter.post('/users/:id/phone', requirePlatformPerm('members.manage'), id, validate({ body: reasonedPhone }), changeUserPhone);
+platformRouter.post('/memberships/:id/move', requirePlatformPerm('members.manage'), id, validate({ body: membershipMove }), moveMembership);
+platformRouter.get('/society-registrations', requirePlatformPerm('applications.view'), page, listRegistrations);
+platformRouter.get('/society-registrations/:id', requirePlatformPerm('applications.view'), id, getRegistration);
+platformRouter.post('/society-registrations/:id/review', requirePlatformPerm('applications.manage'), id, markUnderReview);
+platformRouter.post('/society-registrations/:id/approve', requirePlatformPerm('applications.manage'), id, validate({ body: decision }), approveRegistration);
+platformRouter.post('/society-registrations/:id/reject', requirePlatformPerm('applications.manage'), id, reason, rejectRegistration);
 
-platformRouter.get('/societies', page, listSocieties);
-platformRouter.get('/societies/:id', id, getSociety);
-platformRouter.post('/societies/:id/suspend', id, reason, setSocietyStatus('suspended'));
-platformRouter.post('/societies/:id/reactivate', id, validate({ body: decision }), setSocietyStatus('active'));
-platformRouter.patch('/societies/:id/payments', id, validate({ body: societyPayments }), updateSocietyPayments);
-platformRouter.post('/societies/:id/admins', id, validate({ body: adminCreate }), addSocietyAdmin);
-platformRouter.post('/staff/:id/reset-link', id, issueStaffSetupLink);
+platformRouter.get('/societies', requirePlatformPerm('societies.view'), page, listSocieties);
+platformRouter.get('/societies/:id', requirePlatformPerm('societies.view'), id, getSociety);
+platformRouter.post('/societies/:id/suspend', requirePlatformPerm('societies.manage'), id, reason, setSocietyStatus('suspended'));
+platformRouter.post('/societies/:id/reactivate', requirePlatformPerm('societies.manage'), id, validate({ body: decision }), setSocietyStatus('active'));
+platformRouter.patch('/societies/:id/payments', requirePlatformPerm('societies.manage'), id, validate({ body: societyPayments }), updateSocietyPayments);
+platformRouter.post('/societies/:id/admins', requirePlatformPerm('societies.manage'), id, validate({ body: adminCreate }), addSocietyAdmin);
+platformRouter.post('/staff/:id/reset-link', requirePlatformPerm('societies.manage'), id, issueStaffSetupLink);
 
-platformRouter.get('/users', page, listUsers);
-platformRouter.post('/users/:id/:status', id, validate({ body: decision }), setUserStatus);
+platformRouter.get('/users', requirePlatformPerm('accounts.view'), page, listUsers);
+platformRouter.post('/users/:id/:status', requirePlatformPerm('accounts.manage'), id, validate({ body: decision }), setUserStatus);
 
-platformRouter.get('/listings', page, listAllListings);
-platformRouter.post('/listings/property/:id/moderate', id, validate({ body: listingModeration }), moderateAnyListing('property'));
-platformRouter.post('/listings/marketplace/:id/moderate', id, validate({ body: listingModeration }), moderateAnyListing('marketplace'));
-platformRouter.post('/listings/service/:id/moderate', id, validate({ body: listingModeration }), moderateAnyListing('service'));
-platformRouter.get('/content-reports', page, listAllReports);
+platformRouter.get('/listings', requirePlatformPerm('listings.view'), page, listAllListings);
+platformRouter.post('/listings/property/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('property'));
+platformRouter.post('/listings/marketplace/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('marketplace'));
+platformRouter.post('/listings/service/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('service'));
+platformRouter.get('/content-reports', requirePlatformPerm('reports.view'), page, listAllReports);
 
-platformRouter.get('/categories', listCategories);
-platformRouter.post('/categories', validate({ body: categoryUpsert }), createCategory);
-platformRouter.patch('/categories/:id', id, validate({ body: patchOf(categoryUpsert) }), updateCategory);
-platformRouter.delete('/categories/:id', id, deleteCategory);
+platformRouter.get('/categories', requirePlatformPerm('categories.view'), listCategories);
+platformRouter.post('/categories', requirePlatformPerm('categories.manage'), validate({ body: categoryUpsert }), createCategory);
+platformRouter.patch('/categories/:id', requirePlatformPerm('categories.manage'), id, validate({ body: patchOf(categoryUpsert) }), updateCategory);
+platformRouter.delete('/categories/:id', requirePlatformPerm('categories.manage'), id, deleteCategory);
 
-platformRouter.get('/announcements', page, listPlatformAnnouncements);
-platformRouter.post('/announcements', validate({ body: announcementCreate }), createPlatformAnnouncement);
-platformRouter.post('/announcements/:id/archive', id, archivePlatformAnnouncement);
+platformRouter.get('/announcements', requirePlatformPerm('announcements.view'), page, listPlatformAnnouncements);
+platformRouter.post('/announcements', requirePlatformPerm('announcements.manage'), validate({ body: announcementCreate }), createPlatformAnnouncement);
+platformRouter.post('/announcements/:id/archive', requirePlatformPerm('announcements.manage'), id, archivePlatformAnnouncement);
 
-platformRouter.get('/settings', listSettings);
-platformRouter.put('/settings/:key', validate({ body: platformSetting$1 }), updateSetting);
-platformRouter.get('/audit-logs', page, listAudit);
-platformRouter.get('/payments', page, listPaymentsPlatform);
+platformRouter.get('/settings', requirePlatformPerm('settings.view'), listSettings);
+platformRouter.put('/settings/:key', requirePlatformPerm('settings.manage'), validate({ body: platformSetting$1 }), updateSetting);
+platformRouter.get('/audit-logs', requirePlatformPerm('audit.view'), page, listAudit);
+platformRouter.get('/payments', requirePlatformPerm('payments.view'), page, listPaymentsPlatform);
 
-platformRouter.get('/vendors', page, listVendors);
-platformRouter.get('/vendors/:id', id, getVendor);
-platformRouter.post('/vendors/:id/kyc', id, validate({ body: kycDecision }), decideVendorKyc);
-platformRouter.post('/vendors/:id/reveal', id, reason, revealVendorKyc);
-platformRouter.get('/ads', page, listAdsPlatform);
-platformRouter.get('/ads/:id', id, getAdPlatform);
-platformRouter.post('/ads/:id/review', id, validate({ body: adDecision }), decideAd);
-platformRouter.get('/coupons', page, listCoupons);
-platformRouter.post('/coupons', validate({ body: couponCreate }), createCoupon);
-platformRouter.get('/coupons/:id', id, getCoupon);
-platformRouter.patch('/coupons/:id', id, validate({ body: couponUpdate }), updateCoupon);
-platformRouter.delete('/coupons/:id', id, deleteCoupon);
-platformRouter.get('/service-bookings', page, listServiceBookingsPlatform);
+platformRouter.get('/vendors', requirePlatformPerm('vendors.view'), page, listVendors);
+platformRouter.get('/vendors/:id', requirePlatformPerm('vendors.view'), id, getVendor);
+platformRouter.post('/vendors/:id/kyc', requirePlatformPerm('vendors.manage'), id, validate({ body: kycDecision }), decideVendorKyc);
+platformRouter.post('/vendors/:id/reveal', requirePlatformPerm('vendors.manage'), id, reason, revealVendorKyc);
+platformRouter.get('/ads', requirePlatformPerm('ads.view'), page, listAdsPlatform);
+platformRouter.get('/ads/:id', requirePlatformPerm('ads.view'), id, getAdPlatform);
+platformRouter.post('/ads/:id/review', requirePlatformPerm('ads.manage'), id, validate({ body: adDecision }), decideAd);
+platformRouter.get('/coupons', requirePlatformPerm('coupons.view'), page, listCoupons);
+platformRouter.post('/coupons', requirePlatformPerm('coupons.manage'), validate({ body: couponCreate }), createCoupon);
+platformRouter.get('/coupons/:id', requirePlatformPerm('coupons.view'), id, getCoupon);
+platformRouter.patch('/coupons/:id', requirePlatformPerm('coupons.manage'), id, validate({ body: couponUpdate }), updateCoupon);
+platformRouter.delete('/coupons/:id', requirePlatformPerm('coupons.manage'), id, deleteCoupon);
+platformRouter.get('/service-bookings', requirePlatformPerm('service_bookings.view'), page, listServiceBookingsPlatform);
+
+// Sub-admins: owner only, never grantable.
+platformRouter.get('/subadmins', requireOwner, listSubAdmins);
+platformRouter.post('/subadmins', requireOwner, validate({ body: subAdminCreate }), createSubAdmin);
+platformRouter.patch('/subadmins/:id', requireOwner, id, validate({ body: subAdminUpdate }), updateSubAdmin);
+platformRouter.post('/subadmins/:id/status', requireOwner, id, validate({ body: subAdminStatus }), setSubAdminStatus);
+platformRouter.post('/subadmins/:id/password', requireOwner, id, validate({ body: subAdminPassword }), setSubAdminPassword);
 
 function createApp() {
   const app = express();
@@ -7192,7 +7470,7 @@ async function createSuperAdmin() {
 // ---------------------------------------------------------------------------------- check-secrets
 function checkSecrets() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const clientDirs = ['Adda_App', 'AddaApp', 'SocialPanel', 'Admin_Panel'].map((d) => path.join(root, d)).filter((d) => fs$1.existsSync(d));
+  const clientDirs = ['Adda_App', 'AddaApp', 'SocialPanel', 'Admin_Panel', 'VendorPanel'].map((d) => path.join(root, d)).filter((d) => fs$1.existsSync(d));
   const SKIP = new Set(['node_modules', '.expo', 'android', 'ios', '.git', 'dist']);
   const PATTERNS = [
     [/mongodb(\+srv)?:\/\/[^\s'"]+/i, 'MongoDB connection string'],

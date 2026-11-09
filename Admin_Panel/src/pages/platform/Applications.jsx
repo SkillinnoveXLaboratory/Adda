@@ -9,6 +9,7 @@ import { SearchInput } from '../../components/Form.jsx';
 import { ConfirmDialog, Drawer, Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 
 const TABS = [
   { value: '', label: 'Needs review', icon: 'fa-regular fa-clock' },
@@ -64,6 +65,7 @@ function ApprovedModal({ result, onClose }) {
 
 function ApplicationDrawer({ id, onClose, onChanged }) {
   const toast = useToast();
+  const { canManage } = useAuth();
   const q = useQuery(() => (id ? api.get(`/platform/society-registrations/${id}`) : Promise.resolve(null)), [id]);
   const [modal, setModal] = useState(null);
   const [approved, setApproved] = useState(null);
@@ -82,7 +84,8 @@ function ApplicationDrawer({ id, onClose, onChanged }) {
         subtitle={r ? `${r.referenceCode} · submitted ${formatDateTime(r.submittedAt || r.createdAt)}` : ''}
         width="max-w-2xl"
         footer={
-          pending && (
+          pending &&
+          canManage('applications') && (
             <>
               {r.status === 'submitted' && (
                 <Button variant="outline" icon="fa-regular fa-eye" onClick={() => setModal('review')} data-testid="app-review">

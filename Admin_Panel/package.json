@@ -13,7 +13,8 @@
     "test": "vitest run",
     "api-check": "node scripts/api-check.mjs",
     "e2e": "playwright test",
-    "lint": "eslint src scripts tests"
+    "lint": "eslint src scripts tests",
+    "subadmin-check": "node scripts/subadmin-check.mjs"
   },
   "dependencies": {
     "@fontsource/public-sans": "^5.2.5",

@@ -6,9 +6,11 @@ import { formatDate, formatNumber, plural } from '../../lib/format.js';
 import { Badge, Button, EmptyState, PageHeader, Tabs } from '../../components/ui.jsx';
 import { DataTable, Pagination, Toolbar } from '../../components/DataTable.jsx';
 import { SearchInput } from '../../components/Form.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 
 export default function Societies() {
   const navigate = useNavigate();
+  const { canView } = useAuth();
   const [params] = useSearchParams();
   const [status, setStatus] = useState(params.get('status') || '');
   const [search, setSearch] = useState('');
@@ -25,7 +27,7 @@ export default function Societies() {
   ];
   return (
     <div>
-      <PageHeader title="Societies" subtitle="Every society on Nivasa" actions={<Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>Applications</Button>} />
+      <PageHeader title="Societies" subtitle="Every society on Nivasa" actions={canView('applications') && <Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>Applications</Button>} />
       <Tabs className="mb-4" tabs={[{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'suspended', label: 'Suspended' }]} value={status} onChange={setStatus} />
       <div className="card">
         <Toolbar right={list.data && <span className="text-[11px] text-brand-muted">{plural(list.data.total, 'society', 'societies')}</span>}>

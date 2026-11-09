@@ -143,3 +143,18 @@ describe('api client', () => {
     expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBeUndefined();
   });
 });
+
+describe('api client: permission changes', () => {
+  it('reports a 403 PERMISSION_DENIED (so the profile is re-read) but not other errors', async () => {
+    const store = createSessionStore(memoryStorage());
+    store.set({ accessToken: 'a', refreshToken: 'r'.repeat(30), user: { _id: 'u1' } });
+    const responses = [json(403, { error: { code: 'PERMISSION_DENIED', message: 'No' } }), json(404, { error: { code: 'NOT_FOUND', message: 'Gone' } })];
+    const onPermissionDenied = vi.fn();
+    const api = createApiClient({ origin: 'http://api.test', store, fetchImpl: async () => responses.shift(), onPermissionDenied });
+    await expect(api.get('/platform/settings')).rejects.toMatchObject({ status: 403, code: 'PERMISSION_DENIED' });
+    expect(onPermissionDenied).toHaveBeenCalledTimes(1);
+    await expect(api.get('/platform/vendors/x')).rejects.toMatchObject({ status: 404 });
+    expect(onPermissionDenied).toHaveBeenCalledTimes(1);
+    expect(store.get()).not.toBeNull(); // a permission change never signs the user out
+  });
+});

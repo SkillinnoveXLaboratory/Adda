@@ -3,7 +3,6 @@ import { Dimensions, Image, Linking, Pressable, ScrollView, View } from 'react-n
 import { router, useLocalSearchParams } from 'expo-router';
 import { CategoryIcon } from '../../../components/CategoryIcon';
 import { AsyncView, Badge, Button, Card, DetailHeader, Hint, KeyValue, LoadingList, Screen, T, useGoBack } from '../../../components/ui';
-import { useAuth } from '../../../context/auth';
 import { useToast } from '../../../context/toast';
 import { useApi } from '../../../hooks/useApi';
 import { api } from '../../../lib/api';
@@ -15,9 +14,7 @@ const REASONS = ['Fraud or scam', 'Phone number does not work', 'Wrong or mislea
 
 function OfferDetail({ item, onChanged }) {
   const toast = useToast();
-  const { isVendor } = useAuth();
-  // Members book; vendors only manage their own listings.
-  const canBook = !isVendor && item.moderationStatus === 'approved' && item.status === 'active';
+  const canBook = !item.mine && item.moderationStatus === 'approved' && item.status === 'active';
   const back = useGoBack('/offers');
   const [reporting, setReporting] = useState(false);
   const width = Dimensions.get('window').width - 32;
@@ -94,7 +91,7 @@ function OfferDetail({ item, onChanged }) {
       </View>
 
       {item.mine && item.moderationStatus === 'pending' ? <Hint tone="amber" icon="hourglass-outline">Your service is being reviewed. Neighbours see it once it is approved.</Hint> : null}
-      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}. Edit it to resubmit.`}</Hint> : null}
+      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}.`}</Hint> : null}
 
       <Card>
         <KeyValue label="Provider" value={item.contactName || item.postedBy} />
@@ -117,10 +114,6 @@ function OfferDetail({ item, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
-          {item.moderationStatus === 'approved' && item.status === 'active' ? (
-            <Button title="Boost this service" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'service', id: item._id } })} />
-          ) : null}
-          <Button title="Edit service" icon="create-outline" onPress={() => router.push({ pathname: '/offers/edit', params: { id: item._id } })} />
           {item.status === 'active' ? <Button title="Pause (hide for now)" variant="alt" onPress={() => setStatus('paused')} /> : <Button title="Resume — show again" variant="alt" onPress={() => setStatus('active')} />}
           <Button title="Delete service" variant="danger" onPress={remove} />
         </View>

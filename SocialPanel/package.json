@@ -15,7 +15,8 @@
     "api-check": "node scripts/api-check.mjs",
     "e2e": "playwright test",
     "qa:screens": "playwright test --config playwright.qa.config.js",
-    "lint": "eslint src scripts tests"
+    "lint": "eslint src scripts tests",
+    "voting-check": "node scripts/voting-check.mjs"
   },
   "dependencies": {
     "@fontsource/poppins": "^5.3.0",

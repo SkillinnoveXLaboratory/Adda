@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { api, mediaHref } from '../../lib/api.js';
+import { useAuth } from '../../lib/auth.jsx';
 import { useAction, useQuery } from '../../lib/hooks.js';
 import { formatDate, formatDateTime, formatINR, formatPhone, formatRelative, humanize, plural } from '../../lib/format.js';
 import { Alert, Avatar, Badge, Button, Card, CopyField, Icon, KeyValue, PageHeader, PageSkeleton, QueryState } from '../../components/ui.jsx';
@@ -86,6 +87,8 @@ export default function VendorDetail() {
   const { id } = useParams();
   const toast = useToast();
   const { refreshCounts } = useCounts();
+  const { canManage, canView } = useAuth();
+  const manage = canManage('vendors'); // KYC approve / reject and reveal
   const q = useQuery(() => api.get(`/platform/vendors/${id}`), [id]);
   const [modal, setModal] = useState(null); // 'approve' | 'reject' | 'reveal'
   const [revealed, setRevealed] = useState(null);
@@ -118,6 +121,7 @@ export default function VendorDetail() {
               title={p?.businessName || u.name || 'Unnamed vendor'}
               subtitle={`Vendor account · joined ${formatDate(u.createdAt)} · last sign-in ${u.lastLoginAt ? formatRelative(u.lastLoginAt) : 'never'}`}
               actions={
+                manage && (
                 <>
                   <Button variant="outline" icon="fa-solid fa-eye" disabledReason={revealBlocked} onClick={() => setModal('reveal')} data-testid="kyc-reveal">
                     Reveal full details
@@ -133,6 +137,7 @@ export default function VendorDetail() {
                     </Button>
                   )}
                 </>
+                )
               }
             />
 
@@ -147,8 +152,8 @@ export default function VendorDetail() {
               </Alert>
             )}
             {status === 'pending' && (
-              <Alert tone="warning" className="mb-5" title="Waiting for your review">
-                Check that the PAN and Aadhaar photos are readable and match the business details, then approve or reject. The vendor is notified either way.
+              <Alert tone="warning" className="mb-5" title={manage ? 'Waiting for your review' : 'KYC waiting for review'}>
+                {manage ? 'Check that the PAN and Aadhaar photos are readable and match the business details, then approve or reject. The vendor is notified either way.' : 'You can see this vendor’s KYC; approving or rejecting it needs the “Vendors & KYC · manage” permission.'}
               </Alert>
             )}
             {status === 'rejected' && (
@@ -168,9 +173,11 @@ export default function VendorDetail() {
               className="mb-6"
               title="Bookings & commission"
               actions={
+                canView('service_bookings') && (
                 <Link to={`/admin/service-bookings?vendorId=${u._id}`} className="link inline-flex items-center gap-1.5 text-xs" data-testid="vendor-bookings-link">
                   View service bookings <Icon name="fa-solid fa-arrow-right" className="text-[10px]" />
                 </Link>
+                )
               }
             >
               <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5" data-testid="vendor-settlement">
@@ -218,9 +225,11 @@ export default function VendorDetail() {
                     ['Last sign-in', u.lastLoginAt ? formatRelative(u.lastLoginAt) : 'Never'],
                   ]}
                 />
-                <Link to={`/admin/members/${u._id}`} className="link mt-4 inline-flex items-center gap-1.5 text-xs">
-                  <Icon name="fa-regular fa-user" /> Open account profile (sessions, password, disable)
-                </Link>
+                {canView('members') && (
+                  <Link to={`/admin/members/${u._id}`} className="link mt-4 inline-flex items-center gap-1.5 text-xs">
+                    <Icon name="fa-regular fa-user" /> Open account profile (sessions, password, disable)
+                  </Link>
+                )}
               </Card>
               <Card className="col-span-12 lg:col-span-7" title="Business">
                 <KeyValue

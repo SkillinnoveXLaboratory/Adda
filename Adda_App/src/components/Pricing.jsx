@@ -3,9 +3,6 @@ import { money } from '../lib/format';
 import { colors } from '../theme';
 import { T } from './Text';
 
-/** Commission in paise for a price and a percentage (same rounding as the server: half up, whole paise). */
-export const commissionOf = (pricePaise, percent) => Math.round((pricePaise * Math.round((percent || 0) * 100)) / 10_000);
-
 function Row({ label, value, strong, tone }) {
   return (
     <View style={styles.row}>
@@ -14,34 +11,6 @@ function Row({ label, value, strong, tone }) {
       </T>
       <T size={strong ? 14 : 12.5} weight={strong ? 'extrabold' : 'semibold'} color={tone || (strong ? colors.navy : '#334155')}>
         {value}
-      </T>
-    </View>
-  );
-}
-
-/**
- * Vendor's view while publishing a service: price, the platform commission at the admin's current rate,
- * and what the vendor earns. "Price on request" services show the rate only.
- */
-export function CommissionBreakdown({ pricePaise, percent = 0, onQuote }) {
-  if (onQuote || !(pricePaise > 0)) {
-    return (
-      <View style={styles.box} testID="commission-breakdown">
-        <T size={12} color="#475569" style={{ lineHeight: 18 }}>
-          {percent > 0 ? `NIVASA keeps a ${percent}% platform commission on the amount you collect for each booking.` : 'No platform commission is charged right now.'}
-        </T>
-      </View>
-    );
-  }
-  const commission = commissionOf(pricePaise, percent);
-  return (
-    <View style={styles.box} testID="commission-breakdown">
-      <Row label="Price members see" value={money(pricePaise)} />
-      <Row label={`NIVASA commission (${percent}%)`} value={percent > 0 ? `− ${money(commission)}` : money(0)} tone={percent > 0 ? colors.danger : undefined} />
-      <View style={styles.line} />
-      <Row label="You earn" value={money(pricePaise - commission)} strong />
-      <T size={11} color={colors.muted} style={{ marginTop: 4, lineHeight: 16 }}>
-        Members pay you directly. The commission is settled with NIVASA later. Coupons members use are paid back to you by NIVASA.
       </T>
     </View>
   );

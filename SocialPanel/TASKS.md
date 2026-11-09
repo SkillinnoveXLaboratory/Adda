@@ -41,7 +41,8 @@ Legend: `[x]` verified (build + lint + unit + api-check + e2e and/or screenshot 
 - [x] Reports: type + params → table preview, PDF/XLSX download, notes/disclaimer
 - [x] Complaints: filters, detail timeline + media, assign, allowed transitions only, remarks
 - [x] Announcements: create / edit / archive
-- [~] Community: posts (incl. reported) hide/remove/restore, content reports dismiss/hide/remove, polls create/close with results — API verified by api-check; UI verified visually, not covered by e2e
+- [~] Community: posts (incl. reported) hide/remove/restore, content reports dismiss/hide/remove — API verified by api-check; UI verified visually, not covered by e2e
+- [x] Voting (`/society/voting`, perm `community`; replaces the old Community polls tab, `?tab=polls` redirects): Open / Ended / All, ratio bars + turnout, New vote (Interested / Not interested, 2–4 options, IST close time, preview), detail drawer with voter table (search, CSV), End now, publish / edit result, delete with 0 votes — `tests/e2e/voting.spec.js`, `tests/unit/voting.test.js`
 - [x] Facilities CRUD + bookings approve/reject/cancel
 - [x] Service requests: status transitions
 - [x] Listing moderation

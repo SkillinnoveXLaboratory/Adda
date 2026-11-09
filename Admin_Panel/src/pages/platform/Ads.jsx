@@ -10,6 +10,7 @@ import { Drawer, ReasonDialog } from '../../components/Modal.jsx';
 import { priceText } from '../../components/ListingsModeration.jsx';
 import { KycBadge } from '../../components/KycBadge.jsx';
 import { useToast } from '../../components/Toast.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
 
 const KIND = { property: ['Property', 'fa-solid fa-house'], service: ['Service', 'fa-solid fa-screwdriver-wrench'] };
@@ -79,7 +80,7 @@ function ListingDetail({ l, kind }) {
   );
 }
 
-function AdDrawer({ adId, onClose, onDecide }) {
+function AdDrawer({ adId, onClose, onDecide, readOnly }) {
   const q = useQuery(() => (adId ? api.get(`/platform/ads/${adId}`) : Promise.resolve(null)), [adId]);
   const a = q.data;
   const kind = a?.kind;
@@ -90,7 +91,8 @@ function AdDrawer({ adId, onClose, onDecide }) {
       title={a ? a.listingTitle : 'Ad'}
       subtitle={a ? `${KIND[kind]?.[0] || ''} ad · requested ${formatDateTime(a.createdAt)}` : ''}
       footer={
-        a?.status === 'pending' && (
+        a?.status === 'pending' &&
+        !readOnly && (
           <>
             <Button variant="danger-outline" icon="fa-solid fa-xmark" onClick={() => onDecide(a, 'rejected')} data-testid="ad-reject">
               Reject
@@ -171,6 +173,8 @@ function AdDrawer({ adId, onClose, onDecide }) {
 export default function Ads() {
   const toast = useToast();
   const { counts, refreshCounts } = useCounts();
+  const { canManage } = useAuth();
+  const manage = canManage('ads'); // approve / reject
   const [status, setStatus] = useState('pending');
   const [kind, setKind] = useState('');
   const list = usePaged((p) => api.get('/platform/ads', { ...p, kind: kind || undefined, sort: status === 'pending' ? 'createdAt' : '-createdAt' }), { status, kind });
@@ -203,7 +207,7 @@ export default function Ads() {
     { key: 'created', header: 'Submitted', render: (a) => <span title={formatDateTime(a.createdAt)}>{formatRelative(a.createdAt)}</span> },
     { key: 'run', header: 'Start → end', render: (a) => (a.startsAt ? <span className="whitespace-nowrap">{formatDate(a.startsAt)} → {formatDate(a.endsAt)}</span> : <span className="text-gray-300">—</span>) },
     ...(status === 'all' ? [{ key: 'status', header: 'Status', render: (a) => <AdStatus status={a.status} /> }] : []),
-    {
+    manage && {
       key: 'actions',
       header: '',
       align: 'right',
@@ -215,7 +219,7 @@ export default function Ads() {
           </div>
         ) : null,
     },
-  ];
+  ].filter(Boolean);
   const [emptyTitle, emptyMessage] = EMPTY[status];
   const approving = act?.decision === 'approved';
   return (
@@ -245,7 +249,7 @@ export default function Ads() {
         <DataTable testId="ads-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={(a) => setView(a._id)} empty={<EmptyState compact icon="fa-solid fa-rocket" title={emptyTitle} message={emptyMessage} />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
-      <AdDrawer adId={view} onClose={() => setView(null)} onDecide={(ad, decision) => setAct({ ad, decision })} />
+      <AdDrawer adId={view} onClose={() => setView(null)} onDecide={(ad, decision) => setAct({ ad, decision })} readOnly={!manage} />
       <ReasonDialog
         open={Boolean(act)}
         onClose={() => setAct(null)}

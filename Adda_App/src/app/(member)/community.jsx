@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PollCard } from '../../components/PollCard';
 import { PostCard } from '../../components/PostCard';
-import { Avatar, BellButton, DetailHeader, EmptyState, ErrorState, LoadingList, T } from '../../components/ui';
+import { Avatar, BellButton, DetailHeader, EmptyState, ErrorState, LoadingList, SectionTitle, T } from '../../components/ui';
 import { useAuth } from '../../context/auth';
 import { api } from '../../lib/api';
 import { colors } from '../../theme';
@@ -54,8 +54,9 @@ export default function Community() {
         </T>
         <Ionicons name="image-outline" size={21} color="#64748b" />
       </Pressable>
+      {state.polls.length ? <SectionTitle title="Open votes" action="See all" onAction={() => router.push('/polls')} style={{ marginBottom: -8 }} /> : null}
       {state.polls.map((p) => (
-        <PollCard key={`${p._id}-${p.totalVotes}-${p.myVote}`} poll={p} />
+        <PollCard key={`${p._id}-${p.totalVotes}-${p.myVote}`} poll={p} onOpen={() => router.push(`/polls/${p._id}`)} />
       ))}
     </View>
   );

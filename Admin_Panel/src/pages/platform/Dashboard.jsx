@@ -1,14 +1,50 @@
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api } from '../../lib/api.js';
 import { useQuery } from '../../lib/hooks.js';
+import { useAuth } from '../../lib/auth.jsx';
+import { PLATFORM_NAV, visibleSections } from '../../layout/nav.js';
 import { formatDate, formatINR, formatINRShort, formatNumber, formatPeriod, formatRelative, humanize } from '../../lib/format.js';
 import { Button, Card, cx, EmptyState, Icon, PageHeader, PageSkeleton, QueryState } from '../../components/ui.jsx';
 import { ActivityList, BarChart, Legend, MetricCard, SERIES } from '../../components/Charts.jsx';
 
+/** A sub-admin without "Dashboard": a welcome card with the pages they can open (no insight calls). */
+function Welcome() {
+  const { user, canView } = useAuth();
+  const pages = visibleSections(PLATFORM_NAV, canView)
+    .flatMap((s) => s.items)
+    .filter((i) => i.to !== '/admin');
+  return (
+    <div data-testid="platform-dashboard">
+      <PageHeader title={`Welcome${user?.name ? `, ${user.name.split(' ')[0]}` : ''}`} subtitle="You are signed in as a sub-admin. You can open the pages the platform owner gave you." />
+      <Card title="Your pages" className="max-w-3xl">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="welcome-pages">
+          {pages.map((i) => (
+            <Link key={i.to} to={i.to} className="group flex items-center gap-3 rounded-xl border border-gray-100 px-4 py-3 transition-colors hover:border-brand/30 hover:bg-brand-light/30">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-light text-brand">
+                <Icon name={i.icon} className="text-sm" />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-gray-700">{i.label}</span>
+              <Icon name="fa-solid fa-chevron-right" className="text-[10px] text-gray-300 group-hover:text-brand" />
+            </Link>
+          ))}
+        </div>
+        <p className="mt-4 text-[11px] leading-relaxed text-brand-muted">Need another page or button? Ask the platform owner to change your permissions — changes apply without signing in again.</p>
+      </Card>
+    </div>
+  );
+}
+
 export default function PlatformDashboard() {
+  const { canView } = useAuth();
+  return canView('dashboard') ? <Insights /> : <Welcome />;
+}
+
+function Insights() {
   const navigate = useNavigate();
+  const { canView } = useAuth();
+  const showApps = canView('applications');
   const q = useQuery(async () => {
-    const [overview, regs, insights] = await Promise.all([api.get('/platform/overview'), api.get('/platform/society-registrations', { limit: 5, sort: '-createdAt' }), api.get('/platform/overview/insights')]);
+    const [overview, regs, insights] = await Promise.all([api.get('/platform/overview'), showApps ? api.get('/platform/society-registrations', { limit: 5, sort: '-createdAt' }) : { items: [] }, api.get('/platform/overview/insights')]);
     return { overview, regs, insights };
   }, []);
 
@@ -30,7 +66,8 @@ export default function PlatformDashboard() {
           { label: 'Open complaints', count: o.counts.openComplaints, icon: 'fa-solid fa-screwdriver-wrench', tone: 'text-amber-500 bg-amber-50' },
           { label: 'Pending memberships', count: o.counts.pendingMembers, icon: 'fa-solid fa-user-clock', to: '/admin/members', tone: 'text-blue-500 bg-blue-50' },
           { label: 'Suspended societies', count: o.counts.suspended, icon: 'fa-solid fa-ban', to: '/admin/societies?status=suspended', tone: 'text-gray-500 bg-gray-100' },
-        ];
+        ].filter((x) => x.count !== undefined); // a sub-admin gets only the counts of areas they can see
+        const has = (k) => o.counts[k] !== undefined;
         return (
           <div data-testid="platform-dashboard">
             <PageHeader
@@ -41,22 +78,28 @@ export default function PlatformDashboard() {
                   <Button variant="outline" icon="fa-solid fa-rotate-right" onClick={q.reload} loading={q.reloading}>
                     Refresh
                   </Button>
-                  <Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>
-                    Review applications
-                  </Button>
+                  {showApps && (
+                    <Button icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')}>
+                      Review applications
+                    </Button>
+                  )}
                 </>
               }
             />
             <div className="mb-6 grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
-              <MetricCard tone="purple" label="Active societies" value={formatNumber(o.counts.societies)} footer={`${formatNumber(o.counts.suspended)} suspended`} footerIcon="fa-regular fa-building" icon="fa-regular fa-building" onClick={() => navigate('/admin/societies')} testId="card-societies" />
-              <MetricCard tone="orange" label="Pending applications" value={formatNumber(o.counts.pendingRegistrations)} footer="In the review queue" footerIcon="fa-regular fa-clock" icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')} testId="card-applications" />
-              <MetricCard tone="green" label="User accounts" value={formatNumber(o.counts.users)} footer={`${formatNumber(o.counts.vendors || 0)} vendors · ${formatNumber(o.counts.newUsers30d)} new in 30 days`} footerIcon="fa-solid fa-arrow-trend-up" icon="fa-solid fa-users" series={ins.trends.newResidents} onClick={() => navigate('/admin/users')} testId="card-users" />
-              <MetricCard tone="cyan" label="Approved members" value={formatNumber(o.counts.members)} footer={`${formatNumber(o.counts.pendingMembers)} awaiting approval`} footerIcon="fa-solid fa-user-check" icon="fa-solid fa-house-user" onClick={() => navigate('/admin/members')} testId="card-members" />
+              {has('societies') && <MetricCard tone="purple" label="Active societies" value={formatNumber(o.counts.societies)} footer={`${formatNumber(o.counts.suspended)} suspended`} footerIcon="fa-regular fa-building" icon="fa-regular fa-building" onClick={() => navigate('/admin/societies')} testId="card-societies" />}
+              {has('pendingRegistrations') && <MetricCard tone="orange" label="Pending applications" value={formatNumber(o.counts.pendingRegistrations)} footer="In the review queue" footerIcon="fa-regular fa-clock" icon="fa-regular fa-file-lines" onClick={() => navigate('/admin/applications')} testId="card-applications" />}
+              {has('users') && <MetricCard tone="green" label="User accounts" value={formatNumber(o.counts.users)} footer={`${formatNumber(o.counts.vendors || 0)} vendors · ${formatNumber(o.counts.newUsers30d)} new in 30 days`} footerIcon="fa-solid fa-arrow-trend-up" icon="fa-solid fa-users" series={ins.trends.newResidents} onClick={() => navigate('/admin/users')} testId="card-users" />}
+              {has('members') && <MetricCard tone="cyan" label="Approved members" value={formatNumber(o.counts.members)} footer={`${formatNumber(o.counts.pendingMembers)} awaiting approval`} footerIcon="fa-solid fa-user-check" icon="fa-solid fa-house-user" onClick={() => navigate('/admin/members')} testId="card-members" />}
             </div>
 
             <div className="grid grid-cols-12 gap-6">
               <Card className="col-span-12 lg:col-span-8" title="Payments · last 30 days" actions={statuses.length > 0 && <Legend items={[{ label: 'Online', color: SERIES.purple }, { label: 'Offline', color: SERIES.cyan }]} />}>
-                {statuses.length ? (
+                {!o.payments30d ? (
+                  <div className="flex h-72 items-center justify-center">
+                    <EmptyState icon="fa-solid fa-lock" title="Payments are not in your permissions" message="Ask the platform owner for “Payments monitor” to see payment totals here." />
+                  </div>
+                ) : statuses.length ? (
                   <>
                     <BarChart
                       height="h-72"
@@ -77,6 +120,7 @@ export default function PlatformDashboard() {
                 )}
               </Card>
 
+              {showApps && (
               <Card className="col-span-12 lg:col-span-4" title="Recent applications" actions={<Button size="xs" onClick={() => navigate('/admin/applications')}>View All</Button>}>
                 {regs.items?.length ? (
                   <ActivityList
@@ -94,7 +138,9 @@ export default function PlatformDashboard() {
                   <EmptyState compact icon="fa-regular fa-circle-check" title="Queue is clear" message="New society applications will show up here." />
                 )}
               </Card>
+              )}
 
+              {o.billing && (
               <Card className="col-span-12 self-start md:col-span-5 xl:col-span-4" title="Maintenance billing · all time">
                 <div className="space-y-4">
                   <div className="flex items-end justify-between">
@@ -116,6 +162,7 @@ export default function PlatformDashboard() {
                   </p>
                 </div>
               </Card>
+              )}
 
               <Card className="col-span-12 self-start md:col-span-7 xl:col-span-8" title="Needs attention">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 min-[1400px]:grid-cols-3">

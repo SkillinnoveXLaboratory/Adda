@@ -4,7 +4,7 @@ import { AuthProvider } from './lib/auth.jsx';
 import { ToastProvider } from './components/Toast.jsx';
 import { ReasonPromptHost } from './components/ReasonPrompt.jsx';
 import { PageSkeleton } from './components/ui.jsx';
-import { NotFound, PlatformPortal, RequireAuth, SocietyWorkspace } from './layout/Portals.jsx';
+import { NotFound, PlatformPortal, RequireArea, RequireAuth, SocietyWorkspace } from './layout/Portals.jsx';
 
 const page = (loader) => lazy(loader);
 
@@ -31,6 +31,7 @@ const PAnnouncements = page(() => import('./pages/platform/Announcements.jsx'));
 const PSettings = page(() => import('./pages/platform/Settings.jsx'));
 const PAudit = page(() => import('./pages/platform/Audit.jsx'));
 const PSecurity = page(() => import('./pages/platform/Security.jsx'));
+const PSubAdmins = page(() => import('./pages/platform/SubAdmins.jsx'));
 
 // Society workspace (the society-admin screens, acting on the chosen society)
 const SDashboard = page(() => import('./pages/society/Dashboard.jsx'));
@@ -39,6 +40,7 @@ const SStructure = page(() => import('./pages/society/Structure.jsx'));
 const SComplaints = page(() => import('./pages/society/Complaints.jsx'));
 const SAnnouncements = page(() => import('./pages/society/Announcements.jsx'));
 const SCommunity = page(() => import('./pages/society/Community.jsx'));
+const SVoting = page(() => import('./pages/society/Voting.jsx'));
 const SFacilities = page(() => import('./pages/society/Facilities.jsx'));
 const SServices = page(() => import('./pages/society/Services.jsx'));
 const SListings = page(() => import('./pages/society/Listings.jsx'));
@@ -66,26 +68,28 @@ const L = (El) => (
   </Suspense>
 );
 
+/** [path, page, permission area needed to open it] — 'owner' = platform owner only, 'self' = every platform admin. */
 const platformRoutes = [
-  ['applications', PApplications],
-  ['societies', PSocieties],
-  ['societies/:id', PSocietyDetail],
-  ['members', PMembers],
-  ['members/:id', PMemberProfile],
-  ['users', PUsers],
-  ['vendors', PVendors],
-  ['vendors/:id', PVendorDetail],
-  ['listings', PListings],
-  ['ads', PAds],
-  ['coupons', PCoupons],
-  ['service-bookings', PServiceBookings],
-  ['reports', PReports],
-  ['payments', PPayments],
-  ['categories', PCategories],
-  ['announcements', PAnnouncements],
-  ['settings', PSettings],
-  ['audit', PAudit],
-  ['security', PSecurity],
+  ['applications', PApplications, 'applications'],
+  ['societies', PSocieties, 'societies'],
+  ['societies/:id', PSocietyDetail, 'societies'],
+  ['members', PMembers, 'members'],
+  ['members/:id', PMemberProfile, 'members'],
+  ['users', PUsers, 'accounts'],
+  ['vendors', PVendors, 'vendors'],
+  ['vendors/:id', PVendorDetail, 'vendors'],
+  ['listings', PListings, 'listings'],
+  ['ads', PAds, 'ads'],
+  ['coupons', PCoupons, 'coupons'],
+  ['service-bookings', PServiceBookings, 'service_bookings'],
+  ['reports', PReports, 'reports'],
+  ['payments', PPayments, 'payments'],
+  ['categories', PCategories, 'categories'],
+  ['announcements', PAnnouncements, 'announcements'],
+  ['settings', PSettings, 'settings'],
+  ['audit', PAudit, 'audit'],
+  ['subadmins', PSubAdmins, 'owner'],
+  ['security', PSecurity, 'self'],
 ];
 const societyRoutes = [
   ['residents', SResidents],
@@ -93,6 +97,7 @@ const societyRoutes = [
   ['complaints', SComplaints],
   ['announcements', SAnnouncements],
   ['community', SCommunity],
+  ['voting', SVoting],
   ['facilities', SFacilities],
   ['services', SServices],
   ['listings', SListings],
@@ -132,8 +137,8 @@ export default function App() {
               }
             >
               <Route index element={L(PDashboard)} />
-              {platformRoutes.map(([path, El]) => (
-                <Route key={path} path={path} element={L(El)} />
+              {platformRoutes.map(([path, El, area]) => (
+                <Route key={path} path={path} element={<RequireArea area={area}>{L(El)}</RequireArea>} />
               ))}
               <Route path="*" element={<NotFound />} />
             </Route>

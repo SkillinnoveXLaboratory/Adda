@@ -28,7 +28,7 @@ export default function BookService() {
 }
 
 function BookingForm({ offer }) {
-  const { activeMembership: m, isVendor } = useAuth();
+  const { activeMembership: m } = useAuth();
   const toast = useToast();
   const days = useMemo(() => Array.from({ length: 14 }, (_, i) => istDay(i)), []);
   const defaultAddress = m ? [m.flat?.number ? `Flat ${m.flat.number}` : null, m.building?.name, m.society?.name, m.society?.city].filter(Boolean).join(', ') : '';
@@ -82,7 +82,7 @@ function BookingForm({ offer }) {
   });
 
   return (
-    <Screen header={<DetailHeader title="Book service" fallback={`/offers/${offer._id}`} />} footer={isVendor ? null : <Button title="Confirm booking" icon="checkmark-circle" onPress={submit} loading={busy} />}>
+    <Screen header={<DetailHeader title="Book service" fallback={`/offers/${offer._id}`} />} footer={<Button title="Confirm booking" icon="checkmark-circle" onPress={submit} loading={busy} />}>
       <Card style={{ gap: 4 }}>
         <T weight="extrabold" size={15} color={colors.navy} numberOfLines={2}>
           {offer.title}
@@ -94,7 +94,6 @@ function BookingForm({ offer }) {
           {[offer.contactName || offer.postedBy, offer.city].filter(Boolean).join(' · ')}
         </T>
       </Card>
-      {isVendor ? <Hint tone="amber">Vendor accounts can’t book services. Use a member account to book.</Hint> : null}
 
       <SectionTitle title="Choose a date" />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>

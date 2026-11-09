@@ -85,7 +85,7 @@ async function vendorsAndAds(T, { AT, MT }) {
   const vPhone = randPhone();
   const vName = `Vendor ${RUN}`;
   const business = `Sharma Cooling ${RUN}`;
-  const vReg = await expect('register vendor', 201, 'POST', '/auth/resident/register', { body: { phone: vPhone, name: vName, password: PASSWORD, accountType: 'vendor' } });
+  const vReg = await expect('register vendor', 201, 'POST', '/auth/vendor/register', { body: { phone: vPhone, name: vName, password: PASSWORD } });
   const V = vReg.accessToken;
   const vId = vReg.user?._id;
   ok('vendor account type + KYC not submitted', vReg.user?.accountType === 'vendor' && vReg.vendor?.kycStatus === 'not_submitted', { user: vReg.user, vendor: vReg.vendor });
@@ -268,7 +268,7 @@ async function couponsAndSettlement(T, { sid, societyName, buildingId, flatNumbe
   head('Seed: KYC-approved vendor publishes a service');
   const vPhone = randPhone();
   const vName = `Settle Vendor ${RUN}`;
-  const vReg = await expect('register vendor', 201, 'POST', '/auth/resident/register', { body: { phone: vPhone, name: vName, password: PASSWORD, accountType: 'vendor' } });
+  const vReg = await expect('register vendor', 201, 'POST', '/auth/vendor/register', { body: { phone: vPhone, name: vName, password: PASSWORD } });
   const V = vReg.accessToken;
   const vId = vReg.user?._id;
   const docs = [];

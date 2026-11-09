@@ -119,6 +119,8 @@ const mem = await call('POST', '/memberships', { token: R1, body: { societyId, b
 check('membership request 201 pending', mem.status === 201 && mem.body.status === 'pending', mem.body);
 const pend = await call('GET', '/resident/home', { token: R1 });
 check('pending resident blocked → 403 MEMBERSHIP_PENDING', pend.status === 403 && pend.body.error?.code === 'MEMBERSHIP_PENDING');
+const pendPolls = await call('GET', '/resident/polls', { token: R1 });
+check('pending resident can’t open Voting → 403 MEMBERSHIP_PENDING', pendPolls.status === 403 && pendPolls.body.error?.code === 'MEMBERSHIP_PENDING', pendPolls.body);
 const me2 = await call('GET', '/me', { token: R1 });
 check('/me shows pending membership with society/building/flat', me2.body.memberships?.[0]?.status === 'pending' && me2.body.memberships[0].flat?.number === 'A-101' && me2.body.memberships[0].building?.name, me2.body.memberships);
 const queue = await call('GET', '/society/memberships?status=pending', { token: ADM });
@@ -220,6 +222,33 @@ check('polls list hides votes before voting', polls.status === 200 && pl && pl.o
 const vote = await call('POST', `/resident/polls/${pl._id}/vote`, { token: R1, body: { optionId: pl.options[1]._id } });
 check('vote returns results', vote.status === 200 && vote.body.totalVotes === 1 && vote.body.myVote === pl.options[1]._id);
 check('second vote → 409 ALREADY_VOTED', (await call('POST', `/resident/polls/${pl._id}/vote`, { token: R1, body: { optionId: pl.options[0]._id } })).body?.error?.code === 'ALREADY_VOTED');
+
+section('Voting screen (/polls, /polls/:id)');
+const vq = await call('POST', '/society/polls', { token: ADM, body: { question: 'Should we install solar panels on the roof?', description: 'Cost is shared by all flats.', options: ['Interested', 'Not interested'], closesAt: new Date(Date.now() + 48 * 3600_000).toISOString() } });
+check('staff create a vote with a note and close time', vq.status === 201 && vq.body.description === 'Cost is shared by all flats.', vq.body);
+let vNote = null;
+for (let i = 0; i < 6 && !vNote; i += 1) {
+  vNote = (await call('GET', '/notifications?limit=10', { token: R2 })).body?.items?.find((n) => n.type === 'poll' && n.data?.id === vq.body._id);
+  if (!vNote) await new Promise((r) => setTimeout(r, 300));
+}
+check('member notified with route Poll + id (notification → /polls/:id)', vNote?.data?.route === 'Poll', vNote);
+const vd = await call('GET', `/resident/polls/${vq.body._id}`, { token: R2 });
+check('detail: question, note, closesAt, open, myVote null, counts hidden', vd.status === 200 && has(vd.body, ['question', 'description', 'result', 'resultPublishedAt', 'closesAt', 'open', 'myVote', 'options']) && vd.body.open === true && vd.body.myVote === null && vd.body.totalVotes === undefined && vd.body.options.every((o) => o.votes === undefined), vd.body);
+check('unknown option → 400', (await call('POST', `/resident/polls/${vq.body._id}/vote`, { token: R2, body: { optionId: '0123456789abcdef01234567' } })).status === 400);
+const vv = await call('POST', `/resident/polls/${vq.body._id}/vote`, { token: R2, body: { optionId: vd.body.options[0]._id } });
+check('vote → myVote, totalVotes, option votes', vv.status === 200 && String(vv.body.myVote) === String(vd.body.options[0]._id) && vv.body.totalVotes === 1 && vv.body.options.find((o) => String(o._id) === String(vd.body.options[0]._id))?.votes === 1, vv.body);
+const vd2 = await call('GET', `/resident/polls/${vq.body._id}`, { token: R2 });
+check('after voting the detail shows counts and my vote', vd2.body.myVote === String(vd.body.options[0]._id) && vd2.body.totalVotes === 1 && vd2.body.options[0].votes === 1, vd2.body);
+check('a member who has not voted still sees counts hidden', (await call('GET', `/resident/polls/${vq.body._id}`, { token: R1 })).body?.totalVotes === undefined);
+check('result before end → 409 POLL_OPEN', (await call('PUT', `/society/polls/${vq.body._id}/result`, { token: ADM, body: { result: 'Too early' } })).body?.error?.code === 'POLL_OPEN');
+check('staff end the vote', (await call('POST', `/society/polls/${vq.body._id}/close`, { token: ADM })).status === 200);
+const late = await call('POST', `/resident/polls/${vq.body._id}/vote`, { token: R1, body: { optionId: vd.body.options[1]._id } });
+check('vote after end → 409 POLL_ENDED', late.status === 409 && late.body?.error?.code === 'POLL_ENDED', late.body);
+check('publish result', (await call('PUT', `/society/polls/${vq.body._id}/result`, { token: ADM, body: { result: 'Approved: a quote meeting is on Sunday.' } })).status === 200);
+const ended = await call('GET', '/resident/polls', { token: R1 });
+const ev = ended.body.items?.find((p) => p._id === vq.body._id);
+check('ended vote: open false, counts visible to non-voter, result + date', ev && ev.open === false && ev.totalVotes === 1 && ev.myVote === null && ev.result === 'Approved: a quote meeting is on Sunday.' && ev.resultPublishedAt, ev);
+check('home openPolls counts only open votes (the ended one is not counted)', (await call('GET', '/resident/home', { token: R1 })).body?.openPolls === 1);
 const del = await call('DELETE', `/resident/posts/${post.body._id}`, { token: R1 });
 check('cannot delete someone else’s post (404)', del.status === 404);
 
@@ -271,7 +300,7 @@ const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 
 const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
 const aadhaar = (b) => b + [0, 4, 3, 2, 1, 5, 6, 7, 8, 9][b.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
 async function verifiedVendor(n, name) {
-  const r = await call('POST', '/auth/resident/register', { body: { name, phone: phone(n), password: 'Provider12345', accountType: 'vendor' } });
+  const r = await call('POST', '/auth/vendor/register', { body: { name, phone: phone(n), password: 'Provider12345' } });
   const T = r.body.accessToken;
   const d = [];
   for (let i = 0; i < 3; i += 1) d.push((await fileUpload(T, 'kyc')).body?._id);
@@ -281,6 +310,11 @@ async function verifiedVendor(n, name) {
 }
 const PV = await verifiedVendor(4, 'Salt Lake Homes');
 check('vendor registers, submits KYC, owner approves', PV.registered === 201 && PV.kyc === 200 && PV.approved === 200, PV);
+const vApp = await call('POST', '/auth/resident/login', { body: { phone: phone(4), password: 'Provider12345' } });
+check('vendor signing in to the member app → 403 VENDOR_USE_PANEL (no tokens)', vApp.status === 403 && vApp.body?.error?.code === 'VENDOR_USE_PANEL' && !vApp.body?.accessToken, vApp.body);
+const vReg = await call('POST', '/auth/resident/register', { body: { name: 'App Vendor', phone: phone(9), password: 'Provider12345', accountType: 'vendor' } });
+check('vendor sign-up from the app → 403 VENDOR_USE_PANEL', vReg.status === 403 && vReg.body?.error?.code === 'VENDOR_USE_PANEL', vReg.body);
+check('public config exposes vendorPanelUrl (string or null)', 'vendorPanelUrl' in (cfg.body || {}), cfg.body);
 const VEN = PV.token;
 const P4 = phone(4);
 const propBody = { listingType: 'rent', propertyType: 'apartment', title: '2BHK Apartment for Rent', description: 'Sunny flat near the park.', pricePaise: 1500000, bedrooms: 2, bathrooms: 2, areaSqft: 980, furnishing: 'semi_furnished', locality: 'Salt Lake', city: 'Kolkata', contactPhone: P4, whatsappAvailable: true };

@@ -4,73 +4,43 @@ import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '../context/toast';
 import { api } from '../lib/api';
 import { confirm } from '../lib/dialog';
-import { dayLabel, formatDateTime, money, time12, titleCase, toPaise } from '../lib/format';
+import { dayLabel, formatDateTime, money, time12, titleCase } from '../lib/format';
 import { colors, shadow } from '../theme';
-import { Badge, Button, Field, T } from './ui';
+import { Badge, Button, T } from './ui';
 
-const ACTION_LABEL = { accept: 'Accept', decline: 'Decline', complete: 'Mark job done', cancel: 'Cancel booking' };
 const STATUS_LABEL = { requested: 'Waiting for vendor', accepted: 'Confirmed', declined: 'Declined', cancelled: 'Cancelled', completed: 'Job done' };
 
 /**
- * One service booking. `role` comes from the server ("customer" or "vendor") and decides what is shown:
- * customers see the vendor's contact and can cancel; vendors see the customer and move the booking along,
- * including recording a cash payment after the job ("Mark as paid").
+ * One of the member's own service bookings: date and time, the vendor's contact, the price with any coupon,
+ * the cash payment once the vendor records it, and Cancel while the booking is still open.
+ * (Vendors manage bookings on the Vendor Panel website.)
  */
 export function BookingCard({ booking: b, onChanged }) {
   const toast = useToast();
-  const [busy, setBusy] = useState(null);
-  const [paying, setPaying] = useState(false);
-  // Prefill what the member should pay: list price minus any coupon (NIVASA pays the coupon back to the vendor).
-  const payable = b.pricing?.payablePaise ?? b.pricePaise;
-  const [amount, setAmount] = useState(payable ? String(payable / 100) : '');
+  const [busy, setBusy] = useState(false);
   const pr = b.pricing || {};
-  const pay = b.payment || {};
-  const [amountError, setAmountError] = useState(null);
-  const vendorView = b.role === 'vendor';
-  const contact = vendorView ? b.customer : b.vendor;
+  const contact = b.vendor;
   const day = dayLabel(b.preferredDate);
   const paid = b.payment?.status === 'paid';
+  const canCancel = (b.actions || []).includes('cancel');
 
-  const run = async (action) => {
-    if (['decline', 'cancel'].includes(action)) {
-      const ok = await confirm({ title: `${ACTION_LABEL[action]}?`, message: vendorView ? 'The customer will be notified.' : 'The vendor will be notified.', confirmText: ACTION_LABEL[action], destructive: true });
-      if (!ok) return;
-    }
-    setBusy(action);
-    try {
-      const path = vendorView ? `/vendor/bookings/${b._id}/${action}` : `/service-bookings/${b._id}/cancel`;
-      await api(path, { method: 'POST', body: {} });
-      toast.success(action === 'accept' ? 'Booking accepted' : action === 'complete' ? 'Marked as done' : action === 'decline' ? 'Booking declined' : 'Booking cancelled');
-      onChanged?.();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const markPaid = async () => {
-    const paise = toPaise(amount);
-    if (!Number.isFinite(paise) || paise <= 0) return setAmountError('Enter the amount you received');
-    setAmountError(null);
-    const ok = await confirm({ title: `Record ${money(paise)} received in cash?`, message: 'This can’t be changed later. The customer will see it.', confirmText: 'Mark as paid' });
+  const cancel = async () => {
+    const ok = await confirm({ title: 'Cancel booking?', message: 'The vendor will be notified.', confirmText: 'Cancel booking', destructive: true });
     if (!ok) return;
-    setBusy('mark-paid');
+    setBusy(true);
     try {
-      await api(`/vendor/bookings/${b._id}/mark-paid`, { method: 'POST', body: { amountPaise: paise } });
-      toast.success('Payment recorded');
-      setPaying(false);
+      await api(`/service-bookings/${b._id}/cancel`, { method: 'POST', body: {} });
+      toast.success('Booking cancelled');
       onChanged?.();
     } catch (err) {
       toast.error(err.message);
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
   const call = () => contact?.phone && Linking.openURL(`tel:+91${contact.phone}`).catch(() => toast.error('Calling is not available on this device'));
   const whatsapp = () => contact?.phone && Linking.openURL(`https://wa.me/91${contact.phone}`).catch(() => toast.error('Could not open WhatsApp'));
-  const actions = (b.actions || []).filter((a) => a !== 'mark-paid');
 
   return (
     <View style={styles.card}>
@@ -92,11 +62,11 @@ export function BookingCard({ booking: b, onChanged }) {
           </T>
           <T size={11.5} color={colors.muted} numberOfLines={1}>
             {b.preferredTime ? time12(b.preferredTime) : 'Any time'}
-            {contact?.name ? ` · ${vendorView ? 'Customer' : 'Vendor'}: ${contact.name}` : ''}
+            {contact?.name ? ` · Vendor: ${contact.name}` : ''}
           </T>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
             <Badge status={b.status} label={STATUS_LABEL[b.status] || titleCase(b.status)} />
-            {paid ? <Badge tone="success" label={`Paid ${money(b.payment.amountPaise)} · cash`} /> : b.status === 'completed' ? <Badge tone="warning" label="Payment not recorded" /> : null}
+            {paid ? <Badge tone="success" label={`Paid ${money(b.payment.amountPaise)} · cash`} /> : null}
           </View>
         </View>
       </View>
@@ -120,18 +90,7 @@ export function BookingCard({ booking: b, onChanged }) {
           <Ionicons name="pricetag-outline" size={14} color="#94a3b8" />
           <T size={12} color={colors.textSoft} style={{ flex: 1 }}>
             {money(pr.listPricePaise)}
-            {pr.discountPaise ? ` · Coupon ${pr.couponCode} −${money(pr.discountPaise)} · ${vendorView ? 'Customer pays' : 'You pay'} ${money(pr.payablePaise)}` : ''}
-          </T>
-        </View>
-      ) : null}
-      {vendorView && paid && pay.commissionPaise !== undefined ? (
-        <View style={styles.settle} testID="booking-settlement">
-          <T size={11.5} color={colors.textSoft}>
-            Cash {money(pay.amountPaise)}
-            {pay.discountPaise ? ` + coupon credit ${money(pay.discountPaise)}` : ''} · Commission {money(pay.commissionPaise)}
-          </T>
-          <T weight="bold" size={11.5} color={pay.netToPlatformPaise > 0 ? colors.amber : colors.green}>
-            {pay.netToPlatformPaise > 0 ? `You owe NIVASA ${money(pay.netToPlatformPaise)}` : pay.netToPlatformPaise < 0 ? `NIVASA owes you ${money(-pay.netToPlatformPaise)}` : 'Nothing to settle'}
+            {pr.discountPaise ? ` · Coupon ${pr.couponCode} −${money(pr.discountPaise)} · You pay ${money(pr.payablePaise)}` : ''}
           </T>
         </View>
       ) : null}
@@ -144,31 +103,11 @@ export function BookingCard({ booking: b, onChanged }) {
       {contact?.phone && !['declined', 'cancelled'].includes(b.status) ? (
         <View style={styles.actions}>
           <Button small title="Call" icon="call" variant="alt" onPress={call} style={{ flex: 1 }} />
-          {vendorView || contact.whatsappAvailable ? <Button small title="WhatsApp" icon="logo-whatsapp" variant="alt" onPress={whatsapp} style={{ flex: 1 }} /> : null}
+          {contact.whatsappAvailable ? <Button small title="WhatsApp" icon="logo-whatsapp" variant="alt" onPress={whatsapp} style={{ flex: 1 }} /> : null}
         </View>
       ) : null}
 
-      {actions.length ? (
-        <View style={styles.actions}>
-          {actions.map((a) => (
-            <Button key={a} small title={ACTION_LABEL[a] || titleCase(a)} variant={a === 'accept' || a === 'complete' ? 'brand' : a === 'cancel' || a === 'decline' ? 'danger' : 'alt'} loading={busy === a} disabled={!!busy && busy !== a} onPress={() => run(a)} style={{ flex: 1 }} />
-          ))}
-        </View>
-      ) : null}
-
-      {vendorView && b.actions?.includes('mark-paid') ? (
-        paying ? (
-          <View style={{ gap: 8 }}>
-            <Field label="Amount received in cash" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" prefix="₹" error={amountError} />
-            <View style={styles.actions}>
-              <Button small title="Cancel" variant="alt" onPress={() => setPaying(false)} style={{ flex: 1 }} />
-              <Button small title="Confirm paid" icon="checkmark" variant="brand" loading={busy === 'mark-paid'} onPress={markPaid} style={{ flex: 1.3 }} />
-            </View>
-          </View>
-        ) : (
-          <Button small title="Mark as paid (cash)" icon="cash-outline" variant="gold" onPress={() => setPaying(true)} />
-        )
-      ) : null}
+      {canCancel ? <Button small title="Cancel booking" variant="danger" loading={busy} onPress={cancel} /> : null}
     </View>
   );
 }
@@ -178,6 +117,5 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   date: { width: 52, borderRadius: 12, backgroundColor: colors.goldLight, alignItems: 'center', paddingVertical: 6 },
   row: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
-  settle: { backgroundColor: colors.bg, borderRadius: 10, padding: 8, gap: 2 },
   actions: { flexDirection: 'row', gap: 8 },
 });

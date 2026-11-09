@@ -11,7 +11,8 @@ import { ConfirmDialog, ReasonDialog } from '../../components/Modal.jsx';
 import { useToast } from '../../components/Toast.jsx';
 
 export default function Users() {
-  const { user: me } = useAuth();
+  const { user: me, canManage, isOwner } = useAuth();
+  const manage = canManage('accounts');
   const toast = useToast();
   const [status, setStatus] = useState('');
   const [role, setRole] = useState('');
@@ -25,7 +26,7 @@ export default function Users() {
     success: () => (act.to === 'disabled' ? `${act.u.name || 'User'} disabled and signed out everywhere` : `${act.u.name || 'User'} re-enabled`),
     onDone: () => (setAct(null), list.reload()),
   });
-  const reasonFor = (u) => (u._id === me?._id ? 'You can’t change your own account' : u.platformRole === 'super_admin' ? 'Super admin accounts are managed from the server console' : u.status === 'pending_setup' ? 'This account hasn’t completed setup yet' : null);
+  const reasonFor = (u) => (u._id === me?._id ? 'You can’t change your own account' : u.platformRole === 'super_admin' ? 'Super admin accounts are managed from the server console' : u.platformRole === 'sub_admin' ? (isOwner ? 'Sub-admins are managed on the Sub-admins page' : 'Sub-admins are managed by the platform owner') : u.status === 'pending_setup' ? 'This account hasn’t completed setup yet' : null);
   const columns = [
     { key: 'name', header: 'User', render: (u) => <div className="flex items-center gap-3"><Avatar name={u.name || u.email || u.phone} size="sm" /><div className="min-w-0"><Link to={`/admin/members/${u._id}`} className="link block truncate">{u.name || 'Unnamed'}</Link><p className="truncate text-[11px] text-gray-400">{u.email || '—'}</p></div></div> },
     {
@@ -41,12 +42,12 @@ export default function Users() {
         ),
     },
     { key: 'phone', header: 'Mobile', render: (u) => formatPhone(u.phone) },
-    { key: 'role', header: 'Role', render: (u) => <Badge tone={u.platformRole === 'super_admin' ? 'purple' : 'neutral'}>{u.platformRole === 'super_admin' ? 'Super admin' : 'User'}</Badge> },
+    { key: 'role', header: 'Role', render: (u) => <Badge tone={u.platformRole === 'super_admin' ? 'purple' : u.platformRole === 'sub_admin' ? 'info' : 'neutral'}>{u.platformRole === 'super_admin' ? 'Super admin' : u.platformRole === 'sub_admin' ? 'Sub-admin' : 'User'}</Badge> },
     { key: 'city', header: 'City', render: (u) => u.city || '—' },
     { key: 'joined', header: 'Joined', render: (u) => formatDate(u.createdAt) },
     { key: 'last', header: 'Last sign-in', render: (u) => (u.lastLoginAt ? formatRelative(u.lastLoginAt) : <span className="text-gray-300">—</span>) },
     { key: 'status', header: 'Status', render: (u) => <div><Badge status={u.status} />{u.status === 'disabled' && u.disabledReason && <p className="mt-0.5 max-w-[160px] truncate text-[10px] text-gray-400" title={u.disabledReason}>{u.disabledReason}</p>}</div> },
-    {
+    manage && {
       key: 'actions',
       header: '',
       align: 'right',
@@ -61,7 +62,7 @@ export default function Users() {
           </Button>
         ),
     },
-  ];
+  ].filter(Boolean);
   return (
     <div>
       <PageHeader title="Accounts" subtitle="Every sign-in account on Nivasa — members (residents and customers) and vendors (list properties and services). Contact details are masked — open a profile to reveal them (logged)." />
@@ -78,6 +79,7 @@ export default function Users() {
             <option value="">All roles</option>
             <option value="user">Users</option>
             <option value="super_admin">Super admins</option>
+            <option value="sub_admin">Sub-admins</option>
           </Select>
         </Toolbar>
         <DataTable testId="users-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} empty={<EmptyState compact icon="fa-solid fa-users" title={q || status || role || accountType ? 'No users match' : 'No users yet'} />} />

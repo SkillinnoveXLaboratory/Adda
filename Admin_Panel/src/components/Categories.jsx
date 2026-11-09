@@ -79,7 +79,8 @@ function CategoryModal({ open, onClose, item, kind, basePath, platform, onSaved 
 }
 
 /** Category CRUD — platform (all kinds) or society (complaint/service, society-scoped only). */
-export function CategoriesManager({ platform = false, writeReason }) {
+/** `readOnly` (Master Admin sub-admin with "Categories · view"): the list without add / edit / delete. */
+export function CategoriesManager({ platform = false, writeReason, readOnly = false }) {
   const kinds = platform ? ['service', 'complaint', 'marketplace'] : ['complaint', 'service'];
   const basePath = platform ? '/platform/categories' : '/society/categories';
   const toast = useToast();
@@ -97,7 +98,7 @@ export function CategoriesManager({ platform = false, writeReason }) {
     { key: 'desc', header: 'Description', className: 'max-w-[280px] truncate', render: (c) => c.description || '—' },
     ...(platform ? [{ key: 'sort', header: 'Order', align: 'center', render: (c) => c.sortOrder ?? 0 }] : [{ key: 'scope', header: 'Source', render: (c) => <Badge tone={c.scope === 'society' ? 'purple' : 'neutral'}>{c.scope === 'society' ? 'Your society' : 'NIVASA default'}</Badge> }]),
     { key: 'active', header: 'Status', render: (c) => <Badge status={c.active === false ? 'inactive' : 'active'} /> },
-    {
+    !readOnly && {
       key: 'actions',
       header: '',
       align: 'right',
@@ -108,10 +109,10 @@ export function CategoriesManager({ platform = false, writeReason }) {
         </div>
       ),
     },
-  ];
+  ].filter(Boolean);
   return (
     <div>
-      <PageHeader title="Categories" subtitle={platform ? 'Categories for home services, complaints and the marketplace' : 'Complaint and service categories residents choose from — add your own alongside the NIVASA defaults'} actions={<Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({})} data-testid="add-category">Add category</Button>} />
+      <PageHeader title="Categories" subtitle={platform ? 'Categories for home services, complaints and the marketplace' : 'Complaint and service categories residents choose from — add your own alongside the NIVASA defaults'} actions={!readOnly && <Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({})} data-testid="add-category">Add category</Button>} />
       <Tabs className="mb-4" tabs={kinds.map((k) => ({ value: k, label: humanize(k) }))} value={kind} onChange={setKind} />
       <div className="card">
         <Toolbar right={q.data && <span className="text-[11px] text-brand-muted">{q.data.items.length} categories</span>}>

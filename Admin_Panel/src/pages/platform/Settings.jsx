@@ -5,6 +5,7 @@ import { isEmail, isIndianMobile, normalizePhone, parsePercent } from '../../lib
 import { Alert, Badge, Button, Card, PageHeader, PageSkeleton, QueryState } from '../../components/ui.jsx';
 import { Field, Input, Toggle } from '../../components/Form.jsx';
 import { useToast } from '../../components/Toast.jsx';
+import { useAuth } from '../../lib/auth.jsx';
 
 const META = {
   'listings.requireApproval': { label: 'Independent listings need approval', description: 'Vendor property and service listings, and marketplace listings not linked to a society, wait for platform moderation before they are visible.' },
@@ -26,7 +27,8 @@ const META = {
   'support.phone': { label: 'Support phone', description: 'Shown to users who need help (10-digit Indian mobile).', validate: (v) => (!v || isIndianMobile(v) ? null : 'Enter a valid 10-digit mobile number'), normalize: normalizePhone, placeholder: '98765 43210' },
 };
 
-function SettingRow({ item, onSaved }) {
+/** One setting. `readOnly` (Settings · view only): values shown in read-only inputs, no Save. */
+function SettingRow({ item, onSaved, readOnly = false }) {
   const toast = useToast();
   const meta = META[item.key] || { label: item.key };
   const [value, setValue] = useState(item.value);
@@ -40,7 +42,7 @@ function SettingRow({ item, onSaved }) {
           label={meta.label}
           description={meta.description}
           checked={Boolean(value)}
-          disabled={busy}
+          disabled={busy || readOnly}
           onChange={async (x) => {
             setValue(x);
             if (!(await save(x))) setValue(item.value);
@@ -55,6 +57,7 @@ function SettingRow({ item, onSaved }) {
       className="flex flex-col gap-3 py-4 sm:flex-row sm:items-end"
       onSubmit={(e) => {
         e.preventDefault();
+        if (readOnly) return;
         const problem = meta.validate?.(String(value ?? '').trim());
         if (problem) return setError(problem);
         save(meta.normalize ? meta.normalize(value) : String(value || '').trim());
@@ -63,20 +66,24 @@ function SettingRow({ item, onSaved }) {
       {meta.numeric ? (
         <Field label={meta.label} hint={meta.description} error={error} className="flex-1">
           <div className="flex items-center gap-3">
-            <Input name={item.key} value={value ?? ''} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={6} inputMode="decimal" suffix={meta.suffix} className="w-full sm:w-[200px]" data-testid={`setting-${item.key}`} />
-            <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null}>
-              Save
-            </Button>
+            <Input name={item.key} value={value ?? ''} readOnly={readOnly} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={6} inputMode="decimal" suffix={meta.suffix} className="w-full sm:w-[200px]" data-testid={`setting-${item.key}`} />
+            {!readOnly && (
+              <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null}>
+                Save
+              </Button>
+            )}
           </div>
         </Field>
       ) : (
         <>
           <Field label={meta.label} hint={meta.description} error={error} className="flex-1">
-            <Input name={item.key} value={value ?? ''} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={500} data-testid={`setting-${item.key}`} />
+            <Input name={item.key} value={value ?? ''} readOnly={readOnly} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={500} data-testid={`setting-${item.key}`} />
           </Field>
-          <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null} className="sm:mb-[22px]">
-            Save
-          </Button>
+          {!readOnly && (
+            <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null} className="sm:mb-[22px]">
+              Save
+            </Button>
+          )}
         </>
       )}
     </form>
@@ -84,6 +91,8 @@ function SettingRow({ item, onSaved }) {
 }
 
 export default function Settings() {
+  const { canManage } = useAuth();
+  const readOnly = !canManage('settings');
   const q = useQuery(() => api.get('/platform/settings'), []);
   const config = useQuery(() => api.get('/public/config', undefined, { auth: false }), []);
   const c = config.data;
@@ -91,12 +100,12 @@ export default function Settings() {
     <QueryState query={q} skeleton={<PageSkeleton rows={5} />}>
       {(data) => (
         <div>
-          <PageHeader title="Settings" subtitle="Platform-wide configuration" />
+          <PageHeader title="Settings" subtitle={readOnly ? 'Platform-wide configuration · view only' : 'Platform-wide configuration'} />
           <div className="grid grid-cols-12 gap-6">
             <Card className="col-span-12 xl:col-span-8" title="Platform settings">
               <div className="divide-y divide-gray-100">
                 {data.items.map((it) => (
-                  <SettingRow key={it.key} item={it} onSaved={q.reload} />
+                  <SettingRow key={it.key} item={it} onSaved={q.reload} readOnly={readOnly} />
                 ))}
               </div>
             </Card>

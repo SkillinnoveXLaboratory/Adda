@@ -60,7 +60,7 @@ async function readError(res) {
  * - On 401 TOKEN_EXPIRED: one shared refresh for all concurrent callers, rotate both tokens, retry once.
  * - Refresh failure or a dead-session code → session cleared + onSessionEnd(reason).
  */
-export function createApiClient({ origin = API_ORIGIN, store = defaultSession, fetchImpl, onSessionEnd, askReason } = {}) {
+export function createApiClient({ origin = API_ORIGIN, store = defaultSession, fetchImpl, onSessionEnd, onPermissionDenied, askReason } = {}) {
   const base = `${origin}/api/v1`;
   const doFetch = (...args) => (fetchImpl || globalThis.fetch)(...args);
   let refreshing = null;
@@ -136,7 +136,12 @@ export function createApiClient({ origin = API_ORIGIN, store = defaultSession, f
       if (SESSION_END_CODES.has(err.code) || err.code === 'TOKEN_EXPIRED') endSession(err.code === 'ACCOUNT_DISABLED' ? 'disabled' : 'expired');
       throw err;
     }
-    if (!res.ok) throw await readError(res);
+    if (!res.ok) {
+      const err = await readError(res);
+      // The owner may have changed this sub-admin's permissions: refresh the profile so pages and buttons follow.
+      if (res.status === 403 && auth && (err.code === 'PERMISSION_DENIED' || err.code === 'OWNER_ONLY')) onPermissionDenied?.(err);
+      throw err;
+    }
     if (raw) return res;
     if (res.status === 204) return null;
     const text = await res.text();
@@ -169,6 +174,11 @@ export function createApiClient({ origin = API_ORIGIN, store = defaultSession, f
 }
 
 let sessionEndHandler = null;
+let permissionDeniedHandler = null;
+/** The auth provider re-reads /me when the server answers "no permission" (the owner may have changed them). */
+export function setPermissionDeniedHandler(fn) {
+  permissionDeniedHandler = fn;
+}
 let reasonAsker = null;
 /** The app registers a dialog that resolves to the typed reason (or null when cancelled). */
 export function setReasonAsker(fn) {
@@ -179,7 +189,10 @@ export function setSessionEndHandler(fn) {
   sessionEndHandler = fn;
 }
 
-export const api = createApiClient({ onSessionEnd: (reason) => sessionEndHandler?.(reason), askReason: (ctx) => (reasonAsker ? reasonAsker(ctx) : Promise.resolve(null)) });
+export const api = createApiClient({
+  onSessionEnd: (reason) => sessionEndHandler?.(reason),
+  onPermissionDenied: (err) => permissionDeniedHandler?.(err),
+  askReason: (ctx) => (reasonAsker ? reasonAsker(ctx) : Promise.resolve(null)) });
 
 /** Save a Blob to disk via a temporary object URL. */
 export function saveBlob(blob, filename) {

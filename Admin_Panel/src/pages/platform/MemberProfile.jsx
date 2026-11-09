@@ -134,7 +134,12 @@ const MEMBERSHIP_ACTIONS = {
 export default function MemberProfile() {
   const { id } = useParams();
   const toast = useToast();
-  const { user: me } = useAuth();
+  const { user: me, canManage, isOwner: meIsOwner } = useAuth();
+  // members.manage: reveal, set password, sign out, change mobile, move; accounts.manage: enable / disable;
+  // membership approve / reject act inside the society: societies.manage.
+  const canMembers = canManage('members');
+  const canAccounts = canManage('accounts');
+  const canSociety = canManage('societies');
   const q = useQuery(() => api.get(`/platform/users/${id}/profile`), [id]);
   const [modal, setModal] = useState(null);
   const [revealed, setRevealed] = useState(null);
@@ -152,8 +157,9 @@ export default function MemberProfile() {
       {(p) => {
         const u = p.user;
         const isOwner = u.platformRole === 'super_admin';
+        const isSub = u.platformRole === 'sub_admin';
         const self = u._id === me?._id;
-        const locked = self || isOwner;
+        const locked = self || isOwner || isSub;
         const paidPaise = p.payments.filter((x) => x.status === 'captured').reduce((a, x) => a + (x.amountPaise || 0), 0);
         const duePaise = p.invoices.filter((i) => ['unpaid', 'partially_paid'].includes(i.status)).reduce((a, i) => a + ((i.totalPaise || 0) - (i.paidPaise || 0)), 0);
 
@@ -169,12 +175,12 @@ export default function MemberProfile() {
             align: 'right',
             render: (m) => (
               <div className="flex justify-end gap-1.5">
-                {(MEMBERSHIP_ACTIONS[m.status] || []).map(([action, label, variant, icon]) => (
+                {canSociety && (MEMBERSHIP_ACTIONS[m.status] || []).map(([action, label, variant, icon]) => (
                   <Button key={action} size="xs" variant={variant} icon={icon} onClick={() => setModal({ type: 'decide', m, action, label })} data-testid={`m-${action}`}>
                     {label}
                   </Button>
                 ))}
-                {['pending', 'approved', 'suspended'].includes(m.status) && (
+                {canMembers && ['pending', 'approved', 'suspended'].includes(m.status) && (
                   <Button size="xs" variant="outline" icon="fa-solid fa-right-left" onClick={() => setModal({ type: 'move', m })} data-testid="m-move">
                     Move
                   </Button>
@@ -289,18 +295,23 @@ export default function MemberProfile() {
               title={u.name || 'Unnamed member'}
               subtitle={`Account created ${formatDate(u.createdAt)} · last sign-in ${u.lastLoginAt ? formatRelative(u.lastLoginAt) : 'never'}`}
               actions={
-                !locked && (
+                !locked &&
+                (canMembers || canAccounts) && (
                   <>
-                    <Button variant="outline" icon="fa-solid fa-key" onClick={() => setModal({ type: 'password' })} data-testid="action-password">
-                      Set password
-                    </Button>
-                    <Button variant="outline" icon="fa-solid fa-mobile-screen" onClick={() => setModal({ type: 'phone' })}>
-                      Change mobile
-                    </Button>
-                    <Button variant="outline" icon="fa-solid fa-right-from-bracket" disabledReason={p.sessions.length ? null : 'No active sessions'} onClick={() => setModal({ type: 'signout' })} data-testid="action-signout">
-                      Sign out everywhere
-                    </Button>
-                    {u.status === 'disabled' ? (
+                    {canMembers && (
+                      <>
+                        <Button variant="outline" icon="fa-solid fa-key" onClick={() => setModal({ type: 'password' })} data-testid="action-password">
+                          Set password
+                        </Button>
+                        <Button variant="outline" icon="fa-solid fa-mobile-screen" onClick={() => setModal({ type: 'phone' })}>
+                          Change mobile
+                        </Button>
+                        <Button variant="outline" icon="fa-solid fa-right-from-bracket" disabledReason={p.sessions.length ? null : 'No active sessions'} onClick={() => setModal({ type: 'signout' })} data-testid="action-signout">
+                          Sign out everywhere
+                        </Button>
+                      </>
+                    )}
+                    {!canAccounts ? null : u.status === 'disabled' ? (
                       <Button variant="success" icon="fa-solid fa-play" loading={settingStatus} onClick={() => setStatus('active')}>
                         Enable account
                       </Button>
@@ -315,7 +326,7 @@ export default function MemberProfile() {
             />
             {locked && (
               <Alert tone="info" className="mb-5">
-                {self ? 'This is your own account. Manage it from My security.' : 'Platform owner accounts are managed from the server console.'}
+                {self ? 'This is your own account. Manage it from My security.' : isSub ? (meIsOwner ? 'Sub-admin accounts are managed on the Sub-admins page.' : 'Sub-admin accounts are managed by the platform owner.') : 'Platform owner accounts are managed from the server console.'}
               </Alert>
             )}
             {u.status === 'disabled' && (
@@ -333,6 +344,7 @@ export default function MemberProfile() {
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       <Badge status={u.status} />
                       {isOwner && <Badge tone="purple">Platform owner</Badge>}
+                      {isSub && <Badge tone="info">Sub-admin</Badge>}
                       {p.staff.length > 0 && <Badge tone="info">Society staff</Badge>}
                       {u.phone && !u.phoneVerifiedAt && <Badge tone="warning">Mobile not OTP-verified</Badge>}
                     </div>
@@ -358,7 +370,7 @@ export default function MemberProfile() {
                     ]}
                   />
                 )}
-                {!revealed && (u.phone || u.email) && (
+                {!revealed && canMembers && (u.phone || u.email) && (
                   <Button size="sm" variant="outline" icon="fa-solid fa-eye" className="mt-4" onClick={() => setModal({ type: 'reveal' })} data-testid="reveal">
                     Reveal contact details
                   </Button>
