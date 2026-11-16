@@ -10,13 +10,14 @@ import { DataTable, Pagination } from '../../components/DataTable.jsx';
 import { Field, Input } from '../../components/Form.jsx';
 import { BarChart, Legend, MetricCard, SERIES } from '../../components/Charts.jsx';
 import { NetAmount } from '../../components/Settlement.jsx';
+import { formatPercent } from '../../lib/pricing.js';
 
-const pct = (n) => `${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+const money = (paise, none = '—') => (paise === null || paise === undefined ? <span className="whitespace-nowrap text-gray-300">{none}</span> : <span className="whitespace-nowrap">{formatINR(paise)}</span>);
 const vendorLabel = (v) => v?.businessName || v?.name || 'Unnamed vendor';
 
 /**
- * NIVASA's earnings from vendor services (GET /platform/earnings, view-only area `earnings`): the commission taken
- * from each paid job, the coupons NIVASA funds, and what vendors earned. Figures are fixed when a vendor records
+ * NIVASA's earnings from vendor services (GET /platform/earnings, view-only area `earnings`): the commission added on
+ * top of each vendor's price, the member discounts given back out of it, NIVASA's net and what vendors earned. Figures are fixed when a vendor records
  * the payment. `?vendorId=` narrows everything to one vendor (linked from the vendor's page).
  */
 export default function Earnings() {
@@ -55,7 +56,7 @@ export default function Earnings() {
           )
         }
         title="Earnings"
-        subtitle="NIVASA’s commission from vendor services and what vendors earned. Members pay the full service price; the commission is taken from each payment when the vendor records it."
+        subtitle="NIVASA’s commission on vendor services, the member discounts given back, NIVASA’s net earnings and what vendors earned. Figures are fixed when the vendor records the cash."
       />
 
       <div className="mb-6 flex flex-col gap-3">
@@ -89,11 +90,11 @@ export default function Earnings() {
             {d.range?.from || d.range?.to ? `${d.range.from ? formatDate(d.range.from) : 'Start'} – ${d.range.to ? formatDate(d.range.to) : 'today'}` : 'All time'} · India time{vendorId ? ` · ${vendorName}` : ' · all vendors'}
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 xl:grid-cols-3">
-            <MetricCard tone="purple" label="NIVASA commission earned" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Taken from each paid job" testId="earn-commission" />
-            <MetricCard tone="orange" label="Coupon cost" value={formatINR(t.couponCostPaise)} icon="fa-solid fa-ticket" footer="Discounts NIVASA funds" testId="earn-coupons" />
-            <MetricCard tone="green" label="Net platform earnings" value={<NetAmount paise={t.platformNetPaise} className="!text-2xl !font-bold" />} icon="fa-solid fa-sack-dollar" footer="Commission − coupon cost" testId="earn-net" />
-            <MetricCard tone="cyan" label="Vendors earned" value={formatINR(t.vendorEarningsPaise)} icon="fa-solid fa-wallet" footer="Service value − commission" testId="earn-vendors" />
-            <MetricCard tone="purple" label="Service value" value={formatINR(t.grossPaise)} icon="fa-solid fa-indian-rupee-sign" footer={`${formatINR(t.cashCollectedPaise)} cash + ${formatINR(t.couponCostPaise)} coupons`} testId="earn-gross" />
+            <MetricCard tone="green" label="NIVASA net earnings" value={<NetAmount paise={t.platformNetPaise} className="!text-2xl !font-bold" />} icon="fa-solid fa-sack-dollar" footer="Commission − member discounts" testId="earn-net" />
+            <MetricCard tone="purple" label="NIVASA commission" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Added on top of vendors’ prices" testId="earn-commission" />
+            <MetricCard tone="orange" label="Member discounts" value={formatINR(t.memberDiscountsPaise)} icon="fa-solid fa-tag" footer="Given back to members out of the commission" testId="earn-discounts" />
+            <MetricCard tone="cyan" label="Vendor earnings" value={formatINR(t.vendorEarningsPaise)} icon="fa-solid fa-wallet" footer="Cash − NIVASA net" testId="earn-vendors" />
+            <MetricCard tone="purple" label="Member prices" value={formatINR(t.grossPaise)} icon="fa-solid fa-indian-rupee-sign" footer={`${formatINR(t.cashCollectedPaise)} cash + ${formatINR(t.memberDiscountsPaise)} member discounts`} testId="earn-gross" />
             <MetricCard tone="green" label="Paid jobs" value={formatNumber(t.paidJobs)} icon="fa-solid fa-circle-check" footer="Jobs vendors marked as paid" testId="earn-jobs" />
           </div>
 
@@ -113,7 +114,7 @@ export default function Earnings() {
             <Pagination page={list.page} pages={d.pages || 1} total={d.total || 0} limit={list.limit} onPage={list.setPage} />
           </Card>
           <Alert tone="info" title="How it is worked out">
-            For each paid job: <b>service value</b> = cash + coupon; <b>commission</b> = the job’s commission % × service value; <b>vendor earned</b> = service value − commission; <b>net platform</b> = commission − coupon cost. Vendors collect the cash, so commission is settled with them separately (see Service bookings).
+            Each vendor has their own rates (set on the vendor’s page). <b>Member price</b> = vendor price + <b>commission</b> (commission % of the vendor price). A member who applies the discount pays member price − <b>member discount</b> (discount % of the commission). For each paid job: <b>NIVASA net</b> = commission − member discount; <b>vendor earned</b> = cash − NIVASA net. For “price on request” jobs the commission is taken out of the cash recorded. Vendors collect the cash, so NIVASA’s net is settled with them separately (see Service bookings).
           </Alert>
         </div>
       )}
@@ -226,7 +227,7 @@ function MonthChart({ months }) {
       <Legend
         items={[
           { label: 'Commission', color: SERIES.purple },
-          { label: 'Net platform', color: SERIES.cyan },
+          { label: 'NIVASA net', color: SERIES.cyan },
         ]}
       />
       <BarChart
@@ -234,10 +235,10 @@ function MonthChart({ months }) {
         labels={rows.map((m) => monthLabel(m.month))}
         datasets={[
           { label: 'Commission', data: rows.map((m) => m.commissionPaise), color: SERIES.purple },
-          { label: 'Net platform', data: rows.map((m) => m.platformNetPaise), color: SERIES.cyan },
+          { label: 'NIVASA net', data: rows.map((m) => m.platformNetPaise), color: SERIES.cyan },
         ]}
         formatValue={(v, full) => (full ? formatINR(v) : formatINRShort(v))}
-        ariaLabel="NIVASA commission and net platform earnings by month"
+        ariaLabel="NIVASA commission and net earnings by month"
       />
     </div>
   );
@@ -247,10 +248,10 @@ function MonthTable({ months }) {
   const columns = [
     { key: 'month', header: 'Month', render: (m) => <span className="whitespace-nowrap font-semibold text-gray-700">{monthLabel(m.month)}</span> },
     { key: 'jobs', header: 'Paid jobs', align: 'right', render: (m) => formatNumber(m.paidJobs) },
-    { key: 'gross', header: 'Service value', align: 'right', render: (m) => <span className="whitespace-nowrap">{formatINR(m.grossPaise)}</span> },
+    { key: 'cash', header: 'Cash collected', align: 'right', render: (m) => <span className="whitespace-nowrap">{formatINR(m.cashCollectedPaise)}</span> },
     { key: 'commission', header: 'Commission', align: 'right', render: (m) => <span className="whitespace-nowrap font-semibold text-gray-700">{formatINR(m.commissionPaise)}</span> },
-    { key: 'coupons', header: 'Coupon cost', align: 'right', render: (m) => <span className="whitespace-nowrap text-rose-500">{m.couponCostPaise ? `−${formatINR(m.couponCostPaise)}` : formatINR(0)}</span> },
-    { key: 'net', header: 'Net platform', align: 'right', render: (m) => <NetAmount paise={m.platformNetPaise} /> },
+    { key: 'discounts', header: 'Member discounts', align: 'right', render: (m) => <span className="whitespace-nowrap text-rose-500">{m.memberDiscountsPaise ? `−${formatINR(m.memberDiscountsPaise)}` : formatINR(0)}</span> },
+    { key: 'net', header: 'NIVASA net', align: 'right', render: (m) => <NetAmount paise={m.platformNetPaise} /> },
     { key: 'vendors', header: 'Vendors earned', align: 'right', render: (m) => <span className="whitespace-nowrap">{formatINR(m.vendorEarningsPaise)}</span> },
   ];
   return (
@@ -279,8 +280,10 @@ function TopVendors({ rows, canSeeVendors, onFilter }) {
       ),
     },
     { key: 'jobs', header: 'Paid jobs', align: 'right', render: (r) => formatNumber(r.paidJobs) },
-    { key: 'gross', header: 'Service value', align: 'right', render: (r) => <span className="whitespace-nowrap">{formatINR(r.grossPaise)}</span> },
+    { key: 'cash', header: 'Cash collected', align: 'right', render: (r) => <span className="whitespace-nowrap">{formatINR(r.cashCollectedPaise)}</span> },
     { key: 'commission', header: 'Commission', align: 'right', render: (r) => <span className="whitespace-nowrap font-semibold text-gray-700">{formatINR(r.commissionPaise)}</span> },
+    { key: 'discounts', header: 'Member discounts', align: 'right', render: (r) => <span className="whitespace-nowrap text-rose-500">{r.memberDiscountsPaise ? `−${formatINR(r.memberDiscountsPaise)}` : formatINR(0)}</span> },
+    { key: 'net', header: 'NIVASA net', align: 'right', render: (r) => <NetAmount paise={r.platformNetPaise} /> },
     { key: 'earned', header: 'Vendor earned', align: 'right', render: (r) => <span className="whitespace-nowrap">{formatINR(r.vendorEarningsPaise)}</span> },
     {
       key: 'filter',
@@ -333,20 +336,9 @@ function JobsTable({ items, showVendor, canSeeVendors }) {
           },
         ]
       : []),
-    { key: 'gross', header: 'Service value', align: 'right', render: (b) => <span className="whitespace-nowrap">{formatINR(b.grossPaise)}</span> },
-    {
-      key: 'coupon',
-      header: 'Coupon',
-      render: (b) =>
-        b.couponCode ? (
-          <div className="whitespace-nowrap">
-            <p className="font-mono text-[11px] font-bold text-gray-700">{b.couponCode}</p>
-            <p className="text-[11px] text-rose-500">−{formatINR(b.discountPaise)}</p>
-          </div>
-        ) : (
-          <span className="text-gray-300">—</span>
-        ),
-    },
+    { key: 'vendorPrice', header: 'Vendor price', align: 'right', render: (b) => money(b.vendorPricePaise, 'On request') },
+    { key: 'memberPrice', header: 'Member price', align: 'right', render: (b) => money(b.memberPricePaise, 'On request') },
+    { key: 'cash', header: 'Cash', align: 'right', render: (b) => <span className="whitespace-nowrap font-semibold text-gray-700">{formatINR(b.cashPaise)}</span> },
     {
       key: 'commission',
       header: 'Commission',
@@ -354,11 +346,12 @@ function JobsTable({ items, showVendor, canSeeVendors }) {
       render: (b) => (
         <div className="whitespace-nowrap">
           <p className="font-semibold text-gray-700">{formatINR(b.commissionPaise)}</p>
-          <p className="text-[11px] text-gray-400">{pct(b.commissionPercent)}</p>
+          <p className="text-[11px] text-gray-400">{formatPercent(b.commissionPercent)}</p>
         </div>
       ),
     },
-    { key: 'net', header: 'Net platform', align: 'right', render: (b) => <NetAmount paise={b.netToPlatformPaise} /> },
+    { key: 'discount', header: 'Member discount', align: 'right', render: (b) => (b.discountPaise ? <span className="whitespace-nowrap text-rose-500">−{formatINR(b.discountPaise)}</span> : <span className="text-gray-300">—</span>) },
+    { key: 'net', header: 'NIVASA net', align: 'right', render: (b) => <NetAmount paise={b.netToPlatformPaise} /> },
     { key: 'earned', header: 'Vendor earned', align: 'right', render: (b) => <span className="whitespace-nowrap">{formatINR(b.vendorEarningsPaise)}</span> },
   ];
   return (

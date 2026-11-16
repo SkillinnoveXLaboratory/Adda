@@ -6,14 +6,16 @@ const AuthContext = createContext(null);
 
 /**
  * Session + profile state. status: 'booting' | 'signedOut' | 'signedIn' | 'offline'.
- * Members only: an approved membership unlocks the society area. Vendor accounts use the NIVASA Vendor Panel
- * website — the server refuses them here (VENDOR_USE_PANEL) and `vendorNotice` tells the person where to go.
+ * Three kinds of sign-in share this app:
+ *  - members (accountType member): an approved membership unlocks the society area;
+ *  - vendors (accountType vendor): the vendor area only, never a society;
+ *  - gate staff (`role: 'gate'`, POST /auth/gate/login): only the (gate) screens — the server refuses gate sessions
+ *    everywhere else (403 GATE_ACCOUNT), so their profile comes from GET /gate/me instead of /me.
  */
 export function AuthProvider({ children, onSessionExpired }) {
   const [status, setStatus] = useState('booting');
   const [profile, setProfile] = useState(null);
   const [bootError, setBootError] = useState(null);
-  const [vendorNotice, setVendorNotice] = useState(false);
   const expiredRef = useRef(onSessionExpired);
   useEffect(() => {
     expiredRef.current = onSessionExpired;
@@ -21,36 +23,42 @@ export function AuthProvider({ children, onSessionExpired }) {
 
   const applyProfile = useCallback(async (p) => {
     setProfile(p);
+    if (p?.role === 'gate') return session.setSociety(null);
     const approved = (p?.memberships || []).filter((m) => m.status === 'approved' && m.society?.status !== 'suspended');
     const keep = approved.find((m) => String(m.society?._id) === session.societyId);
     await session.setSociety(keep ? keep.society._id : approved[0]?.society?._id || null);
   }, []);
 
+  /** A gate session's profile: GET /gate/me → { user, gate }. */
+  const fetchGateProfile = useCallback(async () => {
+    const r = await api('/gate/me');
+    return { role: 'gate', user: r.user, gate: r.gate, memberships: [] };
+  }, []);
+
   const loadProfile = useCallback(async () => {
-    const p = await api('/me');
+    const p = session.role === 'gate' ? await fetchGateProfile() : await api('/me');
     await applyProfile(p);
     return p;
-  }, [applyProfile]);
+  }, [applyProfile, fetchGateProfile]);
 
   /** Works out the session state from storage + server. Returns the outcome instead of setting state. */
   const resolveSession = useCallback(async () => {
     try {
       const has = await session.load();
       if (!has) return { status: 'signedOut' };
-      return { status: 'signedIn', profile: await api('/me') };
+      return { status: 'signedIn', profile: session.role === 'gate' ? await fetchGateProfile() : await api('/me') };
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'NETWORK' || err.code === 'TIMEOUT' || err.status >= 500)) {
         return { status: 'offline', error: err };
       }
       await session.clear();
-      return { status: 'signedOut', vendor: err?.code === 'VENDOR_USE_PANEL' };
+      return { status: 'signedOut' };
     }
-  }, []);
+  }, [fetchGateProfile]);
 
   const applyOutcome = useCallback(
     async (o) => {
       if (o.profile) await applyProfile(o.profile);
-      if (o.vendor) setVendorNotice(true);
       setBootError(o.error || null);
       setStatus(o.status);
     },
@@ -65,12 +73,10 @@ export function AuthProvider({ children, onSessionExpired }) {
 
   useEffect(() => {
     let alive = true;
-    session.onEnded((reason) => {
+    session.onEnded(() => {
       setProfile(null);
       setStatus('signedOut');
-      // An old vendor session from before vendors moved to the Vendor Panel: say where to go, not "session ended".
-      if (reason === 'VENDOR_USE_PANEL') setVendorNotice(true);
-      else expiredRef.current?.();
+      expiredRef.current?.();
     });
     resolveSession().then((o) => alive && applyOutcome(o));
     return () => {
@@ -81,29 +87,59 @@ export function AuthProvider({ children, onSessionExpired }) {
   const finishSignIn = useCallback(
     async (result) => {
       await session.save(result);
-      await applyProfile({ user: result.user, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
-      setVendorNotice(false);
+      await session.setRole(null);
+      await applyProfile({ user: result.user, vendor: result.vendor, memberships: result.memberships, staffRoles: result.staffRoles, needsProfile: result.needsProfile });
       setStatus('signedIn');
     },
     [applyProfile],
   );
 
-  /** Phone + password sign-in. Vendor accounts get 403 VENDOR_USE_PANEL (thrown; no session is created). */
+  /**
+   * Phone + password sign-in with the Member / Vendor switch. The server refuses a mismatch with
+   * 403 ACCOUNT_TYPE_MISMATCH (no session is created); `err.accountType` then holds the other type.
+   */
   const signIn = useCallback(
-    async (phone, password) => {
-      const result = await api('/auth/resident/login', { method: 'POST', auth: false, body: { phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
+    async (phone, password, accountType) => {
+      try {
+        const result = await api('/auth/resident/login', { method: 'POST', auth: false, body: { phone: normalizePhone(phone), password, deviceName: 'NIVASA app', ...(accountType && { accountType }) } });
+        await finishSignIn(result);
+      } catch (err) {
+        if (err?.code === 'ACCOUNT_TYPE_MISMATCH') err.accountType = accountType === 'vendor' ? 'member' : 'vendor';
+        throw err;
+      }
+    },
+    [finishSignIn],
+  );
+
+  /** Sign-up. Vendors may also send their shop name and shop location ({lat,lng,label?}). */
+  const register = useCallback(
+    async ({ name, phone, password, accountType = 'member', shopName, location }) => {
+      const vendor = accountType === 'vendor';
+      const body = {
+        name: name.trim(),
+        phone: normalizePhone(phone),
+        password,
+        accountType,
+        deviceName: 'NIVASA app',
+        ...(vendor && shopName?.trim() && { shopName: shopName.trim() }),
+        ...(vendor && location && { location }),
+      };
+      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body });
       await finishSignIn(result);
     },
     [finishSignIn],
   );
 
-  /** Member sign-up (the app never sends an account type: vendors sign up on the Vendor Panel). */
-  const register = useCallback(
-    async ({ name, phone, password }) => {
-      const result = await api('/auth/resident/register', { method: 'POST', auth: false, body: { name: name.trim(), phone: normalizePhone(phone), password, deviceName: 'NIVASA app' } });
-      await finishSignIn(result);
+  /** Gate staff sign-in (email + password). The session only reaches the (gate) screens. */
+  const gateLogin = useCallback(
+    async (email, password) => {
+      const result = await api('/auth/gate/login', { method: 'POST', auth: false, body: { email: email.trim().toLowerCase(), password, deviceName: 'NIVASA app (gate)' } });
+      await session.save(result);
+      await session.setRole('gate');
+      await applyProfile({ role: 'gate', user: result.user, gate: result.gate, memberships: [] });
+      setStatus('signedIn');
     },
-    [finishSignIn],
+    [applyProfile],
   );
 
   const signOut = useCallback(async () => {
@@ -118,22 +154,29 @@ export function AuthProvider({ children, onSessionExpired }) {
   }, []);
 
   const value = useMemo(() => {
-    const memberships = profile?.memberships || [];
+    const isGate = profile?.role === 'gate';
+    const memberships = isGate ? [] : profile?.memberships || [];
     const approved = memberships.filter((m) => m.status === 'approved' && m.society?.status !== 'suspended');
-    const active = approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
+    const isVendor = !isGate && profile?.user?.accountType === 'vendor';
+    const active = isVendor || isGate ? null : approved.find((m) => String(m.society?._id) === session.societyId) || approved[0] || null;
     return {
       status,
       bootError,
       retryBoot: boot,
+      role: isGate ? 'gate' : isVendor ? 'vendor' : 'member',
+      isGate,
+      gate: isGate ? profile?.gate || null : null,
       user: profile?.user || null,
       memberships,
       activeMembership: active,
       isMember: !!active,
+      isVendor,
+      accountType: isGate ? null : profile?.user?.accountType || 'member',
+      vendor: isVendor ? profile?.vendor || null : null,
       pendingMembership: memberships.find((m) => m.status === 'pending') || null,
-      vendorNotice,
-      dismissVendorNotice: () => setVendorNotice(false),
       signIn,
       register,
+      gateLogin,
       signOut,
       refreshProfile: loadProfile,
       selectSociety: async (id) => {
@@ -141,7 +184,7 @@ export function AuthProvider({ children, onSessionExpired }) {
         setProfile((p) => ({ ...p }));
       },
     };
-  }, [status, bootError, boot, profile, vendorNotice, signIn, register, signOut, loadProfile]);
+  }, [status, bootError, boot, profile, signIn, register, gateLogin, signOut, loadProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

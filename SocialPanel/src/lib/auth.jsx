@@ -31,20 +31,23 @@ export function AuthProvider({ children }) {
     return () => setSessionEndHandler(null);
   }, []);
 
+  /** Re-read /me (roles, society name and logo may have changed) and update the session. */
+  const refreshProfile = useCallback(async () => {
+    if (!session.get()?.accessToken) return;
+    try {
+      const me = await api.get('/me');
+      if (!session.get()) return;
+      const societyId = resolveSocietyId(me.staffRoles, session.societyId);
+      session.patch({ user: me.user, staffRoles: me.staffRoles, memberships: me.memberships, societyId }, 'profile');
+    } catch {
+      /* api client already handled session end */
+    }
+  }, []);
+
   // On reload with a stored session, refresh the profile (roles may have changed).
   useEffect(() => {
-    if (!session.get()?.accessToken) return;
-    api
-      .get('/me')
-      .then((me) => {
-        if (!session.get()) return;
-        const societyId = resolveSocietyId(me.staffRoles, session.societyId);
-        session.patch({ user: me.user, staffRoles: me.staffRoles, memberships: me.memberships, societyId }, 'profile');
-      })
-      .catch(() => {
-        /* api client already handled session end */
-      });
-  }, []);
+    refreshProfile();
+  }, [refreshProfile]);
 
   const login = useCallback(async (email, password) => {
     const res = await api.post('/auth/admin/login', { email, password }, { auth: false });
@@ -91,10 +94,11 @@ export function AuthProvider({ children }) {
       login,
       logout,
       switchSociety,
+      refreshProfile,
       endReason,
       clearEndReason: () => setEndReason(null),
     };
-  }, [state, login, logout, switchSociety, endReason]);
+  }, [state, login, logout, switchSociety, refreshProfile, endReason]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

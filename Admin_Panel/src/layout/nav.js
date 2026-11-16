@@ -67,7 +67,6 @@ export const PLATFORM_NAV = [
     items: [
       { to: '/admin/listings', area: 'listings', label: 'Listings moderation', icon: 'fa-solid fa-store', badge: 'pendingListings' },
       { to: '/admin/ads', area: 'ads', label: 'Ads (boosts)', icon: 'fa-solid fa-rocket', badge: 'pendingAds' },
-      { to: '/admin/coupons', area: 'coupons', label: 'Coupons', icon: 'fa-solid fa-ticket' },
       { to: '/admin/reports', area: 'reports', label: 'Content reports', icon: 'fa-regular fa-flag', badge: 'openReports' },
       { to: '/admin/payments', area: 'payments', label: 'Payments monitor', icon: 'fa-solid fa-indian-rupee-sign' },
       { to: '/admin/audit', area: 'audit', label: 'Audit log', icon: 'fa-solid fa-clock-rotate-left' },

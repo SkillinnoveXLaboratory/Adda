@@ -31,6 +31,7 @@ const SExpenses = page(() => import('./pages/society/Expenses.jsx'));
 const SLedger = page(() => import('./pages/society/Ledger.jsx'));
 const SReports = page(() => import('./pages/society/Reports.jsx'));
 const SStaff = page(() => import('./pages/society/Staff.jsx'));
+const SGatemen = page(() => import('./pages/society/Gatemen.jsx'));
 const SProfile = page(() => import('./pages/society/Profile.jsx'));
 const SCategories = page(() => import('./pages/society/Categories.jsx'));
 const SAudit = page(() => import('./pages/society/Audit.jsx'));
@@ -92,6 +93,7 @@ export default function App() {
               <Route path="ledger" element={<Lazy el={SLedger} perm="finance.read" />} />
               <Route path="reports" element={<Lazy el={SReports} perm="reports" />} />
               <Route path="staff" element={<Lazy el={SStaff} />} />
+              <Route path="gatemen" element={<Lazy el={SGatemen} perm="gate" />} />
               <Route path="profile" element={<Lazy el={SProfile} />} />
               <Route path="categories" element={<Lazy el={SCategories} />} />
               <Route path="audit" element={<Lazy el={SAudit} perm="audit" />} />

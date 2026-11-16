@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { ListingCard } from '../../components/ListingCard';
 import { OfferCard } from '../../components/OfferCard';
 import { AsyncView, Button, DetailHeader, PillToggle, Screen } from '../../components/ui';
+import { useAuth } from '../../context/auth';
 import { useApi } from '../../hooks/useApi';
 
 /**
@@ -18,9 +19,12 @@ const KINDS = {
 
 export default function MyListings() {
   const { tab } = useLocalSearchParams();
+  const { isVendor } = useAuth();
   const [kind, setKind] = useState(KINDS[tab] ? tab : 'marketplace');
   const k = KINDS[kind];
-  const list = useApi(k.path, { query: { limit: 50 } });
+  const list = useApi(isVendor ? null : k.path, { query: { limit: 50 } });
+  // Vendors manage their properties and services in their own area.
+  if (isVendor) return <Redirect href={{ pathname: '/vendor-listings', params: tab ? { tab } : {} }} />;
   return (
     <Screen header={<DetailHeader title="My listings" fallback="/" />} refreshing={list.refreshing} onRefresh={list.refresh} footer={k.add ? <Button title={k.add[0]} icon="add" onPress={() => router.push(k.add[1])} /> : undefined}>
       <PillToggle options={Object.entries(KINDS).map(([value, v]) => ({ value, label: v.label }))} value={kind} onChange={setKind} />

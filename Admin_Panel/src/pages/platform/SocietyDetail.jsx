@@ -13,6 +13,8 @@ import { ConfirmDialog, Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { MetricCard } from '../../components/Charts.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { SetupLinkModal } from '../../components/SetupLinkModal.jsx';
+import { LocationInfo } from '../../components/LocationInfo.jsx';
+import { ShopLogo } from '../../components/ShopLogo.jsx';
 
 /** Online payment settings; `readOnly` (Societies · view only) shows the values without Save. */
 function PaymentsConfig({ society, onSaved, readOnly = false }) {
@@ -222,11 +224,19 @@ export default function SocietyDetail() {
                 </Card>
               </div>
               <Card className="col-span-12 self-start xl:col-span-4" title="Profile">
+                <div className="mb-4 flex items-center gap-3" data-testid="society-logo">
+                  <ShopLogo url={s.logo?.url} alt={`${s.name} logo`} size="lg" icon="fa-regular fa-building" fit="contain" testId="society-logo-img" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-gray-800">{s.name}</p>
+                    <p className="text-[11px] text-gray-400">{s.logo?.url ? 'Society logo' : 'No logo uploaded'}</p>
+                  </div>
+                </div>
                 <KeyValue
                   cols={1}
                   items={[
                     ['Status', <Badge key="s" status={s.status} />],
                     ['Address', [s.addressLine, s.area, s.city, s.state, s.pincode].filter(Boolean).join(', ')],
+                    ['Map location', <LocationInfo key="loc" location={s.location} empty="Not set — the society can add it in Society settings" testId="society-location" />],
                     ['Phone', formatPhone(s.phone)],
                     ['Email', s.email],
                     ['Joined', formatDate(s.createdAt)],

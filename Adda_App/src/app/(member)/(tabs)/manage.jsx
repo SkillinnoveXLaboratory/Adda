@@ -17,6 +17,7 @@ const MODULES = [
   ['Notices', 'notices', '/notices'],
   ['Community', 'people', '/community'],
   ['Voting', 'vote', '/polls'],
+  ['Guests', 'security', '/guests'],
   ['Amenities', 'amenities', '/facilities'],
   ['My Bookings', 'calendar', '/bookings'],
   ['Service\nRequests', 'requests', '/service-requests'],
@@ -27,10 +28,21 @@ export default function SocietyHub() {
   const { activeMembership: m } = useAuth();
   const home = useApi('/resident/home');
   const d = home.data;
+  // Unread notes from gate security → badge on the Guests tile.
+  const gateNotes = useApi('/resident/gate-notes', { query: { limit: 1 } });
+  const unreadNotes = gateNotes.data?.unread || 0;
   const where = [m?.building?.name, m?.society?.city].filter(Boolean).join(', ');
 
   return (
-    <Screen padded={false} refreshing={home.refreshing} onRefresh={home.refresh} header={<Hero title="Society Management" onBack={() => router.navigate('/home')} unread={d?.unreadNotifications || 0} onBell={() => router.push('/notifications')} />}>
+    <Screen
+      padded={false}
+      refreshing={home.refreshing}
+      onRefresh={() => {
+        home.refresh();
+        gateNotes.refresh();
+      }}
+      header={<Hero title="Society Management" onBack={() => router.navigate('/home')} unread={d?.unreadNotifications || 0} onBell={() => router.push('/notifications')} />}
+    >
       <View style={styles.body}>
         <Banner
           tone="light"
@@ -61,7 +73,15 @@ export default function SocietyHub() {
               nicon={nicon}
               label={label}
               testID={`module-${href.slice(1)}`}
-              badge={href === '/complaints' && d?.openComplaints ? String(d.openComplaints) : href === '/polls' && d?.openPolls ? String(d.openPolls) : undefined}
+              badge={
+                href === '/complaints' && d?.openComplaints
+                  ? String(d.openComplaints)
+                  : href === '/polls' && d?.openPolls
+                    ? String(d.openPolls)
+                    : href === '/guests' && unreadNotes
+                      ? String(unreadNotes)
+                      : undefined
+              }
               onPress={() => router.push(href)}
             />
           ))}

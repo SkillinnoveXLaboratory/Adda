@@ -30,7 +30,7 @@ function useOutsideClose(open, setOpen) {
   return ref;
 }
 
-function Sidebar({ sections, collapsed, mobileOpen, onCloseMobile, badges, footer }) {
+function Sidebar({ sections, collapsed, mobileOpen, onCloseMobile, badges, footer, brand }) {
   return (
     <>
       {mobileOpen && <div className="fixed inset-0 z-30 animate-fade-in bg-gray-900/40 lg:hidden" onClick={onCloseMobile} aria-hidden="true" />}
@@ -43,9 +43,9 @@ function Sidebar({ sections, collapsed, mobileOpen, onCloseMobile, badges, foote
           mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full',
         )}
       >
-        <div className="sidebar-logo flex h-16 flex-shrink-0 items-center justify-between border-b border-gray-100 px-6">
-          <NavLink to="/" className="cursor-pointer" aria-label="adda home">
-            <Logo />
+        <div className="sidebar-logo flex h-16 flex-shrink-0 items-center justify-between gap-2 border-b border-gray-100 px-5">
+          <NavLink to="/" className="min-w-0 cursor-pointer" aria-label={brand ? 'Dashboard' : 'Home'}>
+            {brand || <Logo />}
           </NavLink>
           <button type="button" onClick={onCloseMobile} className="text-gray-400 hover:text-gray-600 lg:hidden" aria-label="Close menu">
             <Icon name="fa-solid fa-xmark" />
@@ -270,7 +270,7 @@ function FullscreenButton() {
  * Shell from template.html: 256px white sidebar (collapses to 70px; off-canvas below lg),
  * 64px header, scrolling main area on #f2f4f9.
  */
-export function AppShell({ sections, badges, banner, sidebarFooter }) {
+export function AppShell({ sections, badges, banner, sidebarFooter, brand, brandCompact }) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -299,16 +299,14 @@ export function AppShell({ sections, badges, banner, sidebarFooter }) {
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[90] focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-xs">
         Skip to content
       </a>
-      <Sidebar sections={sections} collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} badges={badges} footer={sidebarFooter} />
+      <Sidebar sections={sections} collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} badges={badges} footer={sidebarFooter} brand={brand} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="z-20 flex h-16 flex-shrink-0 items-center justify-between border-b border-gray-100 bg-white px-4 sm:px-6">
           <div className="flex min-w-0 items-center space-x-4 sm:space-x-6">
             <button id="toggleSidebar" type="button" onClick={toggle} className="text-gray-500 hover:text-azea-purple focus:outline-none focus-visible:ring-2 focus-visible:ring-azea-purple/40" aria-label="Toggle navigation" aria-controls="sidebar" data-testid="toggle-sidebar">
               <Icon name="fa-solid fa-bars" className="text-lg" />
             </button>
-            <span className="lg:hidden">
-              <Logo className="[&_.sidebar-text]:text-xl" />
-            </span>
+            <span className="min-w-0 max-w-[50vw] lg:hidden">{brandCompact || <Logo className="[&_.sidebar-text]:text-xl" />}</span>
             <QuickSearch sections={sections} />
           </div>
           <div className="flex items-center space-x-3 text-sm text-gray-500 sm:space-x-4">

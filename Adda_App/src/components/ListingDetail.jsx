@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { api } from '../lib/api';
 import { confirm } from '../lib/dialog';
 import { formatDate, money, titleCase } from '../lib/format';
+import { useAuth } from '../context/auth';
 import { useToast } from '../context/toast';
 import { colors } from '../theme';
 import { Badge, Button, Card, Hint, KeyValue, T, useGoBack } from './ui';
@@ -13,6 +14,9 @@ const REASONS = ['Fraud or scam', 'Wrong information', 'Already sold / rented', 
 
 /** Shared detail view for property and marketplace listings. */
 export function ListingDetailView({ item, kind, onChanged }) {
+  // Property listings are edited by vendors (KYC-approved); members only edit their marketplace items.
+  const { isVendor } = useAuth();
+  const canEdit = kind === 'marketplace' || isVendor;
   const toast = useToast();
   const [reporting, setReporting] = useState(false);
   const width = Dimensions.get('window').width - 32;
@@ -105,7 +109,7 @@ export function ListingDetailView({ item, kind, onChanged }) {
       </View>
 
       {item.mine && item.moderationStatus === 'pending' ? <Hint tone="amber" icon="hourglass-outline">Your listing is being reviewed by moderators. It becomes visible to others once approved.</Hint> : null}
-      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}.${kind === 'marketplace' ? ' Edit it to resubmit.' : ''}`}</Hint> : null}
+      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}. Edit it to resubmit.`}</Hint> : null}
 
       <Card>
         {kind === 'property' ? (
@@ -139,8 +143,10 @@ export function ListingDetailView({ item, kind, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
-          {/* Members edit their marketplace items; property listings are managed by vendors on the Vendor Panel. */}
-          {kind === 'marketplace' ? <Button title="Edit listing" icon="create-outline" onPress={() => router.push({ pathname: '/marketplace/edit', params: { id: item._id } })} /> : null}
+          {kind === 'property' && isVendor && item.verifiedVendor && item.moderationStatus === 'approved' && item.availability === 'available' ? (
+            <Button title="Boost this property" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'property', id: item._id } })} />
+          ) : null}
+          {canEdit ? <Button title="Edit listing" icon="create-outline" onPress={() => router.push({ pathname: kind === 'property' ? '/properties/edit' : '/marketplace/edit', params: { id: item._id } })} /> : null}
           {kind === 'property' ? (
             item.availability === 'available' ? (
               <Button title={item.listingType === 'rent' ? 'Mark as rented' : 'Mark as sold'} variant="alt" onPress={() => setAvailability(item.listingType === 'rent' ? 'rented' : 'sold')} />

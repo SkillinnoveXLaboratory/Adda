@@ -337,7 +337,7 @@ export default function SubAdmins() {
           error={q.error}
           onRetry={q.reload}
           dim={q.reloading}
-          empty={<EmptyState compact icon="fa-solid fa-user-gear" title="No sub-admins yet" message="Add a sub-admin to share the work — for example, someone who reviews vendor KYC or manages coupons." action={<Button icon="fa-solid fa-plus" onClick={() => setModal({})}>New sub-admin</Button>} />}
+          empty={<EmptyState compact icon="fa-solid fa-user-gear" title="No sub-admins yet" message="Add a sub-admin to share the work — for example, someone who reviews vendor KYC or moderates listings." action={<Button icon="fa-solid fa-plus" onClick={() => setModal({})}>New sub-admin</Button>} />}
         />
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">

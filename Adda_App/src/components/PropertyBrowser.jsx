@@ -34,9 +34,9 @@ export function FilterButton({ onPress, active }) {
 
 /**
  * Property marketplace used by the Properties tab and /properties.
- * `header` is rendered above the list.
+ * `header` is rendered above the list; `top` (optional) above the Buy / Rent switch (Marketplace tabs).
  */
-export function PropertyBrowser({ header, showFilters, setShowFilters }) {
+export function PropertyBrowser({ header, top, showFilters, setShowFilters }) {
   const [mode, setMode] = useState('sale');
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -53,6 +53,7 @@ export function PropertyBrowser({ header, showFilters, setShowFilters }) {
 
   return (
     <Screen header={header} refreshing={list.refreshing} onRefresh={list.refresh}>
+      {top}
       <PillToggle options={MODES} value={mode} onChange={setMode} />
       <SearchBar value={q} onChangeText={setQ} placeholder="Search by location, project or property..." />
       {showFilters ? (

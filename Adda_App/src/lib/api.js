@@ -6,6 +6,8 @@ import { File as ExpoFile } from 'expo-file-system';
 const ACCESS_KEY = 'adda.accessToken';
 const REFRESH_KEY = 'adda.refreshToken';
 const SOCIETY_KEY = 'adda.societyId';
+/** 'gate' for gate-staff sessions (the server refuses them outside /gate/*); absent for members and vendors. */
+const ROLE_KEY = 'adda.sessionRole';
 
 export class ApiError extends Error {
   constructor(status, code, message, details) {
@@ -19,12 +21,13 @@ export class ApiError extends Error {
 let accessToken = null;
 let refreshToken = null;
 let societyId = null;
+let sessionRole = null;
 let refreshInFlight = null;
 let onSessionEnded = () => {};
 
 export const session = {
   async load() {
-    [accessToken, refreshToken, societyId] = await Promise.all([getItem(ACCESS_KEY), getItem(REFRESH_KEY), getItem(SOCIETY_KEY)]);
+    [accessToken, refreshToken, societyId, sessionRole] = await Promise.all([getItem(ACCESS_KEY), getItem(REFRESH_KEY), getItem(SOCIETY_KEY), getItem(ROLE_KEY)]);
     return !!refreshToken;
   },
   async save(tokens) {
@@ -36,7 +39,17 @@ export const session = {
     accessToken = null;
     refreshToken = null;
     societyId = null;
-    await Promise.all([removeItem(ACCESS_KEY), removeItem(REFRESH_KEY), removeItem(SOCIETY_KEY)]);
+    sessionRole = null;
+    await Promise.all([removeItem(ACCESS_KEY), removeItem(REFRESH_KEY), removeItem(SOCIETY_KEY), removeItem(ROLE_KEY)]);
+  },
+  /** Remembers the kind of session ('gate' or null) so the next app start knows which profile endpoint to call. */
+  async setRole(role) {
+    sessionRole = role || null;
+    if (sessionRole) await setItem(ROLE_KEY, sessionRole);
+    else await removeItem(ROLE_KEY);
+  },
+  get role() {
+    return sessionRole;
   },
   async setSociety(id) {
     societyId = id ? String(id) : null;
@@ -107,8 +120,7 @@ async function refreshTokens() {
   return refreshInFlight;
 }
 
-/** Vendor accounts now use the Vendor Panel website: the server ends their old app sessions with 401 VENDOR_USE_PANEL. */
-const SESSION_ENDING_CODES = new Set(['SESSION_INVALID', 'ACCOUNT_DISABLED', 'TOKEN_INVALID', 'VENDOR_USE_PANEL']);
+const SESSION_ENDING_CODES = new Set(['SESSION_INVALID', 'ACCOUNT_DISABLED', 'TOKEN_INVALID']);
 
 /**
  * JSON API request. Options: method, body (object or FormData), auth (default true), query (object).
@@ -138,7 +150,6 @@ export async function api(path, { method = 'GET', body, auth = true, query, retr
         await refreshTokens();
       } catch (err) {
         await endSession(err?.code);
-        if (err?.code === 'VENDOR_USE_PANEL') throw err;
         throw err instanceof ApiError ? new ApiError(401, 'SESSION_INVALID', 'Your session has ended. Please sign in again.') : err;
       }
       return api(path, { method, body, auth, query, retry: false, timeoutMs });

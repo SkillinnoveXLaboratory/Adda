@@ -7,6 +7,8 @@ import { Alert, Button, CopyField, cx, Icon } from '../../components/ui.jsx';
 import { Checkbox, Field, FileUploader, Input, Select } from '../../components/Form.jsx';
 import { PublicLayout } from '../../layout/PublicLayout.jsx';
 import { INDIAN_STATES } from '../../lib/india.js';
+import { formatCoord, locationPayload } from '../../lib/location.js';
+import { LocationPicker } from '../../components/LocationPicker.jsx';
 
 export { INDIAN_STATES };
 
@@ -18,7 +20,7 @@ const STEPS = [
   { key: 'review', title: 'Review & submit', icon: 'fa-solid fa-check-double' },
 ];
 
-const EMPTY = { societyName: '', totalUnits: '', phone: '', email: '', addressLine: '', area: '', city: '', state: '', pincode: '', repName: '', repDesignation: '', repPhone: '', repEmail: '' };
+const EMPTY = { societyName: '', totalUnits: '', phone: '', email: '', addressLine: '', area: '', city: '', state: '', pincode: '', repName: '', repDesignation: '', repPhone: '', repEmail: '', location: null };
 
 const RULES = {
   society: {
@@ -254,6 +256,7 @@ export default function Register() {
       totalUnits: values.totalUnits ? Number(values.totalUnits) : undefined,
       representative: { name: values.repName.trim(), designation: values.repDesignation.trim() || undefined, phone: normalizePhone(values.repPhone), email: values.repEmail.trim().toLowerCase() },
       documents: docs.map((d) => d._id),
+      ...(locationPayload(values.location) ? { location: locationPayload(values.location) } : {}),
       submit: true,
     }),
     [values, docs],
@@ -352,6 +355,13 @@ export default function Register() {
                   </Select>
                 </Field>
                 <TextField {...f} label="PIN code" name="pincode" required inputMode="numeric" maxLength={6} placeholder="6 digits" autoComplete="postal-code" />
+                <div className="border-t border-gray-100 pt-4 sm:col-span-2">
+                  <p className="form-label">
+                    Location on the map <span className="font-normal text-azea-muted">(optional)</span>
+                  </p>
+                  <p className="mb-3 text-[11px] leading-relaxed text-azea-muted">Pin your society’s gate so the NIVASA team can verify the address faster, and members and service providers can find you. You can add or change it later in Society settings.</p>
+                  <LocationPicker value={values.location} onChange={(loc) => onChange('location', loc)} />
+                </div>
               </div>
             )}
             {step === 2 && (
@@ -392,6 +402,7 @@ export default function Register() {
                     ['Area', values.area],
                     ['City', values.city],
                     ['State / PIN', [values.state, values.pincode].filter(Boolean).join(' – ')],
+                    ['Map location', values.location ? values.location.label || `${formatCoord(values.location.lat)}, ${formatCoord(values.location.lng)}` : ''],
                   ]}
                 />
                 <ReviewSection

@@ -167,3 +167,27 @@
     display: none !important;
   }
 }
+
+/* LocationPicker pin (CSS only — no marker image files). */
+.nivasa-pin {
+  background: transparent;
+  border: 0;
+}
+.nivasa-pin-dot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 34px;
+  height: 42px;
+  font-size: 36px;
+  line-height: 1;
+  color: #705ec8;
+  filter: drop-shadow(0 2px 2px rgba(17, 24, 39, 0.35));
+  cursor: grab;
+}
+.leaflet-container {
+  font-family: inherit;
+}
+.leaflet-container .leaflet-control-attribution {
+  font-size: 10px;
+}

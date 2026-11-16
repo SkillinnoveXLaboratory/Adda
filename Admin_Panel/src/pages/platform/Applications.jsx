@@ -7,6 +7,7 @@ import { Alert, Badge, Button, CopyField, EmptyState, ErrorState, Icon, KeyValue
 import { DataTable, Pagination, Toolbar } from '../../components/DataTable.jsx';
 import { SearchInput } from '../../components/Form.jsx';
 import { ConfirmDialog, Drawer, Modal, ReasonDialog } from '../../components/Modal.jsx';
+import { LocationInfo } from '../../components/LocationInfo.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
 import { useAuth } from '../../lib/auth.jsx';
@@ -126,6 +127,7 @@ function ApplicationDrawer({ id, onClose, onChanged }) {
                   ['Email', r.email],
                   ['Address', [r.addressLine, r.area].filter(Boolean).join(', ')],
                   ['City / State', `${r.city}, ${r.state} – ${r.pincode}`],
+                  ['Map location', <LocationInfo key="loc" location={r.location} empty="Not given on the form" testId="application-location" />],
                 ]}
               />
             </section>

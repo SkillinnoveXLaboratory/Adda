@@ -2,19 +2,26 @@ import { useState } from 'react';
 import { Dimensions, Image, Linking, Pressable, ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { CategoryIcon } from '../../../components/CategoryIcon';
+import { DiscountOffer } from '../../../components/Pricing';
+import { ShopBadge } from '../../../components/OfferCard';
 import { AsyncView, Badge, Button, Card, DetailHeader, Hint, KeyValue, LoadingList, Screen, T, useGoBack } from '../../../components/ui';
+import { useAuth } from '../../../context/auth';
 import { useToast } from '../../../context/toast';
 import { useApi } from '../../../hooks/useApi';
 import { api } from '../../../lib/api';
 import { confirm } from '../../../lib/dialog';
-import { formatDate, OFFER_PRICE_TYPES, offerPrice } from '../../../lib/format';
+import { formatDate, money, OFFER_PRICE_TYPES, offerPrice } from '../../../lib/format';
 import { colors } from '../../../theme';
 
 const REASONS = ['Fraud or scam', 'Phone number does not work', 'Wrong or misleading information', 'Inappropriate content'];
 
 function OfferDetail({ item, onChanged }) {
   const toast = useToast();
-  const canBook = !item.mine && item.moderationStatus === 'approved' && item.status === 'active';
+  const { isVendor } = useAuth();
+  // Members book; vendors only manage their own services.
+  const canBook = !isVendor && !item.mine && item.moderationStatus === 'approved' && item.status === 'active';
+  const pr = item.pricing || {};
+  const book = (discount) => router.push({ pathname: '/offers/book', params: { id: item._id, ...(discount && { discount: '1' }) } });
   const back = useGoBack('/offers');
   const [reporting, setReporting] = useState(false);
   const width = Dimensions.get('window').width - 32;
@@ -81,9 +88,15 @@ function OfferDetail({ item, onChanged }) {
         <T weight="extrabold" size={19} style={{ lineHeight: 26 }} accessibilityRole="header">
           {item.title}
         </T>
-        <T weight="extrabold" size={17} color={colors.navy}>
+        <T weight="extrabold" size={17} color={colors.navy} testID="offer-price-shown">
           {offerPrice(item)}
         </T>
+        {item.mine && pr.memberPricePaise ? (
+          <T size={12.5} color={colors.goldText} weight="semibold">
+            {pr.commissionPercent > 0 ? `Members see ${money(pr.memberPricePaise)} (your price + NIVASA’s ${pr.commissionPercent}% fee)` : `Members see ${money(pr.memberPricePaise)}`}
+          </T>
+        ) : null}
+        <ShopBadge shop={item.shop} />
         <T size={12.5} color={colors.muted}>
           {[item.serviceArea, item.city].filter(Boolean).join(' · ')}
           {item.society?.name ? ` · ${item.society.name}` : ''}
@@ -91,9 +104,11 @@ function OfferDetail({ item, onChanged }) {
       </View>
 
       {item.mine && item.moderationStatus === 'pending' ? <Hint tone="amber" icon="hourglass-outline">Your service is being reviewed. Neighbours see it once it is approved.</Hint> : null}
-      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}.`}</Hint> : null}
+      {item.mine && item.moderationStatus === 'rejected' ? <Hint tone="coral" icon="close-circle-outline">{`Not approved${item.moderationNote ? `: ${item.moderationNote}` : ''}. Edit it to resubmit.`}</Hint> : null}
+      {canBook && pr.discountAvailable && pr.discountPaise > 0 ? <DiscountOffer pricing={pr} applied={false} onToggle={() => book(true)} /> : null}
 
       <Card>
+        {item.shop?.name ? <KeyValue label="Shop" value={item.shop.name} /> : null}
         <KeyValue label="Provider" value={item.contactName || item.postedBy} />
         {item.experienceYears ? <KeyValue label="Experience" value={`${item.experienceYears} year${item.experienceYears === 1 ? '' : 's'}`} /> : null}
         {item.availabilityNote ? <KeyValue label="Available" value={item.availabilityNote} /> : null}
@@ -114,12 +129,16 @@ function OfferDetail({ item, onChanged }) {
 
       {item.mine ? (
         <View style={{ gap: 10 }}>
+          {item.moderationStatus === 'approved' && item.status === 'active' ? (
+            <Button title="Boost this service" icon="rocket-outline" variant="gold" onPress={() => router.push({ pathname: '/boost', params: { kind: 'service', id: item._id } })} />
+          ) : null}
+          <Button title="Edit service" icon="create-outline" onPress={() => router.push({ pathname: '/offers/edit', params: { id: item._id } })} />
           {item.status === 'active' ? <Button title="Pause (hide for now)" variant="alt" onPress={() => setStatus('paused')} /> : <Button title="Resume — show again" variant="alt" onPress={() => setStatus('active')} />}
           <Button title="Delete service" variant="danger" onPress={remove} />
         </View>
       ) : (
         <>
-          {canBook ? <Button title="Book Now" icon="calendar-outline" variant="gold" onPress={() => router.push({ pathname: '/offers/book', params: { id: item._id } })} /> : null}
+          {canBook ? <Button title="Book Now" icon="calendar-outline" variant="gold" onPress={() => book(false)} /> : null}
           <Card style={{ gap: 10 }}>
             <T weight="bold" size={14}>
               Contact {item.contactName || item.postedBy || 'the provider'}

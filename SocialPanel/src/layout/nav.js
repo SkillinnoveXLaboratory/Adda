@@ -32,6 +32,7 @@ export const SOCIETY_NAV = [
     title: 'Administration',
     items: [
       { to: '/society/staff', label: 'Staff & roles', icon: 'fa-solid fa-user-shield', perm: 'society.read' },
+      { to: '/society/gatemen', label: 'Gatemen', icon: 'fa-solid fa-shield-halved', perm: 'gate' },
       { to: '/society/profile', label: 'Society settings', icon: 'fa-solid fa-sliders', perm: 'society.read' },
       { to: '/society/categories', label: 'Categories', icon: 'fa-solid fa-tags', perm: 'society.read' },
       { to: '/society/audit', label: 'Audit log', icon: 'fa-solid fa-clock-rotate-left', perm: 'audit' },

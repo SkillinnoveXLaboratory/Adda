@@ -80,8 +80,6 @@ const schema = z.object({
   // Interim resident sign-in with phone + password while no SMS provider is configured.
   // Phone numbers are NOT verified in this mode; society admins' membership approval is the identity check.
   RESIDENT_PASSWORD_LOGIN: bool(false),
-  // Public address of the Vendor Panel website (shown to vendors who open the member app). Optional.
-  VENDOR_PANEL_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   // Sign-in attempts allowed per IP per 15 minutes (accounts also lock after 5 wrong passwords).
   LOGIN_RATE_LIMIT: z.coerce.number().int().min(5).max(10000).default(20),
   // Public form submissions (society applications, document uploads) allowed per IP per hour.
@@ -229,8 +227,9 @@ const User = model$6('User', userSchema);
 const sessionSchema = new Schema$6(
   {
     user: { type: ObjectId$6, ref: 'User', required: true, index: true },
-    // mobile = member app, panel = SocialPanel / Master Admin, vendor = Vendor Panel website.
-    client: { type: String, enum: ['mobile', 'panel', 'vendor'], required: true },
+    // mobile = member/vendor app, panel = SocialPanel / Master Admin, gate = gateman in the app,
+    // vendor = the retired Vendor Panel website (kept so old session documents stay valid).
+    client: { type: String, enum: ['mobile', 'panel', 'vendor', 'gate'], required: true },
     refreshTokenHash: { type: String, required: true },
     previousTokenHash: String,
     deviceName: { type: String, maxlength: 120 },
@@ -281,6 +280,9 @@ const PushToken = model$6('PushToken', pushTokenSchema);
 const { Schema: Schema$5, model: model$5 } = mongoose;
 const ObjectId$5 = Schema$5.Types.ObjectId;
 
+/** GeoJSON point { type: 'Point', coordinates: [lng, lat] }; the whole object is absent when no location is set. */
+const geoPointField = () => ({ type: { type: String, enum: ['Point'] }, coordinates: { type: [Number], default: undefined } });
+
 const addressFields = {
   addressLine: { type: String, trim: true, maxlength: 300 },
   area: { type: String, trim: true, maxlength: 120 },
@@ -311,6 +313,9 @@ const registrationSchema = new Schema$5(
     reviewedAt: Date,
     decisionReason: { type: String, maxlength: 1000 },
     society: { type: ObjectId$5, ref: 'Society' },
+    // Optional map location picked on the public form; copied to the society on approval.
+    location: geoPointField(),
+    locationLabel: { type: String, trim: true, maxlength: 200 },
   },
   { timestamps: true },
 );
@@ -324,6 +329,10 @@ const societySchema = new Schema$5(
     phone: String,
     email: { type: String, lowercase: true, trim: true },
     description: { type: String, maxlength: 2000 },
+    // Branding shown in SocialPanel (public image, upload purpose "society_logo") and the society's map location.
+    logo: { type: ObjectId$5, ref: 'UploadedMedia' },
+    location: geoPointField(),
+    locationLabel: { type: String, trim: true, maxlength: 200 },
     status: { type: String, enum: ['active', 'suspended'], default: 'active', index: true },
     suspendedReason: String,
     registration: { type: ObjectId$5, ref: 'SocietyRegistration' },
@@ -360,9 +369,12 @@ const staffSchema = new Schema$5(
   {
     society: { type: ObjectId$5, ref: 'Society', required: true },
     user: { type: ObjectId$5, ref: 'User', required: true },
-    role: { type: String, enum: ['admin', 'treasurer', 'secretary', 'manager', 'committee'], required: true },
+    // gateman = gate security: signs in only in the app (session client "gate"), never in SocialPanel.
+    role: { type: String, enum: ['admin', 'treasurer', 'secretary', 'manager', 'committee', 'gateman'], required: true },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
     title: { type: String, maxlength: 80 },
+    // Gatemen only: contact number kept on the staff record (not on the account, so it never clashes with a member's phone).
+    phone: { type: String, match: /^[6-9]\d{9}$/ },
     addedBy: { type: ObjectId$5, ref: 'User' },
   },
   { timestamps: true },
@@ -708,13 +720,16 @@ const serviceOfferSchema = new Schema$3(
     whatsappAvailable: { type: Boolean, default: true },
     visibility: { type: String, enum: ['public', 'society'], default: 'public' },
     status: { type: String, enum: ['active', 'paused'], default: 'active' },
-    // Platform commission (basis points, 1000 = 10%) in force when the vendor published / last edited this service.
-    commissionBps: { type: Number, min: 0, max: 5000, default: 0 },
+    // Copied from the vendor's shop location (PUT /vendor/shop) for "near me" search; absent when the shop has none.
+    location: geoPointField(),
+    locationLabel: { type: String, trim: true, maxlength: 200 },
     ...moderation$1,
   },
   { timestamps: true },
 );
 serviceOfferSchema.index({ moderationStatus: 1, status: 1, category: 1, createdAt: -1 });
+// 2dsphere indexes skip documents without the field, so services without a location never break it.
+serviceOfferSchema.index({ location: '2dsphere' });
 serviceOfferSchema.index({ provider: 1, createdAt: -1 });
 serviceOfferSchema.index({ society: 1, moderationStatus: 1 });
 const ServiceOffer = model$3('ServiceOffer', serviceOfferSchema);
@@ -749,6 +764,15 @@ const vendorProfileSchema = new Schema$3(
     submittedAt: Date,
     reviewedBy: { type: ObjectId$3, ref: 'User' },
     reviewedAt: Date,
+    // Shop shown on the vendor's services: name, public logo (purpose "vendor_logo") and location.
+    shopName: { type: String, trim: true, maxlength: 80 },
+    logo: { type: ObjectId$3, ref: 'UploadedMedia' },
+    location: geoPointField(),
+    locationLabel: { type: String, trim: true, maxlength: 200 },
+    // Set by Master Admin per vendor (basis points). Commission is added ON TOP of the vendor's price; the member
+    // discount is a share OF that commission given back when the member taps "Apply discount".
+    commissionBps: { type: Number, min: 0, max: 10000, default: 0 },
+    memberDiscountBps: { type: Number, min: 0, max: 10000, default: 0 },
   },
   { timestamps: true },
 );
@@ -778,11 +802,17 @@ const serviceBookingSchema = new Schema$3(
     note: { type: String, trim: true, maxlength: 500 },
     customerName: { type: String, maxlength: 120 },
     customerPhone: { type: String, match: /^[6-9]\d{9}$/ },
-    // Coupon (discount funded by NIVASA) and the commission rate snapshotted from the service at booking time.
-    coupon: { type: ObjectId$3, ref: 'Coupon' },
-    couponCode: String,
+    // Pricing snapshot taken when the booking is made (pricingVersion 2): member price = vendor price + commission;
+    // payable = member price − discount. pricePaise = the member price (what the member was shown).
+    // Bookings made before (no pricingVersion) keep their old fields and numbers.
+    pricingVersion: Number,
+    vendorPricePaise: Number,
+    commissionBps: { type: Number, min: 0, max: 10000, default: 0 },
+    commissionPaise: Number,
+    memberPricePaise: Number,
+    discountBps: { type: Number, min: 0, max: 10000, default: 0 },
     discountPaise: { type: Number, min: 0, default: 0 },
-    commissionBps: { type: Number, min: 0, max: 5000, default: 0 },
+    payablePaise: Number,
     status: { type: String, enum: Object.keys(BOOKING_TRANSITIONS), default: 'requested' },
     timeline: [{ status: String, note: String, by: { type: ObjectId$3, ref: 'User' }, at: { type: Date, default: Date.now } }],
     payment: {
@@ -792,13 +822,14 @@ const serviceBookingSchema = new Schema$3(
       paidAt: Date,
       markedBy: { type: ObjectId$3, ref: 'User' },
       note: { type: String, maxlength: 300 },
-      // Settlement, fixed when payment is recorded: gross = cash + coupon discount; commission on gross;
-      // netToPlatform = commission − discount (negative → NIVASA owes the vendor).
+      // Settlement, fixed when payment is recorded (amountPaise = cash received):
+      // netToPlatform = commission − discount; vendorEarnings = cash − netToPlatform.
       discountPaise: Number,
       grossPaise: Number,
       commissionBps: Number,
       commissionPaise: Number,
       netToPlatformPaise: Number,
+      vendorEarningsPaise: Number,
     },
   },
   { timestamps: true },
@@ -809,37 +840,57 @@ serviceBookingSchema.index({ offer: 1, customer: 1, status: 1 });
 const ServiceBooking = model$3('ServiceBooking', serviceBookingSchema);
 
 /**
- * Platform coupon for members booking vendor services: a fixed rupee discount, usable once per member by up to
- * `maxUses` different members, optionally only for members of chosen societies. NIVASA funds the discount.
+ * Gate security. A visitor (guest) of a flat: pre-registered by a member (status "expected") or added at the gate by a
+ * gateman (walk-in: "approved" or "inside"). Status machine (every update query carries a status guard):
+ * expected → approved | rejected | cancelled;  approved → inside | cancelled | rejected;  inside → exited.
  */
-const couponSchema = new Schema$3(
+const VISITOR_STATUSES = ['expected', 'approved', 'rejected', 'cancelled', 'inside', 'exited'];
+const visitorSchema = new Schema$3(
   {
-    code: { type: String, required: true, unique: true, uppercase: true, trim: true, match: /^[A-Z0-9-]{3,20}$/ },
-    description: { type: String, trim: true, maxlength: 200 },
-    discountPaise: { type: Number, required: true, min: 100, validate: { validator: Number.isInteger, message: 'Discount must be whole paise' } },
-    maxUses: { type: Number, required: true, min: 1, max: 100000 },
-    usedCount: { type: Number, default: 0, min: 0 },
-    societies: [{ type: ObjectId$3, ref: 'Society' }],
-    active: { type: Boolean, default: true },
-    expiresAt: Date,
-    createdBy: { type: ObjectId$3, ref: 'User' },
+    society: { type: ObjectId$3, ref: 'Society', required: true },
+    flat: { type: ObjectId$3, ref: 'Flat', required: true },
+    building: { type: ObjectId$3, ref: 'Building', required: true },
+    host: { type: ObjectId$3, ref: 'User' },
+    name: { type: String, required: true, trim: true, maxlength: 80 },
+    phone: { type: String, required: true, match: /^[6-9]\d{9}$/ },
+    purpose: { type: String, trim: true, maxlength: 120 },
+    expectedDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
+    expectedIn: String,
+    expectedOut: String,
+    status: { type: String, enum: VISITOR_STATUSES, default: 'expected' },
+    entryAt: Date,
+    exitAt: Date,
+    createdBy: { type: ObjectId$3, ref: 'User', required: true },
+    createdByRole: { type: String, enum: ['member', 'gateman'], required: true },
+    approvedBy: { type: ObjectId$3, ref: 'User' },
+    approvedAt: Date,
+    rejectedReason: { type: String, maxlength: 300 },
+    enteredBy: { type: ObjectId$3, ref: 'User' },
+    exitedBy: { type: ObjectId$3, ref: 'User' },
+    cancelledAt: Date,
   },
   { timestamps: true },
 );
-const Coupon = model$3('Coupon', couponSchema);
+visitorSchema.index({ society: 1, expectedDate: 1, status: 1 });
+visitorSchema.index({ society: 1, flat: 1, expectedDate: -1 });
+visitorSchema.index({ society: 1, status: 1, updatedAt: -1 });
+const Visitor = model$3('Visitor', visitorSchema);
 
-/** One row per member per coupon (unique) — the reservation behind usedCount; released if the booking is cancelled. */
-const couponRedemptionSchema = new Schema$3(
+/** A note from a gateman to one member (optionally about a visitor). Only that member ever sees it. */
+const gateNoteSchema = new Schema$3(
   {
-    coupon: { type: ObjectId$3, ref: 'Coupon', required: true },
-    user: { type: ObjectId$3, ref: 'User', required: true },
-    booking: { type: ObjectId$3, ref: 'ServiceBooking', required: true },
-    discountPaise: { type: Number, required: true },
+    society: { type: ObjectId$3, ref: 'Society', required: true },
+    gateman: { type: ObjectId$3, ref: 'User', required: true },
+    member: { type: ObjectId$3, ref: 'User', required: true },
+    visitor: { type: ObjectId$3, ref: 'Visitor' },
+    text: { type: String, required: true, trim: true, maxlength: 500 },
+    readAt: Date,
   },
   { timestamps: true },
 );
-couponRedemptionSchema.index({ coupon: 1, user: 1 }, { unique: true });
-const CouponRedemption = model$3('CouponRedemption', couponRedemptionSchema);
+gateNoteSchema.index({ society: 1, member: 1, createdAt: -1 });
+gateNoteSchema.index({ society: 1, gateman: 1, createdAt: -1 });
+const GateNote = model$3('GateNote', gateNoteSchema);
 
 /**
  * "Boost" a property or service: the vendor picks a location and a number of days; the platform reviews it.
@@ -1170,7 +1221,7 @@ const notificationSchema = new Schema(
     society: { type: ObjectId, ref: 'Society' },
     type: {
       type: String,
-      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad', 'poll'],
+      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad', 'poll', 'visitor'],
       required: true,
     },
     title: { type: String, required: true, maxlength: 160 },
@@ -1210,7 +1261,7 @@ const mediaSchema = new Schema(
   {
     owner: { type: ObjectId, ref: 'User' },
     society: { type: ObjectId, ref: 'Society' },
-    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'registration', 'expense', 'announcement', 'avatar', 'kyc'], required: true },
+    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'registration', 'expense', 'announcement', 'avatar', 'kyc', 'society_logo', 'vendor_logo'], required: true },
     visibility: { type: String, enum: ['public', 'society', 'private'], required: true },
     storageKey: { type: String, required: true, unique: true },
     mimeType: { type: String, required: true },
@@ -1257,14 +1308,13 @@ const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   Complaint,
   ComplaintAssignment,
   ContentReport,
-  Coupon,
-  CouponRedemption,
   Counter,
   Expense,
   Facility,
   FacilityBooking,
   FinancialLedgerEntry,
   Flat,
+  GateNote,
   JobLock,
   MaintenanceCharge,
   MaintenanceInvoice,
@@ -1293,6 +1343,7 @@ const models = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
   User,
   UserSession,
   VendorProfile,
+  Visitor,
   immutablePlugin
 }, Symbol.toStringTag, { value: 'Module' }));
 
@@ -1435,6 +1486,28 @@ const normalizePhone = (phone) => {
 
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
 
+/** API location { lat, lng, label? } ⇄ stored GeoJSON point + locationLabel. */
+const toGeoPoint = (loc) => ({ type: 'Point', coordinates: [loc.lng, loc.lat] });
+const presentLocation = (doc) => {
+  const c = doc?.location?.coordinates;
+  return Array.isArray(c) && c.length === 2 ? { lat: c[1], lng: c[0], label: doc.locationLabel || null } : null;
+};
+/** Update operators for a location input: an object sets it, null clears it. */
+function locationOps(loc) {
+  if (loc === null) return { $unset: { location: 1, locationLabel: 1 } };
+  return loc.label ? { $set: { location: toGeoPoint(loc), locationLabel: loc.label } } : { $set: { location: toGeoPoint(loc) }, $unset: { locationLabel: 1 } };
+}
+/** Fields for a create: { location, locationLabel } or {} when no location was given. */
+const locationFields = (loc) => (loc ? { location: toGeoPoint(loc), ...(loc.label ? { locationLabel: loc.label } : {}) } : {});
+/** Great-circle distance in km (haversine, mean Earth radius 6371 km). */
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLng = (lng2 - lng1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 const BCRYPT_ROUNDS = 12;
 const hashPassword = (password) => bcrypt.hash(password, BCRYPT_ROUNDS);
 const verifyPassword = (password, hash) => (hash ? bcrypt.compare(password, hash) : Promise.resolve(false));
@@ -1530,7 +1603,7 @@ function signAccessToken(user, session) {
 
 async function createSession(user, client, { ip, userAgent, deviceName } = {}) {
   const refreshToken = randomToken(48);
-  const days = client === 'mobile' ? env.REFRESH_TOKEN_DAYS_MOBILE : env.REFRESH_TOKEN_DAYS_PANEL;
+  const days = client === 'mobile' || client === 'gate' ? env.REFRESH_TOKEN_DAYS_MOBILE : env.REFRESH_TOKEN_DAYS_PANEL;
   const session = await UserSession.create({
     user: user._id,
     client,
@@ -1562,10 +1635,6 @@ async function rotateRefreshToken(refreshToken) {
   if (session.revokedAt || session.expiresAt < new Date()) throw unauthorized('Session expired. Please sign in again.', 'SESSION_INVALID');
   const user = await User.findById(session.user);
   if (!user || user.status === 'disabled') throw unauthorized('This account has been disabled.', 'ACCOUNT_DISABLED');
-  if (user.accountType === 'vendor' && session.client !== 'vendor') {
-    await UserSession.updateOne({ _id: session._id }, { revokedAt: new Date(), revokedReason: 'vendor_app_retired' });
-    throw unauthorized(vendorUsePanel().message, 'VENDOR_USE_PANEL');
-  }
 
   const next = randomToken(48);
   const updated = await UserSession.findOneAndUpdate(
@@ -1598,12 +1667,13 @@ function assertResidentPasswordLogin() {
 }
 
 /** Interim resident registration (phone + password). Never takes over an existing account. */
-async function registerResidentWithPassword(phone, name, password, accountType = 'member') {
+async function registerResidentWithPassword(phone, name, password, accountType = 'member', shop = {}) {
   assertResidentPasswordLogin();
   validatePasswordStrength(password);
   if (await User.exists({ phone })) throw conflict('An account with this mobile number already exists. Sign in instead.', 'ACCOUNT_EXISTS');
   const user = await User.create({ phone, name, accountType, passwordHash: await hashPassword(password) });
-  if (accountType === 'vendor') await VendorProfile.create({ user: user._id, businessName: name });
+  // Vendors may give their shop name and location at sign-up (both optional; editable later in Shop settings).
+  if (accountType === 'vendor') await VendorProfile.create({ user: user._id, businessName: shop.shopName || name, ...(shop.shopName ? { shopName: shop.shopName } : {}), ...locationFields(shop.location) });
   return user;
 }
 
@@ -1765,13 +1835,15 @@ const PURPOSE_VISIBILITY = {
   registration: 'private',
   avatar: 'public',
   kyc: 'private',
+  vendor_logo: 'public',
+  society_logo: 'public',
 };
 
 async function storeUpload(file, { owner, society, purpose }) {
   if (!file?.buffer?.length) throw badRequest('No file uploaded (field name must be "file")');
   const sig = SIGNATURES.find((s) => s.test(file.buffer));
   if (!sig) throw badRequest('Unsupported file type. Upload JPG, PNG, WEBP or PDF.');
-  if (sig.mime === 'application/pdf' && ['property', 'marketplace', 'service', 'post', 'avatar'].includes(purpose)) throw badRequest('Only images are allowed here');
+  if (sig.mime === 'application/pdf' && ['property', 'marketplace', 'service', 'post', 'avatar', 'vendor_logo', 'society_logo'].includes(purpose)) throw badRequest('Only images are allowed here');
   const storageKey = `${new Date().toISOString().slice(0, 7)}/${randomToken(18)}.${sig.ext}`;
   const full = path.join(ROOT, storageKey);
   await fs.mkdir(path.dirname(full), { recursive: true });
@@ -1834,17 +1906,18 @@ async function profilePayload(user) {
       .populate('building', 'name')
       .populate('flat', 'number floor')
       .lean(),
-    SocietyStaff.find({ user: user._id, status: 'active' }).populate('society', 'name code city status').lean(),
+    // Gateman records are app-only (gate sign-in) and are never panel roles.
+    SocietyStaff.find({ user: user._id, status: 'active', role: { $ne: 'gateman' } }).populate({ path: 'society', select: 'name code city status logo', populate: { path: 'logo' } }).lean(),
   ]);
   const u = user.toJSON ? user.toJSON() : user;
   const accountType = u.accountType || 'member';
-  const vendor = accountType === 'vendor' ? await VendorProfile.findOne({ user: u._id }).select('businessName kycStatus kycNote submittedAt reviewedAt').lean() : null;
+  const vendor = accountType === 'vendor' ? await VendorProfile.findOne({ user: u._id }).select('businessName shopName kycStatus kycNote submittedAt reviewedAt').lean() : null;
   return {
     user: { _id: u._id, name: u.name, phone: u.phone, email: u.email, city: u.city, platformRole: u.platformRole, ...(u.platformRole === 'sub_admin' ? { platformPermissions: normalizePlatformPermissions(u.platformPermissions) } : {}), accountType, status: u.status, settings: u.settings, createdAt: u.createdAt },
-    vendor: accountType === 'vendor' ? { businessName: vendor?.businessName || null, kycStatus: vendor?.kycStatus || 'not_submitted', kycNote: vendor?.kycNote || null, submittedAt: vendor?.submittedAt || null, reviewedAt: vendor?.reviewedAt || null, kycAvailable: !!env.kycKey } : null,
+    vendor: accountType === 'vendor' ? { businessName: vendor?.businessName || null, shopName: vendor?.shopName || null, kycStatus: vendor?.kycStatus || 'not_submitted', kycNote: vendor?.kycNote || null, submittedAt: vendor?.submittedAt || null, reviewedAt: vendor?.reviewedAt || null, kycAvailable: !!env.kycKey } : null,
     needsProfile: !u.name,
     memberships: memberships.map((m) => ({ _id: m._id, status: m.status, residentType: m.residentType, decisionReason: m.decisionReason, society: m.society, building: m.building, flat: m.flat, createdAt: m.createdAt, decidedAt: m.decidedAt })),
-    staffRoles: staff.map((s) => ({ _id: s._id, role: s.role, title: s.title, society: s.society })),
+    staffRoles: staff.map((s) => ({ _id: s._id, role: s.role, title: s.title, society: s.society ? { ...s.society, logo: undefined, logoUrl: mediaUrl(s.society.logo) } : s.society })),
   };
 }
 
@@ -1857,7 +1930,6 @@ async function requestOtp(req, res) {
 async function verifyOtp(req, res) {
   const { phone, challengeId, code, deviceName } = req.valid.body;
   const { user, isNew } = await verifyOtp$1(phone, challengeId, code);
-  if (user.accountType === 'vendor') throw vendorUsePanel();
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.json({ ...tokens, isNewUser: isNew, ...(await profilePayload(user)) });
 }
@@ -1878,48 +1950,55 @@ async function logoutAll(req, res) {
   res.json({ ok: true });
 }
 
-const vendorUsePanel = () =>
-  new AppError(403, 'VENDOR_USE_PANEL', `Vendor accounts use the NIVASA Vendor Panel website${env.VENDOR_PANEL_URL ? ` (${env.VENDOR_PANEL_URL})` : ''}, not the app.`);
-
-/** Interim resident sign-up / sign-in without SMS (enabled by RESIDENT_PASSWORD_LOGIN). */
+/** Interim resident sign-up / sign-in without SMS (enabled by RESIDENT_PASSWORD_LOGIN). Members and vendors both use the app. */
 async function residentRegister(req, res) {
-  const { phone, name, password, accountType, deviceName } = req.valid.body;
-  if (accountType === 'vendor') throw vendorUsePanel();
-  const user = await registerResidentWithPassword(phone, name, password, accountType);
+  const { phone, name, password, accountType, deviceName, shopName, location } = req.valid.body;
+  if (accountType !== 'vendor' && (shopName || location)) throw badRequest('Shop name and location are for vendor accounts only.');
+  const user = await registerResidentWithPassword(phone, name, password, accountType, { shopName, location });
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.status(201).json({ ...tokens, isNewUser: true, ...(await profilePayload(user)) });
 }
 
-async function vendorRegister(req, res) {
-  const { phone, name, businessName, password } = req.valid.body;
-  validatePasswordStrength(password);
-  if (await User.exists({ phone })) throw conflict('An account with this mobile number already exists. Sign in instead.', 'ACCOUNT_EXISTS');
-  const user = await User.create({ phone, name, accountType: 'vendor', passwordHash: await hashPassword(password) });
-  await VendorProfile.create({ user: user._id, businessName: businessName || name });
-  const tokens = await createSession(user, 'vendor', meta(req));
-  res.status(201).json({ ...tokens, isNewUser: true, ...(await profilePayload(user)) });
-}
-
-async function vendorLogin(req, res) {
-  const user = await passwordLogin({ phone: req.valid.body.phone }, req.valid.body.password, 'Incorrect mobile number or password.');
-  if (user.accountType !== 'vendor') throw new AppError(403, 'NOT_VENDOR', 'This is a member account. Members use the NIVASA app. To sell or offer services, create a vendor account with another mobile number.');
-  const tokens = await createSession(user, 'vendor', meta(req));
-  res.json({ ...tokens, isNewUser: false, ...(await profilePayload(user)) });
-}
+const ACCOUNT_TYPE_LABEL = { member: 'a member', vendor: 'a vendor' };
 
 async function residentLogin(req, res) {
-  const { phone, password, deviceName } = req.valid.body;
+  const { phone, password, deviceName, accountType } = req.valid.body;
   const user = await residentPasswordLogin(phone, password);
-  if (user.accountType === 'vendor') throw vendorUsePanel();
+  // Member / Vendor switch on the sign-in screen: the wrong choice is refused with a clear message.
+  const actual = user.accountType || 'member';
+  if (accountType && accountType !== actual) {
+    throw new AppError(403, 'ACCOUNT_TYPE_MISMATCH', `This mobile number belongs to ${ACCOUNT_TYPE_LABEL[actual]} account. Choose "${actual === 'vendor' ? 'Vendor' : 'Member'}" to sign in.`);
+  }
   const tokens = await createSession(user, 'mobile', { ...meta(req), deviceName });
   res.json({ ...tokens, isNewUser: false, ...(await profilePayload(user)) });
+}
+
+const gatePayload = (society, staff) => ({ society: { _id: society._id, name: society.name, code: society.code, city: society.city || null, logoUrl: mediaUrl(society.logo) }, staffId: staff._id });
+
+/** Gate staff sign in only in the app (session client "gate"); they never get a panel or member session. */
+async function gateLogin(req, res) {
+  const user = await adminPasswordLogin(req.valid.body.email, req.valid.body.password);
+  const staff = await SocietyStaff.findOne({ user: user._id, role: 'gateman' }).sort({ status: 1 }).lean();
+  if (!staff) throw forbidden('This is not a gate staff account. Members sign in with their mobile number; society staff use SocialPanel.', 'NOT_GATEMAN');
+  if (staff.status !== 'active') throw forbidden('This gate account has been disabled by the society.', 'ACCOUNT_DISABLED');
+  const society = await Society.findById(staff.society).populate('logo').lean();
+  if (!society || society.status !== 'active') throw forbidden('This society is currently suspended.', 'SOCIETY_SUSPENDED');
+  const tokens = await createSession(user, 'gate', { ...meta(req), deviceName: req.valid.body.deviceName });
+  req.user = user;
+  req.actorRole = 'society_gateman';
+  await audit(req, { action: 'auth.gate_login', society: society._id, targetType: 'User', targetId: user._id });
+  res.json({ ...tokens, user: { _id: user._id, name: user.name, email: user.email }, gate: gatePayload(society, staff) });
 }
 
 /** Panel sign-in (email + password): society staff use SocialPanel, the platform owner uses Master Admin. */
 async function adminLogin$1(req, res) {
   const user = await adminPasswordLogin(req.valid.body.email, req.valid.body.password);
-  const isStaff = await SocietyStaff.exists({ user: user._id, status: 'active' });
-  if (!isPlatformAdmin(user) && !isStaff) throw forbidden('This account has no management access.', 'NO_PANEL_ACCESS');
+  // Gatemen are staff records too, but they sign in only in the app.
+  const isStaff = await SocietyStaff.exists({ user: user._id, status: 'active', role: { $ne: 'gateman' } });
+  if (!isPlatformAdmin(user) && !isStaff) {
+    const gate = await SocietyStaff.exists({ user: user._id, role: 'gateman' });
+    throw forbidden(gate ? 'Gate staff sign in on the NIVASA app ("Gate staff sign-in"), not on SocialPanel.' : 'This account has no management access.', 'NO_PANEL_ACCESS');
+  }
   const tokens = await createSession(user, 'panel', meta(req));
   req.user = user;
   await audit(req, { action: 'auth.panel_login', targetType: 'User', targetId: user._id });
@@ -2688,18 +2767,61 @@ logger.debug({ configured: env.paymentsConfigured }, 'Payment gateway configurat
 
 /** Non-secret runtime capabilities the clients use to show accurate availability states. */
 async function config(_req, res) {
-  const [dayOptions, commissionBps] = await Promise.all([adDayOptions(), commissionBpsNow()]);
+  const dayOptions = await adDayOptions();
   res.json({
     apiVersion: 'v1',
     environment: env.NODE_ENV,
     otp: otpStatus$1(),
     passwordLogin: { available: env.RESIDENT_PASSWORD_LOGIN },
-    vendorPanelUrl: env.VENDOR_PANEL_URL || null,
     payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: env.paymentsConfigured ? 'razorpay' : null },
     uploads: { maxMb: env.MAX_UPLOAD_MB, types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] },
     ads: { dayOptions },
-    services: { commissionPercent: commissionBps / 100 },
   });
+}
+
+// ---------- address search (geocoding proxy) ----------
+/**
+ * Clients never call OpenStreetMap directly: this proxy sends Nominatim's required User-Agent, caches answers for
+ * 10 minutes and is rate-limited per IP. When the service can't be reached it says so (503), never 500.
+ */
+const GEOCODER_URL = 'https://nominatim.openstreetmap.org';
+const GEOCODER_UA = 'NIVASA/1.0 (+https://adda.skillinnovex.in)';
+const GEOCODE_TTL_MS = 10 * 60_000;
+const geocodeCache = new Map();
+async function nominatim(pathAndQuery) {
+  const hit = geocodeCache.get(pathAndQuery);
+  if (hit && Date.now() - hit.at < GEOCODE_TTL_MS) return hit.value;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  let json;
+  try {
+    const r = await fetch(GEOCODER_URL + pathAndQuery, { headers: { 'User-Agent': GEOCODER_UA, Accept: 'application/json', 'Accept-Language': 'en' }, signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    json = await r.json();
+  } catch (err) {
+    logger.warn({ err: err.message }, 'Geocoder unavailable');
+    throw unavailable('Address search is not available right now. Use your current location or move the pin on the map instead.', 'GEOCODER_UNAVAILABLE');
+  } finally {
+    clearTimeout(timer);
+  }
+  if (geocodeCache.size >= 500) geocodeCache.delete(geocodeCache.keys().next().value);
+  geocodeCache.set(pathAndQuery, { at: Date.now(), value: json });
+  return json;
+}
+
+async function geocodeSearch(req, res) {
+  const json = await nominatim('/search?format=jsonv2&limit=5&countrycodes=in&q=' + encodeURIComponent(req.valid.query.q.toLowerCase()));
+  const items = (Array.isArray(json) ? json : [])
+    .map((r) => ({ label: r.display_name, lat: Number(r.lat), lng: Number(r.lon) }))
+    .filter((r) => r.label && Number.isFinite(r.lat) && Number.isFinite(r.lng))
+    .slice(0, 5);
+  res.json({ items });
+}
+
+async function geocodeReverse(req, res) {
+  const { lat, lng } = req.valid.query;
+  const json = await nominatim(`/reverse?format=jsonv2&zoom=18&lat=${lat.toFixed(5)}&lon=${lng.toFixed(5)}`);
+  res.json({ label: json?.display_name || null });
 }
 
 async function categories(req, res) {
@@ -2729,11 +2851,11 @@ async function attachRegistrationDocs(ids = []) {
 }
 
 async function submitRegistration(req, res) {
-  const { submit, documents, ...data } = req.valid.body;
+  const { submit, documents, location, ...data } = req.valid.body;
   const accessKey = randomToken(12);
   const referenceCode = `SR-${new Date().getFullYear()}-${shortCode(6)}`;
   const docIds = await attachRegistrationDocs(documents);
-  const reg = await SocietyRegistration.create({ ...data, documents: docIds, referenceCode, accessKeyHash: sha256(accessKey), status: submit ? 'submitted' : 'draft', submittedAt: submit ? new Date() : undefined });
+  const reg = await SocietyRegistration.create({ ...data, ...locationFields(location), documents: docIds, referenceCode, accessKeyHash: sha256(accessKey), status: submit ? 'submitted' : 'draft', submittedAt: submit ? new Date() : undefined });
   if (docIds.length) await UploadedMedia.updateMany({ _id: { $in: docIds } }, { attachedTo: `registration:${reg._id}` });
   // The access key is shown once; only its hash is stored.
   res.status(201).json({ ...presentRegistration(reg), accessKey, message: 'Save your reference code and access key to check status later.' });
@@ -2788,10 +2910,17 @@ async function activateRegistration(req, res) {
 }
 
 async function updateRegistration(req, res) {
-  const { referenceCode, accessKey, submit, documents, ...data } = req.valid.body;
+  const { referenceCode, accessKey, submit, documents, location, ...data } = req.valid.body;
   const reg = await findRegistration(referenceCode, accessKey);
   if (!['draft', 'rejected'].includes(reg.status)) throw badRequest('Only drafts or rejected applications can be edited');
   Object.assign(reg, data);
+  if (location === null) {
+    reg.location = undefined;
+    reg.locationLabel = undefined;
+  } else if (location) {
+    reg.location = toGeoPoint(location);
+    reg.locationLabel = location.label || undefined;
+  }
   if (documents?.length) {
     const ids = await attachRegistrationDocs(documents);
     reg.documents.push(...ids);
@@ -2852,13 +2981,21 @@ async function serveMedia(req, res) {
   fs$1.createReadStream(full).pipe(res);
 }
 
-const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'expense', 'announcement', 'avatar', 'kyc'];
+const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'expense', 'announcement', 'avatar', 'kyc', 'vendor_logo', 'society_logo'];
 async function uploadMedia(req, res) {
   const purpose = req.body?.purpose;
   if (!UPLOAD_PURPOSES.includes(purpose)) throw badRequest(`purpose must be one of ${UPLOAD_PURPOSES.join(', ')}`);
-  // Property / service photos and KYC documents belong to vendor accounts only.
-  if (['property', 'service', 'kyc'].includes(purpose) && req.user.accountType !== 'vendor') {
+  // Property / service photos, KYC documents and the shop logo belong to vendor accounts only.
+  if (['property', 'service', 'kyc', 'vendor_logo'].includes(purpose) && req.user.accountType !== 'vendor') {
     throw new AppError(403, 'VENDOR_ONLY', 'Only vendor accounts can upload these files');
+  }
+  // Society logo: staff who may change the society profile (or the platform owner acting in a society workspace).
+  if (purpose === 'society_logo') {
+    const panelAdmin = isPlatformAdmin(req.user) && req.client === 'panel';
+    if (!panelAdmin) {
+      const staff = await SocietyStaff.find({ user: req.user._id, status: 'active', role: { $ne: 'gateman' } }).select('role').lean();
+      if (req.client !== 'panel' || !staff.some((s) => hasPermission(s.role, 'society.manage'))) throw new AppError(403, 'FORBIDDEN', 'Only society admins can upload the society logo');
+    }
   }
   // Society-scoped uploads are tagged with the caller's verified society (resident or staff), never a client value.
   let society;
@@ -2867,7 +3004,7 @@ async function uploadMedia(req, res) {
     if (!m) throw new AppError(403, 'MEMBERSHIP_REQUIRED', 'Join a society to attach files here');
     society = m.society;
   } else if (['expense', 'announcement'].includes(purpose)) {
-    const s = await SocietyStaff.findOne({ user: req.user._id, status: 'active' }).select('society').lean();
+    const s = await SocietyStaff.findOne({ user: req.user._id, status: 'active', role: { $ne: 'gateman' } }).select('society').lean();
     if (!s) throw new AppError(403, 'FORBIDDEN', 'Only society staff can upload these files');
     society = s.society;
   }
@@ -3700,8 +3837,20 @@ function readBearer(req) {
   return scheme?.toLowerCase() === 'bearer' && token ? token : null;
 }
 
-/** Verifies the access token AND that its session is still live and the user is not disabled. */
+/** Verifies the access token AND that its session is still live and the user is not disabled. Gate sessions are refused. */
 async function authenticate(req, _res, next) {
+  await resolveSession(req);
+  if (req.client === 'gate') throw forbidden('Gate staff accounts can only use the gate screens of the app.', 'GATE_ACCOUNT');
+  next();
+}
+
+/** Like authenticate, but also admits gate sessions (sign-out, password change, /gate routes). */
+async function authenticateAny(req, _res, next) {
+  await resolveSession(req);
+  next();
+}
+
+async function resolveSession(req) {
   const token = readBearer(req);
   if (!token) throw unauthorized();
   let payload;
@@ -3716,11 +3865,9 @@ async function authenticate(req, _res, next) {
     throw unauthorized('Session has ended. Please sign in again.', 'SESSION_INVALID');
   }
   if (!user || user.status === 'disabled') throw unauthorized('This account has been disabled.', 'ACCOUNT_DISABLED');
-  if (user.accountType === 'vendor' && session.client !== 'vendor') throw unauthorized(vendorUsePanel().message, 'VENDOR_USE_PANEL');
   req.user = user;
   req.session = session;
   req.client = session.client;
-  next();
 }
 
 async function optionalAuth(req, res, next) {
@@ -3739,18 +3886,17 @@ const PLATFORM_PERMISSIONS = [
   { area: 'societies', label: 'Societies', view: 'See societies and open their workspace (read only)', manage: 'Suspend / reactivate, payments, add society admins, act inside a society' },
   { area: 'members', label: 'Members directory', view: 'See members and profiles (masked)', manage: 'Reveal details, set password, sign out, change mobile, move membership' },
   { area: 'accounts', label: 'Accounts', view: 'See all accounts', manage: 'Enable / disable accounts' },
-  { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors and KYC (masked)', manage: 'Approve / reject KYC, reveal KYC details' },
+  { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors, KYC (masked) and their rates', manage: 'Approve / reject KYC, reveal KYC details, set commission and member discount' },
   { area: 'service_bookings', label: 'Service bookings', viewOnly: true, view: 'See service bookings and settlement' },
   { area: 'earnings', label: 'Earnings', viewOnly: true, view: 'See NIVASA commission earnings and vendor earnings' },
   { area: 'listings', label: 'Listings moderation', view: 'See listings', manage: 'Approve, reject, remove listings' },
   { area: 'ads', label: 'Ads (boosts)', view: 'See boost requests', manage: 'Approve / reject boosts' },
-  { area: 'coupons', label: 'Coupons', view: 'See coupons and who used them', manage: 'Create, edit, turn on/off, delete coupons' },
   { area: 'reports', label: 'Content reports', viewOnly: true, view: 'See reported content' },
   { area: 'payments', label: 'Payments monitor', viewOnly: true, view: 'See payments' },
   { area: 'audit', label: 'Audit log', viewOnly: true, view: 'See the audit log' },
   { area: 'categories', label: 'Categories', view: 'See categories', manage: 'Add, edit, delete categories' },
   { area: 'announcements', label: 'Platform notices', view: 'See notices', manage: 'Publish and archive notices' },
-  { area: 'settings', label: 'Settings', view: 'See settings', manage: 'Change settings (commission, approvals, …)' },
+  { area: 'settings', label: 'Settings', view: 'See settings', manage: 'Change settings (approvals, ad durations, support contacts)' },
 ];
 const PLATFORM_PERMISSION_KEYS = new Set(PLATFORM_PERMISSIONS.flatMap((p) => (p.viewOnly ? [`${p.area}.view`] : [`${p.area}.view`, `${p.area}.manage`])));
 
@@ -3814,9 +3960,9 @@ async function requireMembership(req, _res, next) {
 
 const STAFF_PERMISSIONS = {
   admin: ['*'],
-  secretary: ['society.read', 'members', 'members.read', 'community', 'complaints', 'facilities', 'services', 'announcements', 'listings', 'reports', 'finance.read', 'audit'],
+  secretary: ['society.read', 'members', 'members.read', 'community', 'complaints', 'facilities', 'services', 'announcements', 'listings', 'reports', 'finance.read', 'audit', 'gate'],
   treasurer: ['society.read', 'finance', 'finance.read', 'reports', 'members.read', 'audit'],
-  manager: ['society.read', 'complaints', 'facilities', 'services', 'community', 'members.read', 'listings'],
+  manager: ['society.read', 'complaints', 'facilities', 'services', 'community', 'members.read', 'listings', 'gate'],
   committee: ['society.read', 'members.read', 'announcements', 'finance.read', 'reports'],
 };
 
@@ -3833,7 +3979,8 @@ function requireStaff(permission = 'society.read') {
     if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts have no society access.', 'VENDOR_NO_SOCIETY');
     if (req.client !== 'panel') throw forbidden('Use the SocialPanel to access management features');
     const requested = req.get('x-society-id');
-    const filter = { user: req.user._id, status: 'active' };
+    // Gateman records never open the panel (they sign in only in the app).
+    const filter = { user: req.user._id, status: 'active', role: { $ne: 'gateman' } };
     if (requested) {
       if (!isObjectId(requested)) throw forbidden('Invalid society context');
       filter.society = requested;
@@ -3881,6 +4028,8 @@ const loginLimiter = limiter(15 * 60_000, env.LOGIN_RATE_LIMIT, 'Too many sign-i
 // Token refresh is routine background traffic — keep it off the sign-in allowance.
 const refreshLimiter = limiter(15 * 60_000, 600, 'Too many session refreshes. Try again later.');
 const publicFormLimiter = limiter(60 * 60_000, env.PUBLIC_FORM_RATE_LIMIT, 'Too many submissions from this network. Try again later.');
+// Address search: typing with a 400 ms debounce stays well inside this; Nominatim also asks for gentle use.
+const geocodeLimiter = limiter(60_000, 30, 'Too many address searches. Wait a moment and try again.');
 /**
  * /uploads can be rejected before the file is read (expired token → 401, rate limit → 429, too large → 400).
  * If we answer and close while a phone is still sending a multi-MB photo, Android reports a broken connection
@@ -3979,6 +4128,14 @@ const contactPhone = z.string().transform((v, ctx) => {
 });
 const text = (max, min = 1) => z.string().trim().min(min).max(max);
 const optText = (max) => z.string().trim().max(max).optional().or(z.literal('').transform(() => undefined));
+/** A map location from a client: lat −90…90, lng −180…180, optional label (e.g. the searched address). */
+const geoInput = z
+  .object({
+    lat: z.number({ error: 'Latitude must be a number' }).min(-90, 'Latitude must be between -90 and 90').max(90, 'Latitude must be between -90 and 90'),
+    lng: z.number({ error: 'Longitude must be a number' }).min(-180, 'Longitude must be between -180 and 180').max(180, 'Longitude must be between -180 and 180'),
+    label: optText(200),
+  })
+  .strict();
 const email = z.string().trim().toLowerCase().email('Enter a valid email address').max(200);
 const paise = z.number().int('Amount must be in whole paise').min(0).max(10_000_000_00);
 const positivePaise = paise.refine((v) => v > 0, 'Amount must be greater than zero');
@@ -4000,10 +4157,11 @@ const otpVerify = z.object({ phone, challengeId: objectId, code: z.string().rege
 const refresh = z.object({ refreshToken: z.string().min(20).max(200) });
 const adminLogin = z.object({ email, password: z.string().min(1).max(200) });
 const changePasswordBody = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(10).max(200) });
-const residentRegisterBody = z.object({ phone, name: text(120, 2), password: z.string().min(10).max(200), accountType: z.enum(['member', 'vendor']).default('member'), deviceName: optText(120) });
-const vendorRegisterBody = z.object({ phone, name: text(120, 2), businessName: optText(120), password: z.string().min(10).max(200) });
-const vendorLoginBody = z.object({ phone, password: z.string().min(1).max(200) });
-const residentLoginBody = z.object({ phone, password: z.string().min(1).max(200), deviceName: optText(120) });
+const residentRegisterBody = z.object({ phone, name: text(120, 2), password: z.string().min(10).max(200), accountType: z.enum(['member', 'vendor']).default('member'), deviceName: optText(120), shopName: text(80, 2).optional(), location: geoInput.optional() });
+const residentLoginBody = z.object({ phone, password: z.string().min(1).max(200), deviceName: optText(120), accountType: z.enum(['member', 'vendor']).optional() });
+const gateLoginBody = z.object({ email, password: z.string().min(1).max(200), deviceName: optText(120) });
+const geocodeQuery = z.object({ q: z.string().trim().min(3, 'Type at least 3 characters to search').max(120, 'Search text is too long') });
+const geocodeReverseQuery = z.object({ lat: z.coerce.number().min(-90).max(90), lng: z.coerce.number().min(-180).max(180) });
 const passwordSetup = z.object({ token: z.string().min(20).max(200), password: z.string().min(10).max(200) });
 const passwordResetRequest = z.object({ email });
 const updateMe = z.object({ name: text(120, 2).optional(), email: email.optional(), city: optText(80), settings: z.object({ pushEnabled: z.boolean() }).partial().optional() }).strict();
@@ -4022,11 +4180,12 @@ const registration = z.object({
   totalUnits: z.number().int().min(1).max(100000).optional(),
   representative: z.object({ name: text(120, 2), designation: optText(80), phone, email }),
   documents: mediaIds,
+  location: geoInput.optional(),
   submit: z.boolean().default(true),
 });
 const registrationStatus = z.object({ referenceCode: z.string().trim().toUpperCase().min(6).max(30), accessKey: z.string().trim().min(8).max(100) });
 const registrationActivate = registrationStatus.extend({ password: z.string().min(10).max(200) });
-const registrationUpdate = patchOf(registration).extend({ referenceCode: z.string().trim().toUpperCase(), accessKey: z.string().min(8).max(100), submit: z.boolean().default(false) });
+const registrationUpdate = patchOf(registration).extend({ referenceCode: z.string().trim().toUpperCase(), accessKey: z.string().min(8).max(100), submit: z.boolean().default(false), location: geoInput.nullable().optional() });
 const societySearch = z.object({ q: z.string().trim().max(100).optional(), city: z.string().trim().max(80).optional(), page: z.coerce.number().int().min(1).optional() });
 
 // ---------- membership ----------
@@ -4123,7 +4282,20 @@ const offerPriceRule = (v, ctx) => {
 };
 const offerCreate = z.object(offerFields).strict().superRefine(offerPriceRule);
 const offerUpdate = patchOf(z.object(offerFields)).extend({ status: z.enum(['active', 'paused']).optional() }).strict();
-const offerQuery = pageQuery.extend({ categoryId: objectId.optional(), city: z.string().trim().max(80).optional(), mySociety: z.enum(['true', 'false']).optional() });
+const offerQuery = pageQuery
+  .extend({
+    categoryId: objectId.optional(),
+    city: z.string().trim().max(80).optional(),
+    mySociety: z.enum(['true', 'false']).optional(),
+    // Near me: lat + lng (+ radiusKm 1–100, default 10) → only services inside the radius, nearest first, with distanceKm.
+    lat: z.coerce.number().min(-90, 'Latitude must be between -90 and 90').max(90, 'Latitude must be between -90 and 90').optional(),
+    lng: z.coerce.number().min(-180, 'Longitude must be between -180 and 180').max(180, 'Longitude must be between -180 and 180').optional(),
+    radiusKm: z.coerce.number().min(1, 'Radius must be 1 to 100 km').max(100, 'Radius must be 1 to 100 km').optional(),
+  })
+  .superRefine((v, ctx) => {
+    if ((v.lat === undefined) !== (v.lng === undefined)) ctx.addIssue({ code: 'custom', path: ['lat'], message: 'Send both lat and lng' });
+    if (v.lat === undefined && (v.radiusKm !== undefined || v.sort === 'nearest')) ctx.addIssue({ code: 'custom', path: ['lat'], message: 'Near me needs lat and lng' });
+  });
 
 // ---------- facilities ----------
 const facilityUpsert = z.object({
@@ -4155,6 +4327,9 @@ const societyProfile = z.object({
   email: email.optional(),
   description: optText(2000),
   settings: z.object({ listingsRequireApproval: z.boolean(), bookingsRequireApproval: z.boolean() }).partial().optional(),
+  // null clears / removes.
+  location: geoInput.nullable().optional(),
+  logoId: objectId.nullable().optional(),
 });
 const billingSettings = z.object({
   defaultAmountPaise: paise.optional(),
@@ -4241,6 +4416,8 @@ router.post('/public/society-registrations/status', publicFormLimiter, validate(
 router.post('/public/society-registrations/activate', publicFormLimiter, validate({ body: registrationActivate }), activateRegistration);
 router.patch('/public/society-registrations', publicFormLimiter, validate({ body: registrationUpdate }), updateRegistration);
 router.post('/public/society-registrations/documents', drainUnreadBody, publicFormLimiter, uploadMiddleware, uploadRegistrationDocument);
+router.get('/public/geocode', geocodeLimiter, validate({ query: geocodeQuery }), geocodeSearch);
+router.get('/public/geocode/reverse', geocodeLimiter, validate({ query: geocodeReverseQuery }), geocodeReverse);
 
 // ---- auth ----
 router.get('/auth/otp/status', otpStatus);
@@ -4250,17 +4427,16 @@ router.post('/auth/refresh', refreshLimiter, validate({ body: refresh }), refres
 router.post('/auth/admin/login', loginLimiter, validate({ body: adminLogin }), adminLogin$1);
 router.post('/auth/resident/register', loginLimiter, validate({ body: residentRegisterBody }), residentRegister);
 router.post('/auth/resident/login', loginLimiter, validate({ body: residentLoginBody }), residentLogin);
-router.post('/auth/vendor/register', loginLimiter, validate({ body: vendorRegisterBody }), vendorRegister);
-router.post('/auth/vendor/login', loginLimiter, validate({ body: vendorLoginBody }), vendorLogin);
+router.post('/auth/gate/login', loginLimiter, validate({ body: gateLoginBody }), gateLogin);
 router.post('/auth/password/setup', loginLimiter, validate({ body: passwordSetup }), completePasswordSetup);
 router.post('/auth/password/reset-request', loginLimiter, validate({ body: passwordResetRequest }), requestPasswordReset);
-router.post('/auth/logout', authenticate, logout);
-router.post('/auth/logout-all', authenticate, logoutAll);
+router.post('/auth/logout', authenticateAny, logout);
+router.post('/auth/logout-all', authenticateAny, logoutAll);
 
 // ---- account (any signed-in user) ----
 router.get('/me', authenticate, me);
 router.patch('/me', authenticate, validate({ body: updateMe }), updateMe$1);
-router.post('/me/password', authenticate, loginLimiter, validate({ body: changePasswordBody }), changeOwnPassword);
+router.post('/me/password', authenticateAny, loginLimiter, validate({ body: changePasswordBody }), changeOwnPassword);
 router.post('/push-tokens', authenticate, validate({ body: pushToken }), registerPushToken);
 router.delete('/push-tokens', authenticate, validate({ body: pushToken }), removePushToken);
 router.post('/uploads', drainUnreadBody, authenticate, uploadLimiter, uploadMiddleware, uploadMedia);
@@ -4310,8 +4486,64 @@ const presentListing = (l, userId) => ({
   verifiedVendor: (l.owner || l.provider)?.accountType === 'vendor',
   society: l.society?.name ? { _id: l.society._id, name: l.society.name } : l.society,
   reportCount: undefined,
-  commissionBps: String(l.owner?._id || l.owner || l.seller?._id || l.seller || l.provider?._id || l.provider) === String(userId) ? l.commissionBps ?? 0 : undefined,
+  // Old service documents may still carry a commission snapshot: never sent (pricing comes from presentOffer).
+  commissionBps: undefined,
+  // A service's shop location is used for "near me" (members get distanceKm); only the owner gets the point.
+  location: String(l.owner?._id || l.owner || l.seller?._id || l.seller || l.provider?._id || l.provider) === String(userId) ? presentLocation(l) : undefined,
+  locationLabel: undefined,
 });
+
+/**
+ * Live member price of a vendor's service. NIVASA's commission is added ON TOP of the vendor's price; the member
+ * discount is a share OF that commission. "Price on request" has no commission or discount up front.
+ * The one place these numbers are computed (bookings snapshot the result).
+ */
+function offerPricing(pricePaise, priceType, rates) {
+  const commissionBps = rates?.commissionBps || 0;
+  const discountBps = rates?.memberDiscountBps || 0;
+  if (priceType === 'on_quote' || !(pricePaise > 0)) return { vendorPricePaise: null, commissionBps, commissionPaise: null, memberPricePaise: null, discountBps, discountPaise: 0 };
+  const commissionPaise = Math.round((pricePaise * commissionBps) / 10_000);
+  const memberPricePaise = pricePaise + commissionPaise;
+  const discountPaise = Math.round((commissionPaise * discountBps) / 10_000);
+  return { vendorPricePaise: pricePaise, commissionBps, commissionPaise, memberPricePaise, discountBps, discountPaise };
+}
+
+const presentRates = (p) => ({ commissionPercent: (p?.commissionBps || 0) / 100, memberDiscountPercent: (p?.memberDiscountBps || 0) / 100 });
+const logoOut = (m) => (m?._id && m.mimeType ? { _id: m._id, url: mediaUrl(m) } : null);
+
+/** Vendor profiles (shop + rates) for a page of services, in one query. */
+async function offerProfiles(items) {
+  const ids = [...new Set(items.map((l) => String(l.provider?._id || l.provider)))];
+  if (!ids.length) return new Map();
+  const rows = await VendorProfile.find({ user: { $in: ids } }).select('user shopName businessName logo commissionBps memberDiscountBps').populate('logo').lean();
+  return new Map(rows.map((p) => [String(p.user), p]));
+}
+
+/** A service for one viewer: members get the member price and the discount offer only; the owner also gets the rates. */
+function presentOffer(l, viewerId, profile) {
+  const base = presentListing(l, viewerId);
+  const p = offerPricing(l.pricePaise, l.priceType, profile);
+  const shop = { name: profile?.shopName || profile?.businessName || l.provider?.name || null, logoUrl: mediaUrl(profile?.logo?.mimeType ? profile.logo : null) };
+  const payableWithDiscountPaise = p.memberPricePaise != null ? p.memberPricePaise - p.discountPaise : null;
+  if (base.mine) {
+    return {
+      ...base,
+      shop,
+      pricing: { vendorPricePaise: p.vendorPricePaise, commissionPercent: p.commissionBps / 100, commissionPaise: p.commissionPaise, memberPricePaise: p.memberPricePaise, memberDiscountPercent: p.discountBps / 100, discountPaise: p.discountPaise, payableWithDiscountPaise },
+    };
+  }
+  return {
+    ...base,
+    pricePaise: p.memberPricePaise ?? undefined,
+    shop,
+    pricing: { memberPricePaise: p.memberPricePaise, discountAvailable: p.discountPaise > 0, discountPaise: p.discountPaise, payableWithDiscountPaise },
+  };
+}
+
+async function presentOffers(items, viewerId) {
+  const profiles = await offerProfiles(items);
+  return items.map((l) => presentOffer(l, viewerId, profiles.get(String(l.provider?._id || l.provider))));
+}
 
 // ======================= Property =======================
 async function browseProperties(req, res) {
@@ -4468,8 +4700,12 @@ async function offerCategories(req, res) {
   res.json({ items: await categoriesFor('service', await approvedSocietyOf(req.user._id)) });
 }
 
+/** Max services considered for one "near me" search (sorted by distance in memory, then paged). */
+const NEAR_ME_SCAN = 1000;
+
 async function browseOffers(req, res) {
   const q = req.valid.query;
+  const near = q.lat !== undefined;
   const mySociety = await approvedSocietyOf(req.user._id);
   if (q.mySociety === 'true' && !mySociety) return res.json({ items: [], page: 1, limit: q.limit || 20, total: 0, pages: 0 });
   const and = [{ $or: [{ visibility: 'public' }, ...(mySociety ? [{ visibility: 'society', society: mySociety }] : [])] }];
@@ -4481,16 +4717,41 @@ async function browseOffers(req, res) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     and.push({ $or: [{ title: rx }, { serviceArea: rx }, { description: rx }] });
   }
+  if (near) {
+    // Near me: same visibility/moderation filter, plus the shop within the radius (services without a location are left out).
+    // $centerSphere (Earth radius 6371 km) preselects; the haversine distance decides and orders.
+    const radiusKm = q.radiusKm ?? 10;
+    filter.location = { $geoWithin: { $centerSphere: [[q.lng, q.lat], radiusKm / 6371] } };
+    const rows = await ServiceOffer.find(filter).populate(offerPopulate).limit(NEAR_ME_SCAN).lean();
+    const ranked = rows
+      .map((l) => ({ l, d: haversineKm(q.lat, q.lng, l.location.coordinates[1], l.location.coordinates[0]) }))
+      .filter((x) => x.d <= radiusKm)
+      .sort((a, b) => a.d - b.d || String(b.l._id).localeCompare(String(a.l._id)));
+    const pageNo = q.page || 1;
+    const limit = q.limit || 20;
+    const slice = ranked.slice((pageNo - 1) * limit, pageNo * limit);
+    const items = await presentOffers(slice.map((x) => x.l), req.user._id);
+    return res.json({
+      items: items.map((it, i) => ({ ...it, distanceKm: Math.round(slice[i].d * 10) / 10 })),
+      page: pageNo,
+      limit,
+      total: ranked.length,
+      pages: Math.ceil(ranked.length / limit),
+      sponsoredCount: 0,
+      near: { lat: q.lat, lng: q.lng, radiusKm },
+    });
+  }
   const sponsored = q.mySociety === 'true' ? [] : await sponsoredMatches(ServiceOffer, 'service', filter, q.city || req.user.city, offerPopulate);
   if (sponsored.length) filter._id = { $nin: sponsored.map((l) => l._id) };
   const page = await pagedFind(ServiceOffer, filter, q, { sortable: ['createdAt', 'pricePaise'], populate: offerPopulate });
-  const top = (q.page || 1) === 1 ? sponsored.map((l) => ({ ...presentListing(l, req.user._id), sponsored: true })) : [];
-  res.json({ ...page, sponsoredCount: top.length, items: [...top, ...page.items.map((l) => presentListing(l, req.user._id))] });
+  const top = (q.page || 1) === 1 ? sponsored : [];
+  const items = await presentOffers([...top, ...page.items], req.user._id);
+  res.json({ ...page, sponsoredCount: top.length, items: items.map((it, i) => (i < top.length ? { ...it, sponsored: true } : it)) });
 }
 
 async function myOffers(req, res) {
   const page = await pagedFind(ServiceOffer, { provider: req.user._id, moderationStatus: { $ne: 'removed' } }, req.valid.query, { populate: offerPopulate });
-  res.json({ ...page, items: page.items.map((l) => ({ ...presentListing(l, req.user._id), mine: true })) });
+  res.json({ ...page, items: (await presentOffers(page.items, req.user._id)).map((l) => ({ ...l, mine: true })) });
 }
 
 async function getOffer(req, res) {
@@ -4502,7 +4763,7 @@ async function getOffer(req, res) {
     if (l.visibility === 'society' && String(await approvedSocietyOf(req.user._id)) !== String(l.society?._id)) throw notFound('Service');
   }
   if (mine && l.moderationStatus === 'removed') throw notFound('Service');
-  res.json(presentListing(l, req.user._id));
+  res.json((await presentOffers([l], req.user._id))[0]);
 }
 
 async function createOffer(req, res) {
@@ -4513,6 +4774,8 @@ async function createOffer(req, res) {
   const category = await offerCategory(categoryId, null);
   const photoIds = await claimMedia(photos, { owner: req.user._id, purpose: 'service', max: 6 });
   const approval = await needsApproval(null);
+  // The service inherits the shop location (for "near me"); moving the shop later updates every service.
+  const shop = await VendorProfile.findOne({ user: req.user._id }).select('location locationLabel').lean();
   const offer = await ServiceOffer.create({
     ...data,
     pricePaise: data.priceType === 'on_quote' ? undefined : data.pricePaise,
@@ -4521,7 +4784,7 @@ async function createOffer(req, res) {
     photos: photoIds,
     provider: req.user._id,
     contactName: data.contactName || req.user.name,
-    commissionBps: await commissionBpsNow(),
+    ...locationFields(presentLocation(shop)),
     moderationStatus: approval ? 'pending' : 'approved',
   });
   res.status(201).json(offer);
@@ -4541,8 +4804,6 @@ async function updateOffer(req, res) {
   Object.assign(offer, data);
   if (priceType === 'on_quote') offer.pricePaise = undefined;
   if (photos) offer.photos = await claimMedia(photos, { owner: req.user._id, purpose: 'service', max: 6 });
-  // Editing the listing re-publishes it at the current platform commission rate.
-  if (contentChanged) offer.commissionBps = await commissionBpsNow();
   if (contentChanged && (await needsApproval(offer.society))) offer.moderationStatus = 'pending';
   await offer.save();
   res.json(offer);
@@ -4621,31 +4882,32 @@ const kycSubmit = z
   .strict();
 const kycDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: optText(500) }).refine((v) => v.decision !== 'rejected' || !!v.note, { message: 'Tell the vendor why the KYC was rejected', path: ['note'] });
 const BOOKING_MAX_DAYS_AHEAD = 90;
-const couponCodeInput = z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,20}$/, 'Enter a valid coupon code');
-const serviceBookingCreate = z.object({ preferredDate: date, preferredTime: hhmm.optional(), address: text(300, 5), note: optText(500), couponCode: couponCodeInput.optional() }).strict();
-const couponCheck = z.object({ code: couponCodeInput }).strict();
-const couponFields = {
-  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,20}$/, 'Use 3 to 20 letters, numbers or dashes'),
-  description: optText(200),
-  discountPaise: z.number().int('Discount must be in whole paise').min(100, 'Discount must be at least ₹1').max(OFFER_MAX_PAISE, 'Discount is too high'),
-  maxUses: z.number().int().min(1, 'Allow at least 1 use').max(100000),
-  societyIds: z.array(objectId).max(500),
-  active: z.boolean(),
-  expiresOn: date.nullable(),
-};
-const couponCreate = z.object({ ...couponFields, description: couponFields.description, societyIds: couponFields.societyIds.default([]), active: couponFields.active.default(true), expiresOn: couponFields.expiresOn.optional() }).strict();
-// On edit an empty description clears it (optText would turn '' into "not sent").
-const couponUpdate = z.object({ ...couponFields, description: z.string().trim().max(200) }).partial().strict();
+const serviceBookingCreate = z.object({ preferredDate: date, preferredTime: hhmm.optional(), address: text(300, 5), note: optText(500), applyDiscount: z.boolean().optional() }).strict();
 const bookingNote = z.object({ note: optText(300) });
 const bookingMarkPaid = z.object({ amountPaise: positivePaise.refine((v) => v <= OFFER_MAX_PAISE, 'Amount is too high'), note: optText(300) }).strict();
 const adCreate = z.object({ kind: z.enum(AD_KINDS), listingId: objectId, city: text(80, 2), area: optText(120), days: z.number().int().min(1).max(30) }).strict();
 const adDecision = z.object({ decision: z.enum(['approved', 'rejected']), note: optText(500) }).refine((v) => v.decision !== 'rejected' || !!v.note, { message: 'Tell the vendor why the ad was rejected', path: ['note'] });
 const AD_FILTERS = ['pending', 'active', 'expired', 'rejected', 'cancelled', 'all'];
 
+/** Vendor accounts in the app (any client except gate, which authenticate already refuses). */
 function requireVendor(req, _res, next) {
-  if (req.user.accountType !== 'vendor' || req.client !== 'vendor') throw new AppError(403, 'VENDOR_ONLY', 'This is available to vendor accounts only.');
+  if (req.user.accountType !== 'vendor' || req.client === 'gate') throw new AppError(403, 'VENDOR_ONLY', 'This is available to vendor accounts only.');
   next();
 }
+
+const shopUpdate = z
+  .object({ shopName: text(80, 2).optional(), logoId: objectId.nullable().optional(), location: geoInput.nullable().optional() })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'Send shopName, logoId or location');
+const percent2 = z
+  .number({ error: 'Enter a percentage' })
+  .min(0, 'Use 0 to 100 percent')
+  .max(100, 'Use 0 to 100 percent')
+  .refine((v) => Math.abs(Math.round(v * 100) - v * 100) < 1e-6, 'Use at most 2 decimals');
+const vendorPricingBody = z
+  .object({ commissionPercent: percent2.optional(), memberDiscountPercent: percent2.optional() })
+  .strict()
+  .refine((v) => v.commissionPercent !== undefined || v.memberDiscountPercent !== undefined, 'Send commissionPercent and/or memberDiscountPercent');
 
 const KYC_DOCS = ['panPhoto', 'aadhaarFront', 'aadhaarBack'];
 const maskTail = (last4, total) => (last4 ? `${'•'.repeat(Math.max(0, total - last4.length))}${last4}` : null);
@@ -4671,11 +4933,33 @@ function presentVendorProfile(p, docTtl = 600) {
     bankIfsc: p.bankIfsc || null,
     bankName: p.bankName || null,
     documents: Object.fromEntries(KYC_DOCS.map((k) => [k, docOut(p[k], docTtl)])),
+    shop: { name: p.shopName || null, logo: logoOut(p.logo), location: presentLocation(p) },
+    pricing: presentRates(p),
   };
 }
 
 async function loadVendorProfile(userId) {
-  return VendorProfile.findOneAndUpdate({ user: userId }, { $setOnInsert: { user: userId } }, { upsert: true, returnDocument: 'after' }).populate(KYC_DOCS).lean();
+  return VendorProfile.findOneAndUpdate({ user: userId }, { $setOnInsert: { user: userId } }, { upsert: true, returnDocument: 'after' }).populate([...KYC_DOCS, 'logo']).lean();
+}
+
+/** Shop settings: name, logo (null removes) and location (null clears). A new location is copied to all the vendor's services. */
+async function updateShop(req, res) {
+  const { shopName, logoId, location } = req.valid.body;
+  const $set = {};
+  const $unset = {};
+  if (shopName !== undefined) $set.shopName = shopName;
+  if (logoId === null) $unset.logo = 1;
+  else if (logoId) [$set.logo] = await claimMedia([logoId], { owner: req.user._id, purpose: 'vendor_logo', max: 1 });
+  if (location !== undefined) {
+    const ops = locationOps(location);
+    Object.assign($set, ops.$set || {});
+    Object.assign($unset, ops.$unset || {});
+  }
+  await VendorProfile.updateOne({ user: req.user._id }, { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) }, { upsert: true });
+  if (location !== undefined) await ServiceOffer.updateMany({ provider: req.user._id }, locationOps(location));
+  if ($set.logo) await UploadedMedia.updateOne({ _id: $set.logo }, { attachedTo: `VendorProfile:${req.user._id}` });
+  await audit(req, { action: 'vendor.shop_updated', targetType: 'User', targetId: req.user._id, changes: { shopName, logo: logoId === undefined ? undefined : logoId ? 'set' : 'removed', location: location === undefined ? undefined : location ? 'set' : 'cleared' } });
+  res.json({ ...presentVendorProfile(await loadVendorProfile(req.user._id)), kycAvailable: !!env.kycKey });
 }
 
 async function getVendorProfile(req, res) {
@@ -4731,7 +5015,7 @@ async function vendorDashboard(req, res) {
     ServiceOffer.aggregate([{ $match: { provider: v, moderationStatus: { $ne: 'removed' } } }, { $group: { _id: '$moderationStatus', n: { $sum: 1 } } }]),
     ServiceBooking.aggregate([{ $match: { vendor: v } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     AdCampaign.find({ vendor: v, status: { $in: ['pending', 'approved'] } }).select('status startsAt endsAt').lean(),
-    VendorProfile.findOne({ user: v }).select('businessName kycStatus kycNote').lean(),
+    VendorProfile.findOne({ user: v }).select('businessName shopName kycStatus kycNote commissionBps memberDiscountBps').lean(),
     ServiceBooking.aggregate([{ $match: { vendor: v, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]),
   ]);
   res.json({
@@ -4745,17 +5029,29 @@ async function vendorDashboard(req, res) {
     cashCollectedPaise: cash[0]?.cash || 0,
     paidBookings: cash[0]?.n || 0,
     settlement: presentSettlement(cash[0]),
-    commissionPercent: (await commissionBpsNow()) / 100,
+    shopName: profile?.shopName || null,
+    // This vendor's own rates, set by NIVASA: commission added on top of their prices, member discount = share of it.
+    pricing: presentRates(profile),
   });
 }
 
 // ---------- service bookings ----------
 const bookingPopulate = [{ path: 'offer', select: 'title city category photos contactName contactPhone whatsappAvailable', populate: [{ path: 'photos' }, { path: 'category', select: 'name icon' }] }];
 
+/** Settlement numbers of a recorded payment (old bookings: vendor earnings = cash − net). */
+const settlementOf = (pay) => {
+  const cash = pay?.amountPaise ?? 0;
+  const net = pay?.netToPlatformPaise ?? 0;
+  return { cashPaise: cash, grossPaise: pay?.grossPaise ?? cash, commissionPaise: pay?.commissionPaise ?? 0, discountPaise: pay?.discountPaise ?? 0, netToPlatformPaise: net, vendorEarningsPaise: pay?.vendorEarningsPaise ?? cash - net };
+};
+
 function presentBooking(b, viewerId) {
   const asVendor = String(b.vendor?._id || b.vendor) === String(viewerId);
   const o = b.offer && typeof b.offer === 'object' && b.offer._id ? b.offer : null;
   const paid = b.payment?.status === 'paid';
+  const v2 = b.pricingVersion === 2;
+  const memberPrice = v2 ? (b.memberPricePaise ?? null) : (b.pricePaise ?? null);
+  const discount = b.discountPaise || 0;
   return {
     _id: b._id,
     status: b.status,
@@ -4766,13 +5062,20 @@ function presentBooking(b, viewerId) {
     preferredTime: b.preferredTime || null,
     address: b.address,
     note: b.note || null,
-    // What the member pays: list price − coupon discount (null for "price on request").
+    // What the member pays: member price − discount (null for "price on request"). The vendor also sees their own
+    // price and the rates; members never do.
     pricing: {
-      listPricePaise: b.pricePaise ?? null,
-      couponCode: b.couponCode || null,
-      discountPaise: b.discountPaise || 0,
-      payablePaise: b.pricePaise != null ? Math.max(0, b.pricePaise - (b.discountPaise || 0)) : null,
-      ...(asVendor && { commissionPercent: (b.commissionBps || 0) / 100 }),
+      memberPricePaise: memberPrice,
+      listPricePaise: memberPrice,
+      discountApplied: discount > 0,
+      discountPaise: discount,
+      payablePaise: memberPrice != null ? Math.max(0, memberPrice - discount) : null,
+      ...(asVendor && {
+        vendorPricePaise: v2 ? (b.vendorPricePaise ?? null) : (b.pricePaise ?? null),
+        commissionPercent: (b.commissionBps || 0) / 100,
+        commissionPaise: v2 ? (b.commissionPaise ?? null) : null,
+        memberDiscountPercent: (b.discountBps || 0) / 100,
+      }),
     },
     payment: {
       status: b.payment?.status || 'unpaid',
@@ -4781,7 +5084,7 @@ function presentBooking(b, viewerId) {
       paidAt: b.payment?.paidAt || null,
       note: b.payment?.note || null,
       // The settlement with NIVASA is the vendor's business, not the member's.
-      ...(asVendor && paid && { discountPaise: b.payment.discountPaise ?? 0, grossPaise: b.payment.grossPaise ?? b.payment.amountPaise, commissionPaise: b.payment.commissionPaise ?? 0, netToPlatformPaise: b.payment.netToPlatformPaise ?? 0 }),
+      ...(asVendor && paid && settlementOf(b.payment)),
     },
     timeline: (b.timeline || []).map((t) => ({ status: t.status, note: t.note || null, at: t.at })),
     offer: o ? { _id: o._id, title: o.title, city: o.city, category: o.category, photo: presentMedia(o.photos)[0] || null } : { _id: b.offer },
@@ -4806,37 +5109,37 @@ async function bookService(req, res) {
   if (!offer) throw notFound('Service');
   if (offer.visibility === 'society' && String(await approvedSocietyOf(req.user._id)) !== String(offer.society)) throw notFound('Service');
   if (String(offer.provider) === String(req.user._id)) throw badRequest('You cannot book your own service');
-  const { couponCode, ...b } = req.valid.body;
+  const { applyDiscount, ...b } = req.valid.body;
   if (b.preferredDate < indiaToday()) throw badRequest('Choose today or a later date');
   if (b.preferredDate > indiaToday(BOOKING_MAX_DAYS_AHEAD)) throw badRequest(`Bookings can be made up to ${BOOKING_MAX_DAYS_AHEAD} days ahead`);
   if (await ServiceBooking.exists({ offer: offer._id, customer: req.user._id, status: { $in: ['requested', 'accepted'] } })) {
     throw conflict('You already have an open booking for this service.', 'BOOKING_EXISTS');
   }
-  // Coupon: validate, then reserve atomically before the booking exists (released again if anything fails).
-  const deal = couponCode ? await evaluateCoupon(couponCode, req.user, offer) : null;
-  const bookingId = new mongoose.Types.ObjectId();
-  if (deal) await reserveCoupon(deal, req.user._id, bookingId);
-  let booking;
-  try {
-    booking = await ServiceBooking.create({
-      _id: bookingId,
-      ...(deal && { coupon: deal.coupon._id, couponCode: deal.coupon.code, discountPaise: deal.discountPaise }),
-      commissionBps: offer.commissionBps || 0,
-      offer: offer._id,
-      vendor: offer.provider,
-      customer: req.user._id,
-      offerTitle: offer.title,
-      priceType: offer.priceType,
-      pricePaise: offer.pricePaise,
-      ...b,
-      customerName: req.user.name,
-      customerPhone: req.user.phone,
-      timeline: [{ status: 'requested', by: req.user._id }],
-    });
-  } catch (err) {
-    if (deal) await releaseCoupon({ _id: bookingId, coupon: deal.coupon._id });
-    throw err;
-  }
+  // Price from the vendor's CURRENT rates (never from the client), snapshotted on the booking.
+  const rates = await VendorProfile.findOne({ user: offer.provider }).select('commissionBps memberDiscountBps').lean();
+  const p = offerPricing(offer.pricePaise, offer.priceType, rates);
+  if (applyDiscount && !(p.discountPaise > 0)) throw conflict('There is no discount on this service.', 'NO_DISCOUNT');
+  const discountPaise = applyDiscount ? p.discountPaise : 0;
+  const booking = await ServiceBooking.create({
+    pricingVersion: 2,
+    vendorPricePaise: p.vendorPricePaise ?? undefined,
+    commissionBps: p.commissionBps,
+    commissionPaise: p.commissionPaise ?? undefined,
+    memberPricePaise: p.memberPricePaise ?? undefined,
+    discountBps: applyDiscount ? p.discountBps : 0,
+    discountPaise,
+    payablePaise: p.memberPricePaise != null ? p.memberPricePaise - discountPaise : undefined,
+    offer: offer._id,
+    vendor: offer.provider,
+    customer: req.user._id,
+    offerTitle: offer.title,
+    priceType: offer.priceType,
+    pricePaise: p.memberPricePaise ?? undefined,
+    ...b,
+    customerName: req.user.name,
+    customerPhone: req.user.phone,
+    timeline: [{ status: 'requested', by: req.user._id }],
+  });
   notifyUsers([offer.provider], { type: 'booking', title: 'New booking request', body: `${req.user.name || 'A customer'} booked "${offer.title}" for ${b.preferredDate}.`, route: 'VendorBookings', id: String(booking._id) }).catch(() => {});
   const full = await ServiceBooking.findById(booking._id).populate(bookingPopulate).lean();
   res.status(201).json(presentBooking(full, req.user._id));
@@ -4863,7 +5166,6 @@ async function cancelMyServiceBooking(req, res) {
     if (await ServiceBooking.exists({ _id: req.valid.params.id, customer: req.user._id })) throw conflict('This booking can no longer be cancelled.', 'INVALID_TRANSITION');
     throw notFound('Booking');
   }
-  await releaseCoupon(b);
   notifyUsers([b.vendor], { type: 'booking', title: 'Booking cancelled', body: `${b.customerName || 'The customer'} cancelled "${b.offerTitle}".`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
 }
@@ -4901,7 +5203,6 @@ async function vendorBookingAction(req, res) {
     if (!cur) throw notFound('Booking');
     throw conflict(`This booking is ${cur.status} and cannot be ${to}.`, 'INVALID_TRANSITION');
   }
-  if (['declined', 'cancelled'].includes(to)) await releaseCoupon(b);
   notifyUsers([b.customer], { type: 'booking', title: `Booking ${to}`, body: `${req.user.name || 'The vendor'} ${BOOKING_MESSAGES[to]} for "${b.offerTitle}".${note ? ` ${note}` : ''}`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
 }
@@ -4910,16 +5211,34 @@ async function vendorBookingAction(req, res) {
 async function markBookingPaid(req, res) {
   const { amountPaise, note } = req.valid.body;
   const now = new Date();
-  const snap = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).select('discountPaise commissionBps').lean();
+  const snap = await ServiceBooking.findOne({ _id: req.valid.params.id, vendor: req.user._id }).select('pricingVersion memberPricePaise commissionPaise discountPaise commissionBps').lean();
   if (!snap) throw notFound('Booking');
-  const discountPaise = snap.discountPaise || 0;
   const commissionBps = snap.commissionBps || 0;
-  const grossPaise = amountPaise + discountPaise;
-  const commissionPaise = Math.round((grossPaise * commissionBps) / 10_000);
+  let discountPaise;
+  let commissionPaise;
+  let grossPaise;
+  if (snap.pricingVersion !== 2) {
+    // Booked before per-vendor pricing: the old rule (commission on cash + discount) keeps old numbers consistent.
+    discountPaise = snap.discountPaise || 0;
+    grossPaise = amountPaise + discountPaise;
+    commissionPaise = Math.round((grossPaise * commissionBps) / 10_000);
+  } else if (snap.memberPricePaise == null) {
+    // "Price on request": the vendor records the amount; NIVASA's commission comes out of it, no discount.
+    discountPaise = 0;
+    grossPaise = amountPaise;
+    commissionPaise = Math.round((amountPaise * commissionBps) / 10_000);
+  } else {
+    // Listed price: commission and discount were fixed when the member booked.
+    discountPaise = snap.discountPaise || 0;
+    grossPaise = amountPaise + discountPaise;
+    commissionPaise = snap.commissionPaise || 0;
+  }
+  const netToPlatformPaise = commissionPaise - discountPaise;
+  const vendorEarningsPaise = amountPaise - netToPlatformPaise;
   const b = await ServiceBooking.findOneAndUpdate(
     { _id: req.valid.params.id, vendor: req.user._id, status: 'completed', 'payment.status': { $ne: 'paid' } },
     {
-      $set: { payment: { status: 'paid', method: 'cash', amountPaise, paidAt: now, markedBy: req.user._id, note, discountPaise, grossPaise, commissionBps, commissionPaise, netToPlatformPaise: commissionPaise - discountPaise } },
+      $set: { payment: { status: 'paid', method: 'cash', amountPaise, paidAt: now, markedBy: req.user._id, note, discountPaise, grossPaise, commissionBps, commissionPaise, netToPlatformPaise, vendorEarningsPaise } },
       $push: { timeline: { status: 'paid', note: `Paid in cash: ₹${(amountPaise / 100).toFixed(2)}`, by: req.user._id, at: now } },
     },
     { returnDocument: 'after' },
@@ -4930,18 +5249,21 @@ async function markBookingPaid(req, res) {
     if (cur.payment?.status === 'paid') throw conflict('This booking is already marked as paid.', 'ALREADY_PAID');
     throw conflict('Mark the job as done before recording payment.', 'INVALID_TRANSITION');
   }
-  await audit(req, { action: 'vendor.booking_paid_cash', targetType: 'ServiceBooking', targetId: b._id, summary: `₹${(amountPaise / 100).toFixed(2)} cash for "${b.offerTitle}" · commission ₹${(commissionPaise / 100).toFixed(2)} · coupon ₹${(discountPaise / 100).toFixed(2)}` });
+  await audit(req, { action: 'vendor.booking_paid_cash', targetType: 'ServiceBooking', targetId: b._id, summary: `₹${(amountPaise / 100).toFixed(2)} cash for "${b.offerTitle}" · commission ₹${(commissionPaise / 100).toFixed(2)} · member discount ₹${(discountPaise / 100).toFixed(2)} · vendor ₹${(vendorEarningsPaise / 100).toFixed(2)}` });
   notifyUsers([b.customer], { type: 'payment', title: 'Payment recorded', body: `${req.user.name || 'The vendor'} recorded ₹${(amountPaise / 100).toFixed(2)} received in cash for "${b.offerTitle}".`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
   res.json(presentBooking(b.toObject(), req.user._id));
 }
 
-// ---------- coupons & settlement ----------
-/** $group stage summing recorded payments: cash received, coupon credits, commission, net due to NIVASA. */
-const SETTLEMENT_GROUP = { _id: null, n: { $sum: 1 }, cash: { $sum: '$payment.amountPaise' }, discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } }, commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } }, net: { $sum: { $ifNull: ['$payment.netToPlatformPaise', 0] } } };
+// ---------- settlement ----------
+/** Net to NIVASA of one recorded payment, and the vendor's earnings (= cash − net) — also for old bookings. */
+const NET_EXPR = { $ifNull: ['$payment.netToPlatformPaise', { $subtract: [{ $ifNull: ['$payment.commissionPaise', 0] }, { $ifNull: ['$payment.discountPaise', 0] }] }] };
+const VENDOR_EARNINGS_EXPR = { $ifNull: ['$payment.vendorEarningsPaise', { $subtract: ['$payment.amountPaise', NET_EXPR] }] };
+/** $group stage summing recorded payments: cash received, member discounts, commission, net to NIVASA, vendor earnings. */
+const SETTLEMENT_GROUP = { _id: null, n: { $sum: 1 }, cash: { $sum: '$payment.amountPaise' }, discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } }, commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } }, net: { $sum: NET_EXPR }, vendor: { $sum: VENDOR_EARNINGS_EXPR } };
 /**
- * Earnings from PAID service bookings (fixed at "mark paid"): service value (gross = cash + coupon), NIVASA
- * commission on it, coupon cost NIVASA funds, the vendor's earnings (gross − commission) and NIVASA's net
- * (commission − coupons). Dates are India time; `to` is inclusive.
+ * Earnings from PAID service bookings (fixed at "mark paid"): cash collected, NIVASA commission, member discounts
+ * given back (out of the commission), NIVASA's net (commission − discounts) and the vendor's earnings (cash − net).
+ * Dates are India time; `to` is inclusive.
  */
 const EARNINGS_GROUP = {
   n: { $sum: 1 },
@@ -4949,15 +5271,17 @@ const EARNINGS_GROUP = {
   cash: { $sum: '$payment.amountPaise' },
   commission: { $sum: { $ifNull: ['$payment.commissionPaise', 0] } },
   discount: { $sum: { $ifNull: ['$payment.discountPaise', 0] } },
+  net: { $sum: NET_EXPR },
+  vendor: { $sum: VENDOR_EARNINGS_EXPR },
 };
 const presentEarnings = (g) => ({
   paidJobs: g?.n || 0,
   grossPaise: g?.gross || 0,
   cashCollectedPaise: g?.cash || 0,
   commissionPaise: g?.commission || 0,
-  couponCostPaise: g?.discount || 0,
-  vendorEarningsPaise: (g?.gross || 0) - (g?.commission || 0),
-  platformNetPaise: (g?.commission || 0) - (g?.discount || 0),
+  memberDiscountsPaise: g?.discount || 0,
+  vendorEarningsPaise: g?.vendor || 0,
+  platformNetPaise: g?.net || 0,
 });
 
 function earningsMatch(query, base = {}) {
@@ -4977,14 +5301,10 @@ const presentEarningItem = (b, withVendor) => ({
   ...(withVendor ? { vendor: { _id: b.vendor?._id, name: b.vendor?.name || null } } : {}),
   paidAt: b.payment?.paidAt || null,
   listPricePaise: b.pricePaise ?? null,
-  grossPaise: b.payment?.grossPaise ?? b.payment?.amountPaise ?? 0,
-  cashPaise: b.payment?.amountPaise ?? 0,
-  couponCode: b.couponCode || null,
-  discountPaise: b.payment?.discountPaise || 0,
+  vendorPricePaise: b.pricingVersion === 2 ? (b.vendorPricePaise ?? null) : (b.pricePaise ?? null),
+  memberPricePaise: b.pricingVersion === 2 ? (b.memberPricePaise ?? null) : (b.pricePaise ?? null),
   commissionPercent: (b.payment?.commissionBps || 0) / 100,
-  commissionPaise: b.payment?.commissionPaise || 0,
-  vendorEarningsPaise: (b.payment?.grossPaise ?? b.payment?.amountPaise ?? 0) - (b.payment?.commissionPaise || 0),
-  netToPlatformPaise: b.payment?.netToPlatformPaise || 0,
+  ...settlementOf(b.payment),
 });
 
 async function earningsReport(req, base, { withVendors }) {
@@ -5025,137 +5345,9 @@ async function platformEarnings(req, res) {
   res.json(await earningsReport(req, base, { withVendors: true }));
 }
 
-const presentSettlement = (g) => ({ paidBookings: g?.n || 0, cashCollectedPaise: g?.cash || 0, couponCreditsPaise: g?.discount || 0, commissionPaise: g?.commission || 0, netToPlatformPaise: g?.net || 0 });
+const presentSettlement = (g) => ({ paidBookings: g?.n || 0, cashCollectedPaise: g?.cash || 0, memberDiscountsPaise: g?.discount || 0, commissionPaise: g?.commission || 0, netToPlatformPaise: g?.net || 0, vendorEarningsPaise: g?.vendor || 0 });
 
-/** Checks a code for this member and service; returns the coupon and the discount (never more than the price). */
-async function evaluateCoupon(rawCode, user, offer) {
-  const code = String(rawCode).trim().toUpperCase();
-  const coupon = await Coupon.findOne({ code }).lean();
-  if (!coupon || !coupon.active || (coupon.expiresAt && coupon.expiresAt < new Date())) throw new AppError(400, 'COUPON_INVALID', 'This coupon code is not valid.');
-  if (coupon.usedCount >= coupon.maxUses) throw conflict('This coupon has been fully used.', 'COUPON_EXHAUSTED');
-  if (coupon.societies?.length) {
-    const eligible = await SocietyMembership.exists({ user: user._id, status: 'approved', society: { $in: coupon.societies } });
-    if (!eligible) throw new AppError(403, 'COUPON_NOT_ELIGIBLE', 'This coupon is only for members of selected societies.');
-  }
-  if (await CouponRedemption.exists({ coupon: coupon._id, user: user._id })) throw conflict('You have already used this coupon.', 'COUPON_ALREADY_USED');
-  if (offer.priceType === 'on_quote' || !(offer.pricePaise > 0)) throw new AppError(400, 'COUPON_NEEDS_PRICE', 'Coupons apply to services with a listed price.');
-  const discountPaise = Math.min(coupon.discountPaise, offer.pricePaise);
-  return { coupon, discountPaise, listPricePaise: offer.pricePaise, payablePaise: offer.pricePaise - discountPaise };
-}
-
-/** Claims one use: the usedCount guard and the unique (coupon, user) row make this safe under concurrent bookings. */
-async function reserveCoupon(deal, userId, bookingId) {
-  const c = await Coupon.findOneAndUpdate({ _id: deal.coupon._id, active: true, $expr: { $lt: ['$usedCount', '$maxUses'] } }, { $inc: { usedCount: 1 } }, { returnDocument: 'after' });
-  if (!c) throw conflict('This coupon has just been fully used.', 'COUPON_EXHAUSTED');
-  try {
-    await CouponRedemption.create({ coupon: c._id, user: userId, booking: bookingId, discountPaise: deal.discountPaise });
-  } catch (err) {
-    await Coupon.updateOne({ _id: c._id }, { $inc: { usedCount: -1 } });
-    if (err.code === 11000) throw conflict('You have already used this coupon.', 'COUPON_ALREADY_USED');
-    throw err;
-  }
-}
-
-/** Gives the use back when a booking is cancelled or declined before the job (idempotent). */
-async function releaseCoupon(booking) {
-  if (!booking?.coupon) return;
-  const r = await CouponRedemption.deleteOne({ coupon: booking.coupon, booking: booking._id });
-  if (r.deletedCount) await Coupon.updateOne({ _id: booking.coupon, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
-}
-
-async function checkCoupon(req, res) {
-  if (req.user.accountType === 'vendor') throw forbidden('Coupons are for members booking services.', 'MEMBER_ONLY');
-  const offer = await ServiceOffer.findOne({ _id: req.valid.params.id, moderationStatus: 'approved', status: 'active' }).lean();
-  if (!offer) throw notFound('Service');
-  const deal = await evaluateCoupon(req.valid.body.code, req.user, offer);
-  res.json({ code: deal.coupon.code, description: deal.coupon.description || null, discountPaise: deal.discountPaise, listPricePaise: deal.listPricePaise, payablePaise: deal.payablePaise });
-}
-
-const couponPhase = (c, now = new Date()) => (!c.active ? 'inactive' : c.expiresAt && c.expiresAt < now ? 'expired' : c.usedCount >= c.maxUses ? 'used_up' : 'active');
-const endOfIndiaDay = (ymd) => new Date(`${ymd}T23:59:59.999+05:30`);
-const presentCoupon = (c) => ({
-  _id: c._id,
-  code: c.code,
-  description: c.description || null,
-  discountPaise: c.discountPaise,
-  maxUses: c.maxUses,
-  usedCount: c.usedCount,
-  remaining: Math.max(0, c.maxUses - c.usedCount),
-  societies: (c.societies || []).map((x) => (x?.name ? { _id: x._id, name: x.name, city: x.city } : { _id: x })),
-  allMembers: !c.societies?.length,
-  active: c.active,
-  expiresAt: c.expiresAt || null,
-  status: couponPhase(c),
-  createdAt: c.createdAt,
-  updatedAt: c.updatedAt,
-});
-
-async function listCoupons(req, res) {
-  const q = req.valid.query;
-  const now = new Date();
-  const filter = {};
-  if (q.q) filter.code = new RegExp(escapeRegex(q.q.toUpperCase()));
-  if (req.query.status === 'active') Object.assign(filter, { active: true, $expr: { $lt: ['$usedCount', '$maxUses'] }, $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] });
-  else if (req.query.status === 'inactive') filter.active = false;
-  else if (req.query.status === 'expired') filter.expiresAt = { $lte: now };
-  const page = await pagedFind(Coupon, filter, q, { sortable: ['createdAt', 'code', 'usedCount'], populate: [{ path: 'societies', select: 'name city' }] });
-  res.json({ ...page, items: page.items.map(presentCoupon) });
-}
-
-async function getCoupon(req, res) {
-  const c = await Coupon.findById(req.valid.params.id).populate('societies', 'name city').lean();
-  if (!c) throw notFound('Coupon');
-  const redemptions = await CouponRedemption.find({ coupon: c._id }).sort({ createdAt: -1 }).limit(200).populate('user', 'name phone').populate('booking', 'offerTitle status pricePaise payment.status').lean();
-  res.json({
-    ...presentCoupon(c),
-    redemptions: redemptions.map((r) => ({ _id: r._id, at: r.createdAt, discountPaise: r.discountPaise, user: { _id: r.user?._id, name: r.user?.name || null, phone: maskPhone(r.user?.phone) }, booking: r.booking ? { _id: r.booking._id, offerTitle: r.booking.offerTitle, status: r.booking.status, paid: r.booking.payment?.status === 'paid' } : null })),
-  });
-}
-
-async function assertSocieties(ids = []) {
-  if (!ids.length) return [];
-  const found = await Society.countDocuments({ _id: { $in: ids } });
-  if (found !== new Set(ids.map(String)).size) throw badRequest('One or more selected societies do not exist');
-  return ids;
-}
-
-async function createCoupon(req, res) {
-  const b = req.valid.body;
-  if (await Coupon.exists({ code: b.code })) throw conflict('A coupon with this code already exists.', 'COUPON_EXISTS');
-  const c = await Coupon.create({ code: b.code, description: b.description, discountPaise: b.discountPaise, maxUses: b.maxUses, societies: await assertSocieties(b.societyIds), active: b.active, expiresAt: b.expiresOn ? endOfIndiaDay(b.expiresOn) : undefined, createdBy: req.user._id });
-  await audit(req, { action: 'platform.coupon_created', targetType: 'Coupon', targetId: c._id, summary: `${c.code}: ₹${(c.discountPaise / 100).toFixed(2)} × ${c.maxUses}` });
-  res.status(201).json(presentCoupon((await Coupon.findById(c._id).populate('societies', 'name city').lean())));
-}
-
-async function updateCoupon(req, res) {
-  const c = await Coupon.findById(req.valid.params.id);
-  if (!c) throw notFound('Coupon');
-  const b = req.valid.body;
-  if (b.code && b.code !== c.code) {
-    if (c.usedCount > 0) throw conflict('The code of a coupon that members already used cannot change.', 'COUPON_IN_USE');
-    if (await Coupon.exists({ code: b.code })) throw conflict('A coupon with this code already exists.', 'COUPON_EXISTS');
-    c.code = b.code;
-  }
-  if (b.maxUses !== undefined && b.maxUses < c.usedCount) throw badRequest(`${c.usedCount} members already used this coupon, so uses can't be lower than that`);
-  for (const k of ['discountPaise', 'maxUses', 'active']) if (b[k] !== undefined) c[k] = b[k];
-  if (b.description !== undefined) c.description = b.description || undefined;
-  if (b.societyIds !== undefined) c.societies = await assertSocieties(b.societyIds);
-  if (b.expiresOn !== undefined) c.expiresAt = b.expiresOn ? endOfIndiaDay(b.expiresOn) : undefined;
-  await c.save();
-  await audit(req, { action: 'platform.coupon_updated', targetType: 'Coupon', targetId: c._id, changes: b });
-  res.json(presentCoupon(await Coupon.findById(c._id).populate('societies', 'name city').lean()));
-}
-
-async function deleteCoupon(req, res) {
-  const c = await Coupon.findById(req.valid.params.id).lean();
-  if (!c) throw notFound('Coupon');
-  if (c.usedCount > 0 || (await CouponRedemption.exists({ coupon: c._id }))) throw conflict('Members already used this coupon, so it is kept for the records. Turn it off instead.', 'COUPON_IN_USE');
-  await Coupon.deleteOne({ _id: c._id });
-  await audit(req, { action: 'platform.coupon_deleted', targetType: 'Coupon', targetId: c._id, summary: c.code });
-  res.json({ ok: true });
-}
-
-/** Paid service bookings with their settlement (cash, coupon credit, commission, net), plus totals for the filter. */
+/** Service bookings with their pricing snapshot and settlement (cash, commission, member discount, net, vendor), plus totals. */
 async function listServiceBookingsPlatform(req, res) {
   const q = req.valid.query;
   const filter = {};
@@ -5179,10 +5371,13 @@ async function listServiceBookingsPlatform(req, res) {
       vendor: { _id: b.vendor?._id, name: b.vendor?.name || null },
       customer: { name: b.customer?.name || null },
       listPricePaise: b.pricePaise ?? null,
-      couponCode: b.couponCode || null,
+      vendorPricePaise: b.pricingVersion === 2 ? (b.vendorPricePaise ?? null) : (b.pricePaise ?? null),
+      memberPricePaise: b.pricingVersion === 2 ? (b.memberPricePaise ?? null) : (b.pricePaise ?? null),
       discountPaise: b.discountPaise || 0,
+      payablePaise: b.pricingVersion === 2 ? (b.payablePaise ?? null) : b.pricePaise != null ? b.pricePaise - (b.discountPaise || 0) : null,
       commissionPercent: (b.commissionBps || 0) / 100,
-      payment: { status: b.payment?.status || 'unpaid', amountPaise: b.payment?.amountPaise ?? null, paidAt: b.payment?.paidAt || null, grossPaise: b.payment?.grossPaise ?? null, commissionPaise: b.payment?.commissionPaise ?? null, netToPlatformPaise: b.payment?.netToPlatformPaise ?? null },
+      commissionPaise: b.pricingVersion === 2 ? (b.commissionPaise ?? null) : null,
+      payment: { status: b.payment?.status || 'unpaid', amountPaise: b.payment?.amountPaise ?? null, paidAt: b.payment?.paidAt || null, ...(b.payment?.status === 'paid' ? settlementOf(b.payment) : {}) },
       createdAt: b.createdAt,
     })),
   });
@@ -5290,7 +5485,7 @@ async function listVendors(req, res) {
     const users = await User.find({ accountType: 'vendor', $or: [{ name: rx }, { phone: new RegExp(escapeRegex(q.q)) }] }).select('_id').limit(200).lean();
     filter.$or = [{ businessName: rx }, { user: { $in: users.map((u) => u._id) } }];
   }
-  const page = await pagedFind(VendorProfile, filter, q, { sortable: ['createdAt', 'submittedAt', 'businessName'], defaultSort: '-submittedAt', populate: [{ path: 'user', select: 'name phone status createdAt' }] });
+  const page = await pagedFind(VendorProfile, filter, q, { sortable: ['createdAt', 'submittedAt', 'businessName'], defaultSort: '-submittedAt', populate: [{ path: 'user', select: 'name phone status createdAt' }, { path: 'logo' }] });
   res.json({
     ...page,
     items: page.items.map((p) => ({
@@ -5300,10 +5495,13 @@ async function listVendors(req, res) {
       phone: maskPhone(p.user?.phone),
       status: p.user?.status,
       businessName: p.businessName || null,
+      shopName: p.shopName || null,
+      shopLogoUrl: logoOut(p.logo)?.url || null,
       city: p.city || null,
       kycStatus: p.kycStatus,
       submittedAt: p.submittedAt || null,
       reviewedAt: p.reviewedAt || null,
+      pricing: presentRates(p),
       createdAt: p.user?.createdAt || p.createdAt,
     })),
   });
@@ -5329,9 +5527,25 @@ async function getVendor(req, res) {
     settlement: presentSettlement(settled[0]),
     user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
     profile: presentVendorProfile(profile, 900),
+    pricing: presentRates(profile),
     counts: { properties, services, bookings, ads },
     kycAvailable: !!env.kycKey,
   });
+}
+
+/** Master Admin sets this vendor's commission (added on top of their prices) and member discount (share of it). */
+async function setVendorPricing(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const { commissionPercent, memberDiscountPercent } = req.valid.body;
+  const $set = {};
+  if (commissionPercent !== undefined) $set.commissionBps = Math.round(commissionPercent * 100);
+  if (memberDiscountPercent !== undefined) $set.memberDiscountBps = Math.round(memberDiscountPercent * 100);
+  const before = await VendorProfile.findOne({ user: user._id }).select('commissionBps memberDiscountBps').lean();
+  const p = await VendorProfile.findOneAndUpdate({ user: user._id }, { $set }, { upsert: true, returnDocument: 'after' }).lean();
+  const pricing = presentRates(p);
+  await audit(req, { action: 'vendor.pricing_updated', targetType: 'User', targetId: user._id, summary: `Commission ${pricing.commissionPercent}% · member discount ${pricing.memberDiscountPercent}%`, changes: { before: presentRates(before), after: pricing } });
+  notifyUsers([user._id], { type: 'vendor', title: 'Your NIVASA rates were updated', body: `NIVASA commission ${pricing.commissionPercent}% is added to your prices for members; members can get ${pricing.memberDiscountPercent}% of it back as a discount. Your own price stays the same.`, route: 'VendorServices' }).catch(() => {});
+  res.json({ pricing });
 }
 
 async function decideVendorKyc(req, res) {
@@ -5342,7 +5556,7 @@ async function decideVendorKyc(req, res) {
     { user: user._id, kycStatus: { $in: allowedFrom } },
     { $set: { kycStatus: decision, kycNote: note, reviewedBy: req.user._id, reviewedAt: new Date() } },
     { returnDocument: 'after' },
-  ).populate(KYC_DOCS);
+  ).populate([...KYC_DOCS, 'logo']);
   if (!p) throw conflict(decision === 'approved' ? 'Only submitted KYC can be approved.' : 'Only submitted or approved KYC can be rejected.', 'INVALID_TRANSITION');
   await audit(req, { action: `platform.vendor_kyc_${decision}`, targetType: 'User', targetId: user._id, summary: note || p.businessName });
   notifyUsers([user._id], { type: 'vendor', title: decision === 'approved' ? 'KYC approved' : 'KYC needs changes', body: decision === 'approved' ? 'You can now list properties and services.' : note, route: 'VendorKyc' }).catch(() => {});
@@ -5421,6 +5635,455 @@ async function decideAd(req, res) {
   res.json(presentAd(ad.toObject()));
 }
 
+// ======================= Gate security: gatemen, visitors (guests), notes =======================
+// Society staff (perm "gate") manage gatemen in SocialPanel; gatemen work only in the app (session client "gate");
+// members pre-register guests and read notes from the gate. Society context always comes from a verified record:
+// the gateman's own staff record or the member's approved membership — never from client input.
+const gatemanCreate = z.object({ name: text(120, 2), email, password: z.string().min(10).max(200), phone: phone.optional() }).strict();
+const gatemanUpdate = z
+  .object({ name: text(120, 2).optional(), phone: phone.nullable().optional() })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'Send name or phone');
+const gatemanStatus = z.object({ status: z.enum(['active', 'disabled']) }).strict();
+const gatemanPassword = z.object({ password: z.string().min(10).max(200) }).strict();
+const visitorListQuery = pageQuery.extend({ date: date.optional(), status: z.enum([...VISITOR_STATUSES, 'upcoming', 'all']).optional() });
+const memberVisitorQuery = pageQuery.extend({ scope: z.enum(['upcoming', 'past']).default('upcoming') });
+const memberVisitorCreate = z
+  .object({ name: text(80, 2), phone, purpose: optText(120), expectedDate: date, expectedIn: hhmm.optional(), expectedOut: hhmm.optional() })
+  .strict()
+  .refine((v) => !(v.expectedIn && v.expectedOut) || v.expectedOut > v.expectedIn, { path: ['expectedOut'], message: 'The out time must be after the in time' });
+const gateVisitorCreate = z.object({ name: text(80, 2), phone, purpose: optText(120), flatId: objectId, hostId: objectId.optional(), enterNow: z.boolean().default(false) }).strict();
+const gateVisitorActionBody = z.object({ note: optText(300), enterNow: z.boolean().optional() }).strict();
+const gateFlatQuery = z.object({ q: z.string().trim().max(20).optional() });
+const gateNoteCreate = z.object({ memberId: objectId, text: text(500, 3), visitorId: objectId.optional() }).strict();
+
+const VISITOR_STATUS_LABEL = { expected: 'expected', approved: 'approved', rejected: 'rejected', cancelled: 'cancelled', inside: 'inside', exited: 'gone out' };
+const VISITOR_GATE_ACTIONS = { expected: ['approve', 'reject'], approved: ['enter', 'reject'], inside: ['exit'] };
+const visitorPopulate = [{ path: 'flat', select: 'number floor' }, { path: 'building', select: 'name' }, { path: 'host', select: 'name phone' }];
+/** India time HH:MM. */
+const indiaTimeNow = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(11, 16);
+
+/** as: 'gate' (actions for the gateman), 'member' (cancel), 'staff' (read only). */
+function presentVisitor(v, as) {
+  return {
+    _id: v._id,
+    name: v.name,
+    phone: v.phone,
+    purpose: v.purpose || null,
+    expectedDate: v.expectedDate,
+    expectedIn: v.expectedIn || null,
+    expectedOut: v.expectedOut || null,
+    status: v.status,
+    entryAt: v.entryAt || null,
+    exitAt: v.exitAt || null,
+    approvedAt: v.approvedAt || null,
+    rejectedReason: v.rejectedReason || null,
+    cancelledAt: v.cancelledAt || null,
+    flat: v.flat?._id ? { _id: v.flat._id, number: v.flat.number, floor: v.flat.floor ?? null } : { _id: v.flat },
+    building: v.building?._id ? { _id: v.building._id, name: v.building.name } : { _id: v.building },
+    host: v.host?._id ? { _id: v.host._id, name: v.host.name || null, ...(as !== 'member' ? { phone: v.host.phone || null } : {}) } : null,
+    createdByRole: v.createdByRole,
+    createdAt: v.createdAt,
+    updatedAt: v.updatedAt,
+    actions: as === 'gate' ? VISITOR_GATE_ACTIONS[v.status] || [] : as === 'member' && ['expected', 'approved'].includes(v.status) ? ['cancel'] : [],
+  };
+}
+
+const presentGateNote = (n, as) => ({
+  _id: n._id,
+  text: n.text,
+  readAt: n.readAt || null,
+  createdAt: n.createdAt,
+  visitor: n.visitor?._id ? { _id: n.visitor._id, name: n.visitor.name } : null,
+  ...(as === 'gate' ? { member: n.member?._id ? { _id: n.member._id, name: n.member.name || null } : { _id: n.member } } : { from: { name: n.gateman?.name || 'Gate security', role: 'gateman' } }),
+});
+
+async function pagedVisitors(filter, q, sort) {
+  const { page, limit, skip } = paginate(q);
+  const [items, total] = await Promise.all([Visitor.find(filter).sort({ ...sort, _id: -1 }).skip(skip).limit(limit).populate(visitorPopulate).lean(), Visitor.countDocuments(filter)]);
+  return { items, page, limit, total, pages: Math.ceil(total / limit) };
+}
+
+/** Search by guest name, phone digits or flat number (within one society). */
+async function visitorSearch(societyId, text) {
+  const rx = new RegExp(escapeRegex(text), 'i');
+  const digits = text.replace(/\D/g, '');
+  const flats = await Flat.find({ society: societyId, number: new RegExp(escapeRegex(text.toUpperCase())) }).select('_id').limit(200).lean();
+  return [{ name: rx }, ...(digits.length >= 3 ? [{ phone: new RegExp(digits) }] : []), { flat: { $in: flats.map((f) => f._id) } }];
+}
+
+/** Notify the flat's approved members about their guest (type "visitor", app route "Guests"). */
+function notifyFlatOfVisitor(v, kind) {
+  const titles = { walkin: 'Guest at the gate', walkin_inside: 'Guest entered', approved: 'Guest approved', inside: 'Guest entered', rejected: 'Guest not allowed in' };
+  const bodies = {
+    walkin: `${v.name} is at the gate for your flat${v.purpose ? ` (${v.purpose})` : ''}. Gate security let them in when you're ready.`,
+    walkin_inside: `${v.name} came to the gate for your flat${v.purpose ? ` (${v.purpose})` : ''} and was let in by gate security.`,
+    approved: `${v.name} has been approved by gate security.`,
+    inside: `${v.name} has entered the society.`,
+    rejected: `${v.name} was not allowed in${v.rejectedReason ? `: ${v.rejectedReason}` : '.'}`,
+  };
+  notifyFlatResidents(v.society, v.flat?._id || v.flat, { type: 'visitor', title: titles[kind], body: bodies[kind], route: 'Guests', id: v._id }).catch(() => {});
+}
+
+/** Gate guard: a gate session of an ACTIVE gateman record of an ACTIVE society (context from that record only). */
+async function requireGateman(req, _res, next) {
+  if (req.client !== 'gate') throw forbidden('This is for gate staff. Use "Gate staff sign-in" in the app.', 'NOT_GATEMAN');
+  const staff = await SocietyStaff.findOne({ user: req.user._id, role: 'gateman', status: 'active' }).lean();
+  if (!staff) throw forbidden('This gate account has been disabled by the society.', 'NOT_GATEMAN');
+  const society = await Society.findById(staff.society).populate('logo').lean();
+  if (!society || society.status !== 'active') throw forbidden('This society is currently suspended.', 'SOCIETY_SUSPENDED');
+  req.staff = staff;
+  req.society = society;
+  req.societyId = society._id;
+  req.actorRole = 'society_gateman';
+  next();
+}
+
+// ---------- society staff: gatemen + visitor log ----------
+const presentGateman = (s) => ({
+  _id: s._id,
+  userId: s.user?._id || s.user,
+  name: s.user?.name || null,
+  email: s.user?.email || null,
+  phone: s.phone || null,
+  status: s.status,
+  lastLoginAt: s.user?.lastLoginAt || null,
+  createdAt: s.createdAt,
+});
+
+async function listGatemen(req, res) {
+  const staff = await SocietyStaff.find({ society: req.societyId, role: 'gateman' }).populate('user', 'name email status lastLoginAt').sort({ createdAt: 1 }).lean();
+  res.json({ items: staff.map(presentGateman) });
+}
+
+async function createGateman(req, res) {
+  const { name, email: mail, password, phone: mobile } = req.valid.body;
+  validatePasswordStrength(password);
+  const taken = () => conflict('This email is already used by another account. Use a different email for the gateman.', 'EMAIL_TAKEN');
+  if (await User.exists({ email: mail })) throw taken();
+  const passwordHash = await hashPassword(password);
+  let created;
+  try {
+    created = await mongoose.connection.transaction(async (session) => {
+      const [user] = await User.create([{ name, email: mail, passwordHash, status: 'active' }], { session });
+      const [staff] = await SocietyStaff.create([{ society: req.societyId, user: user._id, role: 'gateman', phone: mobile || undefined, addedBy: req.user._id }], { session });
+      return { user, staff };
+    });
+  } catch (err) {
+    if (err?.code === 11000) throw taken();
+    throw err;
+  }
+  await audit(req, { action: 'gate.gateman_created', targetType: 'SocietyStaff', targetId: created.staff._id, summary: `${name} <${mail}>` });
+  res.status(201).json(presentGateman({ ...created.staff.toObject(), user: created.user.toObject() }));
+}
+
+async function ownGateman(req) {
+  const staff = await SocietyStaff.findOne({ _id: req.valid.params.id, society: req.societyId, role: 'gateman' });
+  if (!staff) throw notFound('Gateman');
+  return staff;
+}
+
+async function updateGateman(req, res) {
+  const staff = await ownGateman(req);
+  const { name, phone: mobile } = req.valid.body;
+  if (name !== undefined) await User.updateOne({ _id: staff.user }, { name });
+  if (mobile !== undefined) staff.phone = mobile || undefined;
+  await staff.save();
+  await audit(req, { action: 'gate.gateman_updated', targetType: 'SocietyStaff', targetId: staff._id, changes: req.valid.body });
+  res.json(presentGateman(await SocietyStaff.findById(staff._id).populate('user', 'name email status lastLoginAt').lean()));
+}
+
+/** Disable signs the gateman out everywhere at once (the account is disabled too); enable restores both. */
+async function setGatemanStatus(req, res) {
+  const staff = await ownGateman(req);
+  const { status } = req.valid.body;
+  if (staff.status !== status) {
+    staff.status = status;
+    await staff.save();
+    await User.updateOne({ _id: staff.user }, { status });
+    if (status === 'disabled') await revokeAllSessions(staff.user, 'gateman_disabled');
+    await audit(req, { action: status === 'disabled' ? 'gate.gateman_disabled' : 'gate.gateman_enabled', targetType: 'SocietyStaff', targetId: staff._id });
+  }
+  res.json(presentGateman(await SocietyStaff.findById(staff._id).populate('user', 'name email status lastLoginAt').lean()));
+}
+
+async function setGatemanPassword(req, res) {
+  const staff = await ownGateman(req);
+  validatePasswordStrength(req.valid.body.password);
+  await User.updateOne({ _id: staff.user }, { passwordHash: await hashPassword(req.valid.body.password), passwordChangedAt: new Date(), failedLoginCount: 0, $unset: { lockedUntil: 1 } });
+  await revokeAllSessions(staff.user, 'password_set_by_society');
+  await audit(req, { action: 'gate.gateman_password_set', targetType: 'SocietyStaff', targetId: staff._id });
+  res.json({ ok: true });
+}
+
+/** Read-only visitor log for society staff. */
+async function societyVisitors(req, res) {
+  const q = req.valid.query;
+  const filter = { society: req.societyId };
+  if (q.date) filter.expectedDate = q.date;
+  if (q.status === 'upcoming') {
+    filter.expectedDate = { $gte: q.date || indiaToday() };
+    filter.status = { $in: ['expected', 'approved'] };
+  } else if (q.status && q.status !== 'all') filter.status = q.status;
+  if (q.q) filter.$or = await visitorSearch(req.societyId, q.q);
+  const page = await pagedVisitors(filter, q, { expectedDate: -1, createdAt: -1 });
+  res.json({ ...page, items: page.items.map((v) => presentVisitor(v, 'staff')) });
+}
+
+// ---------- gateman (app) ----------
+async function gateMe(req, res) {
+  const today = indiaToday();
+  const counts = await Visitor.aggregate([{ $match: { society: req.societyId, $or: [{ expectedDate: today }, { status: 'inside' }] } }, { $group: { _id: '$status', n: { $sum: 1 } } }]);
+  res.json({ user: { _id: req.user._id, name: req.user.name, email: req.user.email }, gate: gatePayload(req.society, req.staff), today: { date: today, ...Object.fromEntries(counts.map((c) => [c._id, c.n])) } });
+}
+
+async function gateVisitors(req, res) {
+  const q = req.valid.query;
+  const today = indiaToday();
+  const filter = { society: req.societyId };
+  let sort = { expectedDate: 1, expectedIn: 1, createdAt: -1 };
+  if (q.status === 'upcoming') {
+    filter.expectedDate = { $gte: q.date || today };
+    filter.status = { $in: ['expected', 'approved'] };
+  } else if (q.status === 'inside') {
+    // Guests still inside, whatever day they were expected.
+    filter.status = 'inside';
+    if (q.date) filter.expectedDate = q.date;
+    sort = { entryAt: -1 };
+  } else {
+    filter.expectedDate = q.date || today;
+    if (q.status && q.status !== 'all') filter.status = q.status;
+  }
+  if (q.q) filter.$or = await visitorSearch(req.societyId, q.q);
+  const page = await pagedVisitors(filter, q, sort);
+  res.json({ ...page, date: q.status === 'inside' && !q.date ? null : q.date || today, items: page.items.map((v) => presentVisitor(v, 'gate')) });
+}
+
+async function gateVisitor(req, res) {
+  const v = await Visitor.findOne({ _id: req.valid.params.id, society: req.societyId }).populate(visitorPopulate).lean();
+  if (!v) throw notFound('Guest');
+  res.json(presentVisitor(v, 'gate'));
+}
+
+/** Walk-in guest added at the gate for a flat (and optionally one of its members): approved, or inside with enterNow. */
+async function gateAddVisitor(req, res) {
+  const { name, phone: mobile, purpose, flatId, hostId, enterNow } = req.valid.body;
+  const flat = await Flat.findOne({ _id: flatId, society: req.societyId, active: true }).select('building number').lean();
+  if (!flat) throw badRequest('Choose a flat of this society');
+  let host;
+  if (hostId) {
+    const m = await SocietyMembership.findOne({ society: req.societyId, flat: flat._id, user: hostId, status: 'approved' }).select('user').lean();
+    if (!m) throw badRequest('Choose a member who lives in this flat');
+    host = m.user;
+  }
+  const now = new Date();
+  const v = await Visitor.create({
+    society: req.societyId,
+    flat: flat._id,
+    building: flat.building,
+    host,
+    name,
+    phone: mobile,
+    purpose,
+    expectedDate: indiaToday(),
+    expectedIn: indiaTimeNow(),
+    status: enterNow ? 'inside' : 'approved',
+    approvedBy: req.user._id,
+    approvedAt: now,
+    ...(enterNow ? { entryAt: now, enteredBy: req.user._id } : {}),
+    createdBy: req.user._id,
+    createdByRole: 'gateman',
+  });
+  await audit(req, { action: 'gate.visitor_walkin', targetType: 'Visitor', targetId: v._id, summary: `${name} → flat ${flat.number}${enterNow ? ' (entered)' : ''}` });
+  notifyFlatOfVisitor(v, enterNow ? 'walkin_inside' : 'walkin');
+  const full = await Visitor.findById(v._id).populate(visitorPopulate).lean();
+  res.status(201).json(presentVisitor(full, 'gate'));
+}
+
+const GATE_VISITOR_ACTIONS = {
+  approve: { from: ['expected'], to: 'approved' },
+  reject: { from: ['expected', 'approved'], to: 'rejected' },
+  enter: { from: ['approved'], to: 'inside' },
+  exit: { from: ['inside'], to: 'exited' },
+};
+
+/** approve | reject | enter | exit — the status guard in the update makes double taps and two gates safe. */
+async function gateVisitorAction(req, res) {
+  const action = req.params.action;
+  const def = GATE_VISITOR_ACTIONS[action];
+  if (!def) throw notFound('Action');
+  const { note, enterNow } = req.valid.body;
+  const now = new Date();
+  const $set = { status: def.to };
+  if (action === 'approve') {
+    Object.assign($set, { approvedBy: req.user._id, approvedAt: now });
+    if (enterNow) Object.assign($set, { status: 'inside', entryAt: now, enteredBy: req.user._id });
+  }
+  if (action === 'reject' && note) $set.rejectedReason = note;
+  if (action === 'enter') Object.assign($set, { entryAt: now, enteredBy: req.user._id });
+  if (action === 'exit') Object.assign($set, { exitAt: now, exitedBy: req.user._id });
+  const v = await Visitor.findOneAndUpdate({ _id: req.valid.params.id, society: req.societyId, status: { $in: def.from } }, { $set }, { returnDocument: 'after' }).populate(visitorPopulate).lean();
+  if (!v) {
+    const cur = await Visitor.findOne({ _id: req.valid.params.id, society: req.societyId }).select('status').lean();
+    if (!cur) throw notFound('Guest');
+    throw conflict(`This guest is already ${VISITOR_STATUS_LABEL[cur.status]}.`, 'INVALID_TRANSITION');
+  }
+  await audit(req, { action: `gate.visitor_${{ approve: 'approved', reject: 'rejected', enter: 'entered', exit: 'exited' }[action]}`, targetType: 'Visitor', targetId: v._id, summary: `${v.name} · flat ${v.flat?.number || ''}${note ? ` · ${note}` : ''}` });
+  if (v.status === 'approved') notifyFlatOfVisitor(v, 'approved');
+  else if (v.status === 'inside') notifyFlatOfVisitor(v, 'inside');
+  else if (v.status === 'rejected') notifyFlatOfVisitor(v, 'rejected');
+  res.json(presentVisitor(v, 'gate'));
+}
+
+const presentGateMember = (m) => ({
+  _id: m.user._id,
+  membershipId: m._id,
+  name: m.user.name || null,
+  phone: m.user.phone || null,
+  flat: m.flat?._id ? { _id: m.flat._id, number: m.flat.number, floor: m.flat.floor ?? null } : null,
+  building: m.building?._id ? { _id: m.building._id, name: m.building.name } : null,
+  residentType: m.residentType,
+});
+const gateMemberPopulate = [{ path: 'user', select: 'name phone accountType' }, { path: 'flat', select: 'number floor' }, { path: 'building', select: 'name' }];
+
+/** Approved members of THIS society with full phone numbers (so the gate can call). No vendors, no other society. */
+async function gateMembers(req, res) {
+  const q = req.valid.query;
+  const filter = { society: req.societyId, status: 'approved' };
+  if (q.q) {
+    const rx = new RegExp(escapeRegex(q.q), 'i');
+    const digits = q.q.replace(/\D/g, '');
+    const [users, flats] = await Promise.all([
+      User.find({ accountType: { $ne: 'vendor' }, $or: [{ name: rx }, ...(digits.length >= 3 ? [{ phone: new RegExp(digits) }] : [])] }).select('_id').limit(500).lean(),
+      Flat.find({ society: req.societyId, number: new RegExp(escapeRegex(q.q.toUpperCase())) }).select('_id').limit(200).lean(),
+    ]);
+    filter.$or = [{ user: { $in: users.map((u) => u._id) } }, { flat: { $in: flats.map((f) => f._id) } }];
+  }
+  const page = await pagedFind(SocietyMembership, filter, { ...q, sort: undefined }, { populate: gateMemberPopulate });
+  res.json({ ...page, items: page.items.filter((m) => m.user && m.user.accountType !== 'vendor').map(presentGateMember) });
+}
+
+async function gateMember(req, res) {
+  const memberships = await SocietyMembership.find({ society: req.societyId, user: req.valid.params.id, status: 'approved' }).populate(gateMemberPopulate).lean();
+  const live = memberships.filter((m) => m.user && m.user.accountType !== 'vendor');
+  if (!live.length) throw notFound('Member');
+  const flats = live.map((m) => m.flat?._id).filter(Boolean);
+  const [visitors, notes] = await Promise.all([
+    Visitor.find({ society: req.societyId, flat: { $in: flats } }).sort({ createdAt: -1 }).limit(20).populate(visitorPopulate).lean(),
+    GateNote.find({ society: req.societyId, member: live[0].user._id }).sort({ createdAt: -1 }).limit(10).populate('visitor', 'name').populate('member', 'name').lean(),
+  ]);
+  const u = live[0].user;
+  res.json({
+    member: { _id: u._id, name: u.name || null, phone: u.phone || null },
+    flats: live.map((m) => ({ membershipId: m._id, flat: presentGateMember(m).flat, building: presentGateMember(m).building, residentType: m.residentType })),
+    recentVisitors: visitors.map((v) => presentVisitor(v, 'gate')),
+    notes: notes.map((n) => presentGateNote(n, 'gate')),
+  });
+}
+
+/** Flats for the walk-in form: number, building and the approved members (to pick a host). */
+async function gateFlats(req, res) {
+  const filter = { society: req.societyId, active: true };
+  if (req.valid.query.q) filter.number = new RegExp(escapeRegex(req.valid.query.q.toUpperCase()));
+  const flats = await Flat.find(filter).sort({ number: 1 }).limit(20).populate('building', 'name').lean();
+  const ms = await SocietyMembership.find({ society: req.societyId, flat: { $in: flats.map((f) => f._id) }, status: 'approved' }).populate('user', 'name phone accountType').lean();
+  const byFlat = {};
+  for (const m of ms) if (m.user && m.user.accountType !== 'vendor') (byFlat[String(m.flat)] ||= []).push({ _id: m.user._id, name: m.user.name || null, phone: m.user.phone || null, residentType: m.residentType });
+  res.json({ items: flats.map((f) => ({ _id: f._id, number: f.number, floor: f.floor ?? null, building: f.building?._id ? { _id: f.building._id, name: f.building.name } : null, members: byFlat[String(f._id)] || [] })) });
+}
+
+async function gateSendNote(req, res) {
+  const { memberId, text: body, visitorId } = req.valid.body;
+  const m = await SocietyMembership.findOne({ society: req.societyId, user: memberId, status: 'approved' }).select('user').lean();
+  if (!m) throw badRequest('Choose a member of this society');
+  let visitor = null;
+  if (visitorId) {
+    visitor = await Visitor.findOne({ _id: visitorId, society: req.societyId }).select('name').lean();
+    if (!visitor) throw badRequest('Unknown guest');
+  }
+  const note = await GateNote.create({ society: req.societyId, gateman: req.user._id, member: m.user, visitor: visitor?._id, text: body });
+  await audit(req, { action: 'gate.note_sent', targetType: 'GateNote', targetId: note._id, summary: body.slice(0, 120) });
+  notifyUsers([m.user], { society: req.societyId, type: 'visitor', title: 'Note from the gate', body: body.slice(0, 300), route: 'Guests', id: note._id }).catch(() => {});
+  const full = await GateNote.findById(note._id).populate('member', 'name').populate('visitor', 'name').lean();
+  res.status(201).json(presentGateNote(full, 'gate'));
+}
+
+async function gateNotes(req, res) {
+  const page = await pagedFind(GateNote, { society: req.societyId, gateman: req.user._id }, req.valid.query, { populate: [{ path: 'member', select: 'name' }, { path: 'visitor', select: 'name' }] });
+  res.json({ ...page, items: page.items.map((n) => presentGateNote(n, 'gate')) });
+}
+
+// ---------- member (app, approved membership) ----------
+/** Upcoming = still to come today or later, or inside now; past = everything else. Only the member's own flat. */
+function memberVisitorScope(scope, today) {
+  const upcoming = [{ status: 'inside' }, { expectedDate: { $gte: today }, status: { $in: ['expected', 'approved'] } }];
+  return scope === 'upcoming' ? { $or: upcoming } : { $nor: upcoming };
+}
+
+async function memberVisitors(req, res) {
+  const q = req.valid.query;
+  const filter = { society: req.societyId, flat: req.membership.flat, ...memberVisitorScope(q.scope, indiaToday()) };
+  const sort = q.scope === 'upcoming' ? { expectedDate: 1, expectedIn: 1, createdAt: -1 } : { expectedDate: -1, createdAt: -1 };
+  const [page, unreadNotes] = await Promise.all([pagedVisitors(filter, q, sort), GateNote.countDocuments({ society: req.societyId, member: req.user._id, readAt: null })]);
+  res.json({ ...page, scope: q.scope, unreadNotes, items: page.items.map((v) => presentVisitor(v, 'member')) });
+}
+
+async function memberAddVisitor(req, res) {
+  const b = req.valid.body;
+  if (b.expectedDate < indiaToday() || b.expectedDate > indiaToday(30)) throw badRequest('Choose a date from today up to 30 days ahead');
+  const flat = await Flat.findOne({ _id: req.membership.flat, society: req.societyId }).select('building').lean();
+  if (!flat) throw notFound('Flat');
+  const v = await Visitor.create({ society: req.societyId, flat: flat._id, building: flat.building, host: req.user._id, ...b, status: 'expected', createdBy: req.user._id, createdByRole: 'member' });
+  const full = await Visitor.findById(v._id).populate(visitorPopulate).lean();
+  res.status(201).json(presentVisitor(full, 'member'));
+}
+
+async function memberCancelVisitor(req, res) {
+  const v = await Visitor.findOneAndUpdate(
+    { _id: req.valid.params.id, society: req.societyId, flat: req.membership.flat, status: { $in: ['expected', 'approved'] } },
+    { $set: { status: 'cancelled', cancelledAt: new Date() } },
+    { returnDocument: 'after' },
+  ).populate(visitorPopulate).lean();
+  if (!v) {
+    const cur = await Visitor.findOne({ _id: req.valid.params.id, society: req.societyId, flat: req.membership.flat }).select('status').lean();
+    if (!cur) throw notFound('Guest');
+    throw conflict(`This guest is already ${VISITOR_STATUS_LABEL[cur.status]} and can't be cancelled.`, 'INVALID_TRANSITION');
+  }
+  res.json(presentVisitor(v, 'member'));
+}
+
+async function memberGateNotes(req, res) {
+  const filter = { society: req.societyId, member: req.user._id };
+  const [page, unread] = await Promise.all([
+    pagedFind(GateNote, filter, req.valid.query, { populate: [{ path: 'gateman', select: 'name' }, { path: 'visitor', select: 'name' }] }),
+    GateNote.countDocuments({ ...filter, readAt: null }),
+  ]);
+  res.json({ ...page, unread, items: page.items.map((n) => presentGateNote(n, 'member')) });
+}
+
+async function markGateNoteRead(req, res) {
+  const filter = { _id: req.valid.params.id, society: req.societyId, member: req.user._id };
+  await GateNote.updateOne({ ...filter, readAt: null }, { readAt: new Date() });
+  const n = await GateNote.findOne(filter).select('readAt').lean();
+  if (!n) throw notFound('Note');
+  res.json({ ok: true, readAt: n.readAt });
+}
+
+/** Gateman routes (app, session client "gate"). */
+const gateRouter = Router();
+const gateId = validate({ params: idParam });
+gateRouter.use(authenticateAny, requireGateman);
+gateRouter.get('/me', gateMe);
+gateRouter.get('/visitors', validate({ query: visitorListQuery }), gateVisitors);
+gateRouter.post('/visitors', validate({ body: gateVisitorCreate }), gateAddVisitor);
+gateRouter.get('/visitors/:id', gateId, gateVisitor);
+gateRouter.post('/visitors/:id/:action', gateId, validate({ body: gateVisitorActionBody }), gateVisitorAction);
+gateRouter.get('/members', validate({ query: pageQuery }), gateMembers);
+gateRouter.get('/members/:id', gateId, gateMember);
+gateRouter.get('/flats', validate({ query: gateFlatQuery }), gateFlats);
+gateRouter.post('/notes', validate({ body: gateNoteCreate }), gateSendNote);
+gateRouter.get('/notes', validate({ query: pageQuery }), gateNotes);
+
 const id$1 = validate({ params: idParam });
 const page$1 = validate({ query: pageQuery });
 
@@ -5473,6 +6136,13 @@ residentRouter.get('/payments/:id', id$1, paymentStatus);
 residentRouter.get('/receipts/:id', id$1, getReceipt);
 residentRouter.get('/receipts/:id/pdf', id$1, receiptPdf);
 
+// Gate security: the member's guests (own flat only) and notes from the gate.
+residentRouter.get('/visitors', validate({ query: memberVisitorQuery }), memberVisitors);
+residentRouter.post('/visitors', validate({ body: memberVisitorCreate }), memberAddVisitor);
+residentRouter.post('/visitors/:id/cancel', id$1, memberCancelVisitor);
+residentRouter.get('/gate-notes', page$1, memberGateNotes);
+residentRouter.post('/gate-notes/:id/read', id$1, markGateNoteRead);
+
 /** Marketplace & property: any signed-in (phone-verified) user; no society membership required. */
 const listingsRouter = Router();
 listingsRouter.use(['/properties', '/marketplace', '/service-offers', '/service-bookings'], authenticate);
@@ -5503,7 +6173,6 @@ listingsRouter.patch('/service-offers/:id', id$1, validate({ body: offerUpdate }
 listingsRouter.delete('/service-offers/:id', id$1, deleteOffer);
 listingsRouter.post('/service-offers/:id/report', id$1, validate({ body: reportCreate }), reportListing('service'));
 listingsRouter.post('/service-offers/:id/bookings', id$1, validate({ body: serviceBookingCreate }), bookService);
-listingsRouter.post('/service-offers/:id/coupon', id$1, validate({ body: couponCheck }), checkCoupon);
 
 // A member's own bookings of vendor services.
 listingsRouter.get('/service-bookings', validate({ query: bookingStatusQuery }), myServiceBookings);
@@ -5513,6 +6182,7 @@ listingsRouter.post('/service-bookings/:id/cancel', id$1, validate({ body: booki
 const vendorRouter = Router();
 vendorRouter.use(authenticate, requireVendor);
 vendorRouter.get('/profile', getVendorProfile);
+vendorRouter.put('/shop', validate({ body: shopUpdate }), updateShop);
 vendorRouter.put('/kyc', validate({ body: kycSubmit }), submitKyc);
 vendorRouter.get('/dashboard', vendorDashboard);
 vendorRouter.get('/earnings', page$1, vendorEarnings);
@@ -5559,8 +6229,9 @@ async function overview$1(req, res) {
     { $group: { _id: '$period', billed: { $sum: '$totalPaise' }, collected: { $sum: '$paidPaise' } } },
   ]);
   const trendMap = Object.fromEntries(trendRows.map((r) => [r._id, r]));
+  const logo = req.society.logo ? await UploadedMedia.findById(req.society.logo).lean() : null;
   res.json({
-    society: pick(req.society, ['_id', 'name', 'code', 'city', 'status']),
+    society: { ...pick(req.society, ['_id', 'name', 'code', 'city', 'status']), logoUrl: mediaUrl(logo) },
     role: req.staff.role,
     counts: { flats, buildings, residents, pendingMembers, pendingBookings, openServiceRequests, pendingListings, openReports },
     complaints: Object.fromEntries(complaintsByStatus.map((c) => [c._id, c.n])),
@@ -5577,18 +6248,35 @@ async function overview$1(req, res) {
 }
 
 // ======================= Profile & settings =======================
+/** Society profile with logo { _id, url } | null and location { lat, lng, label } | null. */
+const presentSocietyProfile = (s) => ({ ...s, logo: logoOut(s.logo), location: presentLocation(s), locationLabel: undefined });
+
 async function getProfile(req, res) {
-  const s = await Society.findById(sid$1(req)).lean();
-  res.json(s);
+  const s = await Society.findById(sid$1(req)).populate('logo').lean();
+  res.json(presentSocietyProfile(s));
 }
 
 async function updateProfile(req, res) {
-  const { settings, ...data } = req.valid.body;
-  const update = { ...data };
-  if (settings) for (const [k, v] of Object.entries(settings)) update[`settings.${k}`] = v;
-  const s = await Society.findByIdAndUpdate(sid$1(req), update, { returnDocument: 'after', runValidators: true }).lean();
-  await audit(req, { action: 'society.profile_updated', targetType: 'Society', targetId: s._id, changes: req.valid.body });
-  res.json(s);
+  const { settings, location, logoId, ...data } = req.valid.body;
+  const $set = { ...data };
+  const $unset = {};
+  if (settings) for (const [k, v] of Object.entries(settings)) $set[`settings.${k}`] = v;
+  if (location !== undefined) {
+    const ops = locationOps(location);
+    Object.assign($set, ops.$set || {});
+    Object.assign($unset, ops.$unset || {});
+  }
+  if (logoId === null) $unset.logo = 1;
+  else if (logoId) [$set.logo] = await claimMedia([logoId], { owner: req.user._id, purpose: 'society_logo', max: 1 });
+  const update = { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) };
+  const s = Object.keys(update).length
+    ? await Society.findByIdAndUpdate(sid$1(req), update, { returnDocument: 'after', runValidators: true }).populate('logo').lean()
+    : await Society.findById(sid$1(req)).populate('logo').lean();
+  if ($set.logo) await UploadedMedia.updateOne({ _id: $set.logo }, { society: s._id, attachedTo: `Society:${s._id}` });
+  const { logoId: _l, ...changes } = req.valid.body;
+  if (Object.keys(changes).length) await audit(req, { action: 'society.profile_updated', targetType: 'Society', targetId: s._id, changes });
+  if (logoId !== undefined) await audit(req, { action: 'society.logo_updated', targetType: 'Society', targetId: s._id, summary: logoId ? 'Logo uploaded' : 'Logo removed' });
+  res.json(presentSocietyProfile(s));
 }
 
 async function updateBilling(req, res) {
@@ -5736,7 +6424,8 @@ const decideMembership = (action) => async (req, res) => {
 
 // ======================= Staff =======================
 async function listStaff(req, res) {
-  const items = await SocietyStaff.find({ society: sid$1(req) }).populate('user', 'name email phone status lastLoginAt').sort({ createdAt: 1 }).lean();
+  // Gatemen have their own page (GET /society/gatemen).
+  const items = await SocietyStaff.find({ society: sid$1(req), role: { $ne: 'gateman' } }).populate('user', 'name email phone status lastLoginAt').sort({ createdAt: 1 }).lean();
   res.json({ items });
 }
 
@@ -5745,6 +6434,8 @@ async function inviteStaff(req, res) {
   let user = await User.findOne({ email });
   if (isPlatformAdmin(user)) throw badRequest('Platform administrators cannot be added as society staff');
   if (!user) user = await User.create({ name, email, phone: phone || undefined, status: 'pending_setup' });
+  // Gate staff accounts are app-only and never become panel staff.
+  if (await SocietyStaff.exists({ user: user._id, role: 'gateman' })) throw conflict('This email belongs to a gate staff account. Use a different email.', 'EMAIL_TAKEN');
   const exists = await SocietyStaff.findOne({ society: sid$1(req), user: user._id });
   if (exists) throw conflict('This person is already on the staff list');
   const staff = await SocietyStaff.create({ society: sid$1(req), user: user._id, role, title, addedBy: req.user._id });
@@ -5760,7 +6451,7 @@ async function inviteStaff(req, res) {
 }
 
 async function updateStaff(req, res) {
-  const staff = await SocietyStaff.findOne({ _id: req.valid.params.id, society: sid$1(req) });
+  const staff = await SocietyStaff.findOne({ _id: req.valid.params.id, society: sid$1(req), role: { $ne: 'gateman' } });
   if (!staff) throw notFound('Staff member');
   if (String(staff.user) === String(req.user._id) && (req.valid.body.role && req.valid.body.role !== 'admin' || req.valid.body.status === 'disabled')) {
     throw forbidden('You cannot demote or disable your own admin access');
@@ -5777,7 +6468,7 @@ async function updateStaff(req, res) {
 }
 
 async function resendStaffSetup(req, res) {
-  const staff = await SocietyStaff.findOne({ _id: req.valid.params.id, society: sid$1(req) }).populate('user');
+  const staff = await SocietyStaff.findOne({ _id: req.valid.params.id, society: sid$1(req), role: { $ne: 'gateman' } }).populate('user');
   if (!staff) throw notFound('Staff member');
   if (staff.user.status !== 'pending_setup') throw badRequest('This person has already set a password');
   const link = setupLink(await issuePasswordSetupToken(staff.user));
@@ -6443,7 +7134,7 @@ async function listRegistrations(req, res) {
 async function getRegistration(req, res) {
   const r = await SocietyRegistration.findById(req.valid.params.id).populate('documents').populate('reviewedBy', 'name').lean();
   if (!r) throw notFound('Registration');
-  res.json({ ...r, documents: presentMedia(r.documents) });
+  res.json({ ...r, documents: presentMedia(r.documents), location: presentLocation(r), locationLabel: undefined });
 }
 
 async function markUnderReview(req, res) {
@@ -6470,7 +7161,7 @@ async function approveRegistration(req, res) {
     if (isPlatformAdmin(user)) throw badRequest('The representative email belongs to a platform administrator');
     if (!user) [user] = await User.create([{ name: r.representative.name, email: r.representative.email, status: 'pending_setup' }], { session });
     const [society] = await Society.create(
-      [{ name: r.societyName, code: `SOC${shortCode(5)}`, addressLine: r.addressLine, area: r.area, city: r.city, state: r.state, pincode: r.pincode, phone: r.phone, email: r.email, registration: r._id }],
+      [{ name: r.societyName, code: `SOC${shortCode(5)}`, addressLine: r.addressLine, area: r.area, city: r.city, state: r.state, pincode: r.pincode, phone: r.phone, email: r.email, registration: r._id, ...locationFields(presentLocation(r)) }],
       { session },
     );
     await SocietyStaff.create([{ society: society._id, user: user._id, role: 'admin', title: r.representative.designation, addedBy: req.user._id }], { session });
@@ -6502,7 +7193,7 @@ async function listSocieties(req, res) {
   const ids = page.items.map((s) => s._id);
   const [members, admins] = await Promise.all([
     SocietyMembership.aggregate([{ $match: { society: { $in: ids }, status: 'approved' } }, { $group: { _id: '$society', n: { $sum: 1 } } }]),
-    SocietyStaff.aggregate([{ $match: { society: { $in: ids }, status: 'active' } }, { $group: { _id: '$society', n: { $sum: 1 } } }]),
+    SocietyStaff.aggregate([{ $match: { society: { $in: ids }, status: 'active', role: { $ne: 'gateman' } } }, { $group: { _id: '$society', n: { $sum: 1 } } }]),
   ]);
   const m = Object.fromEntries(members.map((x) => [String(x._id), x.n]));
   const a = Object.fromEntries(admins.map((x) => [String(x._id), x.n]));
@@ -6510,14 +7201,14 @@ async function listSocieties(req, res) {
 }
 
 async function getSociety(req, res) {
-  const s = await Society.findById(req.valid.params.id).lean();
+  const s = await Society.findById(req.valid.params.id).populate('logo').lean();
   if (!s) throw notFound('Society');
   const [staff, residents, invoices] = await Promise.all([
     SocietyStaff.find({ society: s._id }).populate('user', 'name email phone status lastLoginAt').lean(),
     SocietyMembership.countDocuments({ society: s._id, status: 'approved' }),
     MaintenanceInvoice.aggregate([{ $match: { society: s._id, active: true } }, { $group: { _id: null, billed: { $sum: '$totalPaise' }, collected: { $sum: '$paidPaise' }, n: { $sum: 1 } } }]),
   ]);
-  res.json({ ...s, staff: maskPersonalData(staff), residentCount: residents, financeSummary: { invoices: invoices[0]?.n || 0, billedPaise: invoices[0]?.billed || 0, collectedPaise: invoices[0]?.collected || 0 } });
+  res.json({ ...s, logo: logoOut(s.logo), location: presentLocation(s), locationLabel: undefined, staff: maskPersonalData(staff), residentCount: residents, financeSummary: { invoices: invoices[0]?.n || 0, billedPaise: invoices[0]?.billed || 0, collectedPaise: invoices[0]?.collected || 0 } });
 }
 
 const setSocietyStatus = (status) => async (req, res) => {
@@ -6550,6 +7241,7 @@ async function addSocietyAdmin(req, res) {
   let user = await User.findOne({ email });
   if (isPlatformAdmin(user)) throw badRequest('Platform administrators cannot be added as society staff');
   if (!user) user = await User.create({ name, email, phone: phone || undefined, status: 'pending_setup' });
+  if (await SocietyStaff.exists({ user: user._id, role: 'gateman' })) throw conflict('This email belongs to a gate staff account. Use a different email.', 'EMAIL_TAKEN');
   if (await SocietyStaff.exists({ society: s._id, user: user._id })) throw conflict('Already a staff member of this society');
   const staff = await SocietyStaff.create({ society: s._id, user: user._id, role, addedBy: req.user._id });
   let link;
@@ -6693,10 +7385,9 @@ async function archivePlatformAnnouncement(req, res) {
 }
 
 // ======================= Settings & audit =======================
-const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string', 'ads.dayOptions': 'string', 'services.commissionPercent': 'number' };
-const SETTING_DEFAULTS = { 'listings.requireApproval': true, 'ads.dayOptions': '3,7,15,30', 'services.commissionPercent': 0 };
-/** Platform commission on vendor services, in basis points (10% → 1000). */
-const commissionBpsNow = async () => Math.round(Number(await platformSetting('services.commissionPercent', 0)) * 100) || 0;
+// Commission is set per vendor (PATCH /platform/vendors/:id/pricing); there is no platform-wide commission setting.
+const SETTING_KEYS = { 'listings.requireApproval': 'boolean', 'support.email': 'string', 'support.phone': 'string', 'ads.dayOptions': 'string' };
+const SETTING_DEFAULTS = { 'listings.requireApproval': true, 'ads.dayOptions': '3,7,15,30' };
 /** "3, 7,15" → [3, 7, 15]; null when invalid (each 1–30 days, 1–6 distinct options). */
 function parseDayOptions(v) {
   const days = String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean).map(Number);
@@ -6715,10 +7406,6 @@ async function updateSetting(req, res) {
   const key = req.params.key;
   if (!SETTING_KEYS[key]) throw badRequest('Unknown setting');
   if (typeof req.valid.body.value !== SETTING_KEYS[key]) throw badRequest(`Setting ${key} must be a ${SETTING_KEYS[key]}`);
-  if (key === 'services.commissionPercent') {
-    const v = req.valid.body.value;
-    if (!Number.isFinite(v) || v < 0 || v > 50 || Math.round(v * 100) !== v * 100) throw badRequest('Commission must be between 0 and 50 percent, with at most 2 decimals');
-  }
   if (key === 'ads.dayOptions') {
     const days = parseDayOptions(req.valid.body.value);
     if (!days) throw badRequest('Enter 1 to 6 different day counts between 1 and 30, separated by commas (e.g. 3,7,15,30)');
@@ -6775,6 +7462,14 @@ societyRouter.get('/staff', can('society.read'), listStaff);
 societyRouter.post('/staff', can('staff'), validate({ body: staffInvite }), inviteStaff);
 societyRouter.patch('/staff/:id', can('staff'), id, validate({ body: staffUpdate }), updateStaff);
 societyRouter.post('/staff/:id/setup-link', can('staff'), id, resendStaffSetup);
+
+// Gate security: gatemen (app-only accounts) and the read-only visitor log.
+societyRouter.get('/gatemen', can('gate'), listGatemen);
+societyRouter.post('/gatemen', can('gate'), validate({ body: gatemanCreate }), createGateman);
+societyRouter.patch('/gatemen/:id', can('gate'), id, validate({ body: gatemanUpdate }), updateGateman);
+societyRouter.post('/gatemen/:id/status', can('gate'), id, validate({ body: gatemanStatus }), setGatemanStatus);
+societyRouter.post('/gatemen/:id/password', can('gate'), id, validate({ body: gatemanPassword }), setGatemanPassword);
+societyRouter.get('/visitors', can('society.read'), validate({ query: visitorListQuery }), societyVisitors);
 
 societyRouter.get('/complaints', can('complaints'), page, listComplaints);
 societyRouter.get('/complaints/:id', can('complaints'), id, getComplaintAdmin);
@@ -7241,14 +7936,10 @@ platformRouter.get('/vendors', requirePlatformPerm('vendors.view'), page, listVe
 platformRouter.get('/vendors/:id', requirePlatformPerm('vendors.view'), id, getVendor);
 platformRouter.post('/vendors/:id/kyc', requirePlatformPerm('vendors.manage'), id, validate({ body: kycDecision }), decideVendorKyc);
 platformRouter.post('/vendors/:id/reveal', requirePlatformPerm('vendors.manage'), id, reason, revealVendorKyc);
+platformRouter.patch('/vendors/:id/pricing', requirePlatformPerm('vendors.manage'), id, validate({ body: vendorPricingBody }), setVendorPricing);
 platformRouter.get('/ads', requirePlatformPerm('ads.view'), page, listAdsPlatform);
 platformRouter.get('/ads/:id', requirePlatformPerm('ads.view'), id, getAdPlatform);
 platformRouter.post('/ads/:id/review', requirePlatformPerm('ads.manage'), id, validate({ body: adDecision }), decideAd);
-platformRouter.get('/coupons', requirePlatformPerm('coupons.view'), page, listCoupons);
-platformRouter.post('/coupons', requirePlatformPerm('coupons.manage'), validate({ body: couponCreate }), createCoupon);
-platformRouter.get('/coupons/:id', requirePlatformPerm('coupons.view'), id, getCoupon);
-platformRouter.patch('/coupons/:id', requirePlatformPerm('coupons.manage'), id, validate({ body: couponUpdate }), updateCoupon);
-platformRouter.delete('/coupons/:id', requirePlatformPerm('coupons.manage'), id, deleteCoupon);
 platformRouter.get('/service-bookings', requirePlatformPerm('service_bookings.view'), page, listServiceBookingsPlatform);
 platformRouter.get('/earnings', requirePlatformPerm('earnings.view'), page, platformEarnings);
 
@@ -7311,6 +8002,7 @@ function createApp() {
   app.use('/api/v1/society', societyRouter);
   app.use('/api/v1/platform', platformRouter);
   app.use('/api/v1/vendor', vendorRouter);
+  app.use('/api/v1/gate', gateRouter);
   app.use('/api/v1', listingsRouter);
 
   app.use(notFoundHandler);
@@ -7560,7 +8252,7 @@ async function createSuperAdmin() {
 // ---------------------------------------------------------------------------------- check-secrets
 function checkSecrets() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const clientDirs = ['Adda_App', 'AddaApp', 'SocialPanel', 'Admin_Panel', 'VendorPanel'].map((d) => path.join(root, d)).filter((d) => fs$1.existsSync(d));
+  const clientDirs = ['Adda_App', 'AddaApp', 'SocialPanel', 'Admin_Panel'].map((d) => path.join(root, d)).filter((d) => fs$1.existsSync(d));
   const SKIP = new Set(['node_modules', '.expo', 'android', 'ios', '.git', 'dist']);
   const PATTERNS = [
     [/mongodb(\+srv)?:\/\/[^\s'"]+/i, 'MongoDB connection string'],

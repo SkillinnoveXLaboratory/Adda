@@ -150,6 +150,39 @@ const ICONS = {
       <Path d="M14 23H26M14 28H22" stroke={N} strokeWidth={2} strokeLinecap="round" />
     </>,
   ],
+  // ---- vendor area
+  boost: [
+    40,
+    <>
+      <Path d="M20 7L24 17H33L26 23L29 33L20 27L11 33L14 23L7 17H16L20 7Z" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
+      <Circle cx={20} cy={20} r={3} fill={G} />
+    </>,
+  ],
+  shield: [
+    40,
+    <>
+      <Path d="M20 6L31 10V19C31 26 26 31 20 34C14 31 9 26 9 19V10L20 6Z" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
+      <Path d="M15 20L18.5 23.5L25 16" stroke={G} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+    </>,
+  ],
+  cash: [
+    40,
+    <>
+      <Rect x={6} y={12} width={28} height={17} rx={3} stroke={N} strokeWidth={2.2} />
+      <Circle cx={20} cy={20.5} r={4} stroke={G} strokeWidth={2.2} />
+      <Circle cx={11} cy={20.5} r={1.5} fill={G} />
+      <Circle cx={29} cy={20.5} r={1.5} fill={G} />
+    </>,
+  ],
+  shop: [
+    40,
+    <>
+      <Path d="M8 16L11 8H29L32 16" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
+      <Path d="M8 16C8 18.2 9.8 20 12 20C14.2 20 16 18.2 16 16C16 18.2 17.8 20 20 20C22.2 20 24 18.2 24 16C24 18.2 25.8 20 28 20C30.2 20 32 18.2 32 16" stroke={G} strokeWidth={2.2} strokeLinejoin="round" />
+      <Path d="M10 20V32H30V20" stroke={N} strokeWidth={2.2} strokeLinejoin="round" />
+      <Rect x={17} y={25} width={6} height={7} stroke={G} strokeWidth={2} />
+    </>,
+  ],
 };
 
 /** <NIcon name="bills" size={32} /> — also draws service-category icon keys (serviceIcons.json); unknown names → "others". */

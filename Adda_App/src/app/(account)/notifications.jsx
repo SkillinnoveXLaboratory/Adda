@@ -9,12 +9,16 @@ import { api } from '../../lib/api';
 import { timeAgo } from '../../lib/format';
 import { colors } from '../../theme';
 
-const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', poll: 'checkbox', system: 'information-circle' };
+const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', poll: 'checkbox', system: 'information-circle', vendor: 'shield-checkmark', ad: 'rocket', visitor: 'person-add' };
 
 /** Maps the server's notification route hint to an app screen. */
-function hrefFor(n, isMember) {
+function hrefFor(n, isMember, isVendor) {
   const id = n.data?.id;
   const r = n.data?.route;
+  if (isVendor) {
+    const vendorRoutes = { MyProperties: '/vendor-listings?tab=property', MyServices: '/vendor-listings?tab=service', VendorServices: '/vendor-listings?tab=service', VendorBookings: '/vendor-bookings', VendorAds: '/ads', VendorKyc: '/kyc', Home: '/dashboard' };
+    return vendorRoutes[r] || null;
+  }
   if (r === 'MyServiceBookings') return '/service-bookings';
   if (!isMember && !['MyProperties', 'MyMarketplace', 'MyServices'].includes(r)) return null;
   switch (r) {
@@ -38,6 +42,9 @@ function hrefFor(n, isMember) {
       return id ? `/polls/${id}` : '/polls';
     case 'Community':
       return '/community';
+    case 'Guests':
+      // A note from the gate and a visitor update share the route; the server marks notes only by their title.
+      return /^Note from the gate/i.test(n.title || '') ? '/guests?tab=notes' : '/guests';
     case 'MyProperties':
       return '/my-listings?tab=property';
     case 'MyMarketplace':
@@ -52,7 +59,7 @@ function hrefFor(n, isMember) {
 }
 
 export default function Notifications() {
-  const { isMember, refreshProfile } = useAuth();
+  const { isMember, isVendor, refreshProfile } = useAuth();
   const toast = useToast();
   const [state, setState] = useState({ items: [], unread: 0, page: 0, pages: 1, loading: true, refreshing: false, more: false, error: null });
   const pageRef = useRef(0);
@@ -82,7 +89,9 @@ export default function Notifications() {
       await refreshProfile().catch(() => {});
       return router.replace('/');
     }
-    const href = hrefFor(n, isMember);
+    // A KYC decision changes what a vendor can do — refresh the profile first.
+    if (n.type === 'vendor') await refreshProfile().catch(() => {});
+    const href = hrefFor(n, isMember, isVendor);
     if (href) router.push(href);
   };
 

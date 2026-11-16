@@ -300,7 +300,7 @@ const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 
 const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
 const aadhaar = (b) => b + [0, 4, 3, 2, 1, 5, 6, 7, 8, 9][b.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
 async function verifiedVendor(n, name) {
-  const r = await call('POST', '/auth/vendor/register', { body: { name, phone: phone(n), password: 'Provider12345' } });
+  const r = await call('POST', '/auth/resident/register', { body: { name, phone: phone(n), password: 'Provider12345', accountType: 'vendor' } });
   const T = r.body.accessToken;
   const d = [];
   for (let i = 0; i < 3; i += 1) d.push((await fileUpload(T, 'kyc')).body?._id);
@@ -311,10 +311,12 @@ async function verifiedVendor(n, name) {
 const PV = await verifiedVendor(4, 'Salt Lake Homes');
 check('vendor registers, submits KYC, owner approves', PV.registered === 201 && PV.kyc === 200 && PV.approved === 200, PV);
 const vApp = await call('POST', '/auth/resident/login', { body: { phone: phone(4), password: 'Provider12345' } });
-check('vendor signing in to the member app → 403 VENDOR_USE_PANEL (no tokens)', vApp.status === 403 && vApp.body?.error?.code === 'VENDOR_USE_PANEL' && !vApp.body?.accessToken, vApp.body);
-const vReg = await call('POST', '/auth/resident/register', { body: { name: 'App Vendor', phone: phone(9), password: 'Provider12345', accountType: 'vendor' } });
-check('vendor sign-up from the app → 403 VENDOR_USE_PANEL', vReg.status === 403 && vReg.body?.error?.code === 'VENDOR_USE_PANEL', vReg.body);
-check('public config exposes vendorPanelUrl (string or null)', 'vendorPanelUrl' in (cfg.body || {}), cfg.body);
+check('vendor signs in to the member app → 200 + vendor profile', vApp.status === 200 && vApp.body?.user?.accountType === 'vendor' && !!vApp.body?.accessToken && vApp.body?.vendor?.kycStatus === 'approved', vApp.body);
+const vWrongType = await call('POST', '/auth/resident/login', { body: { phone: phone(4), password: 'Provider12345', accountType: 'member' } });
+check('vendor choosing "Member" at sign-in → 403 ACCOUNT_TYPE_MISMATCH', vWrongType.status === 403 && vWrongType.body?.error?.code === 'ACCOUNT_TYPE_MISMATCH', vWrongType.body);
+const vReg = await call('POST', '/auth/resident/register', { body: { name: 'App Vendor', phone: phone(9), password: 'Provider12345', accountType: 'vendor', shopName: 'App Vendor Shop' } });
+check('vendor sign-up from the app → 201 with shop name', vReg.status === 201 && vReg.body?.user?.accountType === 'vendor' && vReg.body?.vendor?.shopName === 'App Vendor Shop', vReg.body);
+check('public config has no Vendor Panel link', !('vendorPanelUrl' in (cfg.body || {})), cfg.body);
 const VEN = PV.token;
 const P4 = phone(4);
 const propBody = { listingType: 'rent', propertyType: 'apartment', title: '2BHK Apartment for Rent', description: 'Sunny flat near the park.', pricePaise: 1500000, bedrooms: 2, bathrooms: 2, areaSqft: 980, furnishing: 'semi_furnished', locality: 'Salt Lake', city: 'Kolkata', contactPhone: P4, whatsappAvailable: true };

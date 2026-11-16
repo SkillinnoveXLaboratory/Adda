@@ -555,7 +555,7 @@ async function main() {
   ok('badge drops to 0 after moderation', ov.counts.pendingListings === 0, ov.counts.pendingListings);
 
   head('Vendor accounts (no society access, platform-moderated listings)');
-  const vReg = await expect('vendor register', 201, 'POST', '/auth/vendor/register', { body: { phone: randPhone(), name: `Sharma Services ${RUN}`, password: PASSWORD } });
+  const vReg = await expect('vendor register', 201, 'POST', '/auth/resident/register', { body: { phone: randPhone(), name: `Sharma Services ${RUN}`, password: PASSWORD, accountType: 'vendor' } });
   ok('account type vendor, KYC not submitted', vReg?.user?.accountType === 'vendor' && vReg?.vendor?.kycStatus === 'not_submitted', { user: vReg?.user, vendor: vReg?.vendor });
   const V = vReg.accessToken;
   const vJoin = await expect('vendor requests membership', 403, 'POST', '/memberships', { token: V, body: { societyId, buildingId: bA._id, flatNumber: 'A-201', residentType: 'owner' } });
@@ -605,6 +605,21 @@ async function main() {
   const browse = await expect('resident browses services', 200, 'GET', `/service-offers?q=${encodeURIComponent('Home tuition')}`, { token: R1 });
   ok('residents still browse the approved vendor service', browse.items?.some((o) => o._id === vOffer._id), browse.items?.length);
   await expect('platform rejects a service', 200, 'POST', `/platform/listings/service/${vOffer._id}/moderate`, { token: saT, body: { decision: 'rejected', note: 'Add a clearer title' } });
+
+  head('Society branding (logo) + location (settings)');
+  const logo = await expect('admin uploads a society logo', 201, 'POST', '/uploads', { token: T, form: uploadForm('society_logo') });
+  await expect('resident cannot upload a society logo', 403, 'POST', '/uploads', { token: R1, form: uploadForm('society_logo') });
+  const withLogo = await expect('set logo', 200, 'PATCH', '/society/profile', { token: T, body: { logoId: logo?._id } });
+  ok('profile.logo { _id, url }', withLogo?.logo?._id === logo?._id && !!withLogo.logo.url, withLogo?.logo);
+  const meLogo = await expect('', 200, 'GET', '/me', { token: T });
+  ok('staffRoles[].society.logoUrl = the logo', meLogo?.staffRoles?.some((s) => s.society?.logoUrl === withLogo?.logo?.url), meLogo?.staffRoles?.[0]?.society);
+  ok('overview society.logoUrl', (await expect('', 200, 'GET', '/society/overview', { token: T }))?.society?.logoUrl === withLogo?.logo?.url);
+  const loc = await expect('set location', 200, 'PATCH', '/society/profile', { token: T, body: { location: { lat: 18.559, lng: 73.7868, label: 'Baner, Pune' } } });
+  ok('profile.location { lat, lng, label }', loc?.location?.lat === 18.559 && loc.location.lng === 73.7868 && loc.location.label === 'Baner, Pune', loc?.location);
+  await expect('latitude 91 rejected', 400, 'PATCH', '/society/profile', { token: T, body: { location: { lat: 91, lng: 73 } } });
+  ok('location null clears it', (await expect('clear location', 200, 'PATCH', '/society/profile', { token: T, body: { location: null } }))?.location === null);
+  ok('logoId null removes the logo', (await expect('remove logo', 200, 'PATCH', '/society/profile', { token: T, body: { logoId: null } }))?.logo === null);
+  ok('staffRoles logoUrl null after removal', (await expect('', 200, 'GET', '/me', { token: T }))?.staffRoles?.every((s) => s.society?.logoUrl === null));
 
   head('Categories');
   const sc = await expect('society cats', 200, 'GET', '/society/categories?kind=complaint', { token: T });

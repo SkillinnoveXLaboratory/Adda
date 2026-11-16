@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAction, useQuery } from '../../lib/hooks.js';
-import { isEmail, isIndianMobile, normalizePhone, parsePercent } from '../../lib/validation.js';
+import { isEmail, isIndianMobile, normalizePhone } from '../../lib/validation.js';
 import { Alert, Badge, Button, Card, PageHeader, PageSkeleton, QueryState } from '../../components/ui.jsx';
 import { Field, Input, Toggle } from '../../components/Form.jsx';
 import { useToast } from '../../components/Toast.jsx';
@@ -15,15 +15,6 @@ const META = {
       const ok = days.length >= 1 && days.length <= 6 && days.every((d) => /^\d{1,2}$/.test(d) && +d >= 1 && +d <= 30) && new Set(days.map(Number)).size === days.length;
       return ok ? null : 'Use 1–6 different numbers from 1 to 30, separated by commas, e.g. 3,7,15,30';
     }, placeholder: '3,7,15,30' },
-  'services.commissionPercent': {
-    label: 'Platform commission on vendor services (%)',
-    description: 'Deducted from the vendor’s price on every paid service booking. Applies to services published or edited after the change — existing services keep the rate they were published with. 0 to 50, up to 2 decimals.',
-    numeric: true,
-    suffix: '%',
-    validate: (v) => (parsePercent(v) === null ? 'Enter a number from 0 to 50 with up to 2 decimals, e.g. 10 or 12.5' : null),
-    normalize: (v) => parsePercent(v),
-    placeholder: '10',
-  },
   'support.phone': { label: 'Support phone', description: 'Shown to users who need help (10-digit Indian mobile).', validate: (v) => (!v || isIndianMobile(v) ? null : 'Enter a valid 10-digit mobile number'), normalize: normalizePhone, placeholder: '98765 43210' },
 };
 
@@ -51,7 +42,7 @@ function SettingRow({ item, onSaved, readOnly = false }) {
       </div>
     );
   }
-  const dirty = meta.numeric ? parsePercent(value) !== Number(item.value ?? 0) : String(value ?? '') !== String(item.value ?? '');
+  const dirty = String(value ?? '') !== String(item.value ?? '');
   return (
     <form
       className="flex flex-col gap-3 py-4 sm:flex-row sm:items-end"
@@ -63,29 +54,14 @@ function SettingRow({ item, onSaved, readOnly = false }) {
         save(meta.normalize ? meta.normalize(value) : String(value || '').trim());
       }}
     >
-      {meta.numeric ? (
         <Field label={meta.label} hint={meta.description} error={error} className="flex-1">
-          <div className="flex items-center gap-3">
-            <Input name={item.key} value={value ?? ''} readOnly={readOnly} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={6} inputMode="decimal" suffix={meta.suffix} className="w-full sm:w-[200px]" data-testid={`setting-${item.key}`} />
-            {!readOnly && (
-              <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null}>
-                Save
-              </Button>
-            )}
-          </div>
+          <Input name={item.key} value={value ?? ''} readOnly={readOnly} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={500} data-testid={`setting-${item.key}`} />
         </Field>
-      ) : (
-        <>
-          <Field label={meta.label} hint={meta.description} error={error} className="flex-1">
-            <Input name={item.key} value={value ?? ''} readOnly={readOnly} onChange={(e) => (setValue(e.target.value), setError(null))} invalid={Boolean(error)} placeholder={meta.placeholder} maxLength={500} data-testid={`setting-${item.key}`} />
-          </Field>
-          {!readOnly && (
-            <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null} className="sm:mb-[22px]">
-              Save
-            </Button>
-          )}
-        </>
-      )}
+        {!readOnly && (
+          <Button type="submit" loading={busy} disabledReason={!dirty ? 'No changes to save' : null} className="sm:mb-[22px]">
+            Save
+          </Button>
+        )}
     </form>
   );
 }

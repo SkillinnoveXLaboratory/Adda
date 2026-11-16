@@ -13,7 +13,7 @@ test('sub-admin screens at 1440 and 390 px', async ({ browser }) => {
   const T = await ownerToken();
   const vendor = await seedVendorWithKyc(`Kabir Roy ${RUN}`, `Roy Home Repairs ${RUN}`);
   await apiCall('POST', '/platform/subadmins', { token: T, body: { name: `Rohit Das ${RUN}`, email: `rohit.${RUN.toLowerCase()}@example.com`, password: 'Helper2026pass', permissions: ['applications.manage', 'societies.view', 'members.view', 'audit.view'] } });
-  await apiCall('POST', '/platform/subadmins', { token: T, body: { ...SUB, permissions: ['vendors.view', 'coupons.manage', 'listings.view', 'audit.view'] } });
+  await apiCall('POST', '/platform/subadmins', { token: T, body: { ...SUB, permissions: ['vendors.view', 'categories.manage', 'listings.view', 'audit.view'] } });
 
   for (const [w, h] of [
     [1440, 900],
@@ -35,7 +35,7 @@ test('sub-admin screens at 1440 and 390 px', async ({ browser }) => {
     await d.getByTestId('subadmin-name').fill('Meera Ghosh');
     await d.getByTestId('subadmin-email').fill('meera@example.com');
     await d.getByTestId('perm-vendors-manage').check();
-    await d.getByTestId('perm-coupons-view').check();
+    await d.getByTestId('perm-categories-view').check();
     await d.getByTestId('perm-dashboard-view').check();
     await shoot(owner, `subadmins-create-modal-${w}`, false);
     await owner.close();

@@ -49,3 +49,13 @@ export function rupeeError(value, { allowZero = false } = {}) {
   if (n > 100000000) return 'Amount is too large';
   return null;
 }
+
+// ---- vendor KYC (same rules as the server) ----
+export const PAN_RX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+export const IFSC_RX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+/** 12 digits, not starting with 0/1, Verhoeff checksum (catches almost every typo). */
+export const aadhaarValid = (v) => /^[2-9]\d{11}$/.test(v) && v.split('').reverse().reduce((c, d, i) => VD[c][VP[i % 8][Number(d)]], 0) === 0;
+/** "123412341234" → "1234 1234 1234" while typing. */
+export const formatAadhaar = (v) => String(v || '').replace(/\D/g, '').slice(0, 12).replace(/(\d{4})(?=\d)/g, '$1 ');

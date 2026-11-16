@@ -7,7 +7,7 @@ const sub = (platformPermissions) => ({ platformRole: 'sub_admin', platformPermi
 const CATALOGUE = [
   { area: 'dashboard', viewOnly: true },
   { area: 'vendors' },
-  { area: 'coupons' },
+  { area: 'listings' },
   { area: 'audit', viewOnly: true },
 ];
 
@@ -27,16 +27,16 @@ describe('platform permissions', () => {
   });
 
   it('manage implies view; unknown and view-only manage keys are dropped', () => {
-    expect(normalizePermissions(['coupons.manage', 'bogus', 'x.y.z', 42, 'audit.manage', 'vendors.view', 'vendors.view']).sort()).toEqual(['coupons.manage', 'coupons.view', 'vendors.view']);
+    expect(normalizePermissions(['listings.manage', 'bogus', 'x.y.z', 42, 'audit.manage', 'vendors.view', 'vendors.view']).sort()).toEqual(['listings.manage', 'listings.view', 'vendors.view']);
     expect(normalizePermissions(undefined)).toEqual([]);
   });
 
   it('a sub-admin sees only ticked areas and manages only with manage', () => {
-    const u = sub(['vendors.view', 'coupons.manage']);
+    const u = sub(['vendors.view', 'listings.manage']);
     expect(canViewArea(u, 'vendors')).toBe(true);
     expect(canManageArea(u, 'vendors')).toBe(false);
-    expect(canViewArea(u, 'coupons')).toBe(true);
-    expect(canManageArea(u, 'coupons')).toBe(true);
+    expect(canViewArea(u, 'listings')).toBe(true);
+    expect(canManageArea(u, 'listings')).toBe(true);
     expect(canViewArea(u, 'settings')).toBe(false);
     expect(canViewArea(u, 'dashboard')).toBe(false);
     expect(canViewArea(u, 'owner')).toBe(false);
@@ -46,9 +46,9 @@ describe('platform permissions', () => {
   });
 
   it('sidebar keeps only the allowed items and drops empty sections', () => {
-    const u = sub(['vendors.view', 'coupons.manage']);
+    const u = sub(['vendors.view', 'listings.manage']);
     const sections = visibleSections(PLATFORM_NAV, (a) => canViewArea(u, a));
-    expect(sections.flatMap((s) => s.items.map((i) => i.label))).toEqual(['Vendors', 'Coupons', 'My security']);
+    expect(sections.flatMap((s) => s.items.map((i) => i.label))).toEqual(['Vendors', 'Listings moderation', 'My security']);
     expect(sections.map((s) => s.title)).toEqual(['People', 'Oversight', 'Configuration']);
     const all = visibleSections(PLATFORM_NAV, (a) => canViewArea(owner, a)).flatMap((s) => s.items);
     expect(all.map((i) => i.to)).toContain('/admin/subadmins');
@@ -91,7 +91,16 @@ describe('platform permissions', () => {
   });
 
   it('select all / ordering follow the server catalogue', () => {
-    expect(allPermissions(CATALOGUE)).toEqual(['dashboard.view', 'vendors.view', 'vendors.manage', 'coupons.view', 'coupons.manage', 'audit.view']);
-    expect(orderedPermissions(new Set(['audit.view', 'coupons.manage', 'coupons.view']), CATALOGUE)).toEqual(['coupons.view', 'coupons.manage', 'audit.view']);
+    expect(allPermissions(CATALOGUE)).toEqual(['dashboard.view', 'vendors.view', 'vendors.manage', 'listings.view', 'listings.manage', 'audit.view']);
+    expect(orderedPermissions(new Set(['audit.view', 'listings.manage', 'listings.view']), CATALOGUE)).toEqual(['listings.view', 'listings.manage', 'audit.view']);
+  });
+});
+
+describe('coupons are gone', () => {
+  it('no Coupons page, route area or nav item remains', () => {
+    const items = PLATFORM_NAV.flatMap((s) => s.items);
+    expect(items.some((i) => i.area === 'coupons' || /coupon/i.test(i.to) || /coupon/i.test(i.label))).toBe(false);
+    expect(areaForPath('/admin/coupons')).toBe('dashboard');
+    expect(canViewArea(sub(['coupons.view', 'coupons.manage']), 'vendors')).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, View } from 'react-native';
+import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -17,7 +17,6 @@ import { Button, EmptyState, ErrorState } from '../components/ui';
 import { Logo } from '../components/Logo';
 import { CustomSplash } from '../components/CustomSplash';
 import { SKY } from '../components/SplashScene';
-import { VendorPanelNotice } from '../components/VendorPanelNotice';
 import { colors } from '../theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -50,7 +49,7 @@ function SessionAwareAuth({ children }) {
 }
 
 function Gate({ fontsReady }) {
-  const { status, isMember, bootError, retryBoot, activeMembership, vendorNotice, dismissVendorNotice } = useAuth();
+  const { status, isMember, isVendor, isGate, bootError, retryBoot, activeMembership } = useAuth();
   const toast = useToast();
   const ready = fontsReady && status !== 'booting';
   const wasMember = useRef(null);
@@ -77,6 +76,8 @@ function Gate({ fontsReady }) {
   if (!fontsReady) return <View style={{ flex: 1, backgroundColor: colors.white }} />;
 
   const signedIn = status === 'signedIn';
+  // Gate staff sessions reach only the (gate) group; members and vendors never reach it.
+  const person = signedIn && !isGate;
   let app = null;
   if (ready && status === 'offline') {
     app = (
@@ -92,14 +93,21 @@ function Gate({ fontsReady }) {
         <Stack.Protected guard={!signedIn} redirectTo="/">
           <Stack.Screen name="(auth)" options={{ animation: 'fade' }} />
         </Stack.Protected>
-        <Stack.Protected guard={signedIn && !isMember} redirectTo="/">
+        <Stack.Protected guard={person && !isMember && !isVendor} redirectTo="/">
           <Stack.Screen name="(onboarding)" options={{ animation: 'fade' }} />
         </Stack.Protected>
-        <Stack.Protected guard={signedIn && isMember} redirectTo="/">
+        <Stack.Protected guard={person && isMember && !isVendor} redirectTo="/">
           <Stack.Screen name="(member)" options={{ animation: 'fade' }} />
         </Stack.Protected>
-        <Stack.Protected guard={signedIn} redirectTo="/">
+        {/* Vendors: their own area only — never society onboarding or member screens. */}
+        <Stack.Protected guard={person && isVendor} redirectTo="/">
+          <Stack.Screen name="(vendor)" options={{ animation: 'fade' }} />
+        </Stack.Protected>
+        <Stack.Protected guard={person} redirectTo="/">
           <Stack.Screen name="(account)" />
+        </Stack.Protected>
+        <Stack.Protected guard={signedIn && isGate} redirectTo="/">
+          <Stack.Screen name="(gate)" options={{ animation: 'fade' }} />
         </Stack.Protected>
       </Stack>
     );
@@ -110,14 +118,6 @@ function Gate({ fontsReady }) {
     <View style={{ flex: 1, backgroundColor: SKY }}>
       {app}
       {splashGone ? null : <CustomSplash visible={!(ready && minElapsed)} onHidden={() => setSplashGone(true)} />}
-      {/* A vendor's old app session was ended by the server (VENDOR_USE_PANEL): say where vendors work now. */}
-      <Modal visible={!!vendorNotice && status === 'signedOut' && splashGone} transparent animationType="fade" onRequestClose={dismissVendorNotice}>
-        <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: 16 }}>
-          <View style={{ backgroundColor: colors.white, borderRadius: 20, padding: 12 }}>
-            <VendorPanelNotice onDismiss={dismissVendorNotice} />
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }

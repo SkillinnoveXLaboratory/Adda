@@ -16,12 +16,14 @@
     "e2e": "playwright test",
     "qa:screens": "playwright test --config playwright.qa.config.js",
     "lint": "eslint src scripts tests",
-    "voting-check": "node scripts/voting-check.mjs"
+    "voting-check": "node scripts/voting-check.mjs",
+    "gate-check": "node scripts/gate-check.mjs"
   },
   "dependencies": {
     "@fontsource/poppins": "^5.3.0",
     "@fortawesome/fontawesome-free": "^6.7.2",
     "chart.js": "^4.6.1",
+    "leaflet": "^1.9.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router": "^7.18.4"

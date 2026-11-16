@@ -6,6 +6,7 @@ import { Alert, Badge, Button, EmptyState, Icon, PageHeader } from '../../compon
 import { DataTable, Pagination, Toolbar } from '../../components/DataTable.jsx';
 import { Select } from '../../components/Form.jsx';
 import { NetAmount, SettlementCards } from '../../components/Settlement.jsx';
+import { formatPercent } from '../../lib/pricing.js';
 
 const STATUSES = [
   ['', 'All statuses'],
@@ -16,10 +17,12 @@ const STATUSES = [
   ['cancelled', 'Cancelled'],
 ];
 // Unpaid-only view: no paid bookings match, so every settlement total is zero (the API's totals ignore paid=false).
-const NO_TOTALS = { paidBookings: 0, cashCollectedPaise: 0, couponCreditsPaise: 0, commissionPaise: 0, netToPlatformPaise: 0 };
-const pct = (n) => `${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+const NO_TOTALS = { paidBookings: 0, cashCollectedPaise: 0, memberDiscountsPaise: 0, commissionPaise: 0, netToPlatformPaise: 0, vendorEarningsPaise: 0 };
+const money = (paise, none = '—') => (paise === null || paise === undefined ? <span className="whitespace-nowrap text-gray-300">{none}</span> : <span className="whitespace-nowrap">{formatINR(paise)}</span>);
+/** Commission on the booking: fixed when booked for a listed price; for "price on request" it is known only once paid. */
+const commissionOf = (b) => b.commissionPaise ?? (b.payment?.status === 'paid' ? b.payment.commissionPaise : null);
 
-/** Every vendor service booking with its settlement (cash, coupon credit, commission, net). GET /platform/service-bookings */
+/** Every vendor service booking with its price snapshot and settlement (cash, commission, member discount, net). GET /platform/service-bookings */
 export default function ServiceBookings() {
   const [params, setParams] = useSearchParams();
   const vendorId = params.get('vendorId') || '';
@@ -69,45 +72,39 @@ export default function ServiceBookings() {
           },
         ]),
     { key: 'status', header: 'Status', render: (b) => <Badge status={b.status} /> },
-    { key: 'list', header: 'List price', align: 'right', render: (b) => (b.listPricePaise ? formatINR(b.listPricePaise) : <span className="text-gray-300">On quote</span>) },
-    {
-      key: 'coupon',
-      header: 'Coupon',
-      render: (b) =>
-        b.couponCode ? (
-          <div className="whitespace-nowrap">
-            <p className="font-mono text-[11px] font-bold text-gray-700">{b.couponCode}</p>
-            <p className="text-[11px] text-rose-500">−{formatINR(b.discountPaise)}</p>
-          </div>
-        ) : (
-          <span className="text-gray-300">—</span>
-        ),
-    },
-    { key: 'cash', header: 'Cash', align: 'right', render: (b) => (b.payment?.status === 'paid' ? <span className="font-semibold text-gray-700">{formatINR(b.payment.amountPaise)}</span> : <span className="text-gray-300">—</span>) },
+    { key: 'vendorPrice', header: 'Vendor price', align: 'right', render: (b) => money(b.vendorPricePaise, 'On request') },
     {
       key: 'commission',
       header: 'Commission',
       align: 'right',
       render: (b) => (
         <div className="whitespace-nowrap">
-          <p className={b.payment?.status === 'paid' ? 'text-gray-700' : 'text-gray-300'}>{b.payment?.status === 'paid' ? formatINR(b.payment.commissionPaise) : '—'}</p>
-          <p className="text-[11px] text-gray-400" title="Commission rate on this booking">{pct(b.commissionPercent)}</p>
+          <p className="text-gray-700">{money(commissionOf(b))}</p>
+          <p className="text-[11px] text-gray-400" title="Commission rate on this booking">{formatPercent(b.commissionPercent)}</p>
         </div>
       ),
     },
-    { key: 'net', header: 'Net', align: 'right', render: (b) => (b.payment?.status === 'paid' ? <NetAmount paise={b.payment.netToPlatformPaise} /> : <span className="text-gray-300">—</span>) },
+    { key: 'memberPrice', header: 'Member price', align: 'right', render: (b) => money(b.memberPricePaise, 'On request') },
+    { key: 'discount', header: 'Discount', align: 'right', render: (b) => (b.discountPaise ? <span className="whitespace-nowrap text-rose-500">−{formatINR(b.discountPaise)}</span> : <span className="text-gray-300">—</span>) },
+    { key: 'payable', header: 'Payable', align: 'right', render: (b) => <span className="font-semibold text-gray-700">{money(b.payablePaise)}</span> },
     {
       key: 'paid',
-      header: 'Paid',
+      header: 'Cash received',
+      align: 'right',
       render: (b) =>
         b.payment?.status === 'paid' ? (
-          <span className="whitespace-nowrap" title={formatDateTime(b.payment.paidAt)}>
-            {formatDate(b.payment.paidAt)}
-          </span>
+          <div className="whitespace-nowrap">
+            <p className="font-semibold text-gray-700">{formatINR(b.payment.amountPaise)}</p>
+            <p className="text-[11px] text-gray-400" title={formatDateTime(b.payment.paidAt)}>
+              {formatDate(b.payment.paidAt)}
+            </p>
+          </div>
         ) : (
           <Badge tone="warning">Unpaid</Badge>
         ),
     },
+    { key: 'net', header: 'NIVASA net', align: 'right', render: (b) => (b.payment?.status === 'paid' ? <NetAmount paise={b.payment.netToPlatformPaise} /> : <span className="text-gray-300">—</span>) },
+    { key: 'vendorEarned', header: 'Vendor earned', align: 'right', render: (b) => (b.payment?.status === 'paid' ? <span className="whitespace-nowrap">{formatINR(b.payment.vendorEarningsPaise)}</span> : <span className="text-gray-300">—</span>) },
   ];
 
   const filtered = Boolean(status || paid);
@@ -128,8 +125,8 @@ export default function ServiceBookings() {
       <div className="mb-4">
         <SettlementCards totals={paid === 'false' ? NO_TOTALS : list.data?.totals} vendorScope={Boolean(vendorId)} />
       </div>
-      <Alert tone="info" className="mb-6" title="How the net is worked out">
-        For each paid booking: <b>commission</b> = commission % × (cash + coupon discount); <b>net</b> = commission − coupon discount. A <span className="font-semibold text-emerald-700">positive</span> net means the vendor owes NIVASA; a <span className="font-semibold text-rose-600">negative</span> net means NIVASA owes the vendor (the coupon credit was larger than the commission). Totals cover paid bookings only{filtered || vendorId ? ', for the filters below' : ''}.
+      <Alert tone="info" className="mb-6" title="How each booking is priced">
+        <b>Member price</b> = vendor price + NIVASA commission (the vendor’s commission %). If the member applied the discount, <b>payable</b> = member price − discount (the vendor’s discount % of the commission). When the vendor records the cash: <b>NIVASA net</b> = commission − discount, and <b>vendor earned</b> = cash − NIVASA net. Vendors collect the cash, so a <span className="font-semibold text-emerald-700">positive</span> net is what the vendor owes NIVASA. Totals cover paid bookings only{filtered || vendorId ? ', for the filters below' : ''}.
       </Alert>
 
       <div className="card">
@@ -176,7 +173,7 @@ export default function ServiceBookings() {
       {list.data && (
         <p className="mt-3 text-[11px] text-brand-muted">
           <Icon name="fa-solid fa-circle-info" className="mr-1" />
-          Commission % is the rate in force when the vendor published or last edited the service. Settlement figures are fixed when the vendor records the cash and never change. {formatNumber(paid === 'false' ? 0 : list.data.totals?.paidBookings || 0)} paid in this view.
+          Prices and rates are the ones in force when the member booked (the vendor’s rates are set on their page). Settlement figures are fixed when the vendor records the cash and never change. {formatNumber(paid === 'false' ? 0 : list.data.totals?.paidBookings || 0)} paid in this view.
         </p>
       )}
     </div>

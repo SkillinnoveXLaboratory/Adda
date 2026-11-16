@@ -67,6 +67,12 @@ export default function Services() {
         <EmptyState icon="construct-outline" title="No services yet" message="Verified vendors near you will appear here once their services are approved." />
       )}
 
+      <SectionTitle title="Find a vendor" />
+      <View style={{ gap: 10 }}>
+        <ListRow icon="navigate-outline" tone="gold" title="Services near me" subtitle="Nearest vendors first, within the distance you choose" onPress={() => router.push({ pathname: '/offers', params: { near: '1' } })} />
+        <ListRow icon="storefront-outline" tone="blue" title="Marketplace" subtitle="All vendor services and properties" onPress={() => router.push('/market')} />
+      </View>
+
       <SectionTitle title="Your requests" />
       <View style={{ gap: 10 }}>
         <ListRow icon="calendar-number-outline" tone="gold" title="My service bookings" subtitle="Vendor visits you booked, their status and payment" onPress={() => router.push('/service-bookings')} />

@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { ROLE_LABELS } from '../lib/roles.js';
 import { Alert, EmptyState, Icon } from '../components/ui.jsx';
 import { AppShell } from './AppShell.jsx';
+import { SocietyBrand } from '../components/SocietyBrand.jsx';
 import { SOCIETY_NAV } from './nav.js';
 
 const CountsContext = createContext({ counts: {}, refreshCounts: () => {} });
@@ -66,6 +67,8 @@ export function SocietyPortal() {
         key={societyId}
         sections={sections}
         badges={counts}
+        brand={<SocietyBrand name={society?.name} logoUrl={society?.logoUrl} />}
+        brandCompact={<SocietyBrand compact name={society?.name} logoUrl={society?.logoUrl} />}
         sidebarFooter={<PortalFooter label={society?.name || 'Society'} sub={`${society?.code || ''} · ${ROLE_LABELS[role] || role}`} />}
         banner={
           suspended ? (

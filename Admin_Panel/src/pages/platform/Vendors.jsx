@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../../lib/api.js';
+import { formatPercent } from '../../lib/pricing.js';
 import { useDebounced, usePaged } from '../../lib/hooks.js';
 import { formatDate, formatRelative, plural } from '../../lib/format.js';
 import { Avatar, EmptyState, PageHeader, Tabs } from '../../components/ui.jsx';
+import { ShopLogo } from '../../components/ShopLogo.jsx';
 import { DataTable, Pagination, Toolbar } from '../../components/DataTable.jsx';
 import { SearchInput } from '../../components/Form.jsx';
 import { KycBadge } from '../../components/KycBadge.jsx';
@@ -41,10 +43,32 @@ export default function Vendors() {
         </div>
       ),
     },
-    { key: 'business', header: 'Business', render: (v) => <span className="block max-w-[220px] truncate">{v.businessName || <span className="text-gray-300">—</span>}</span> },
+    {
+      key: 'shop',
+      header: 'Shop / business',
+      render: (v) => (
+        <div className="flex items-center gap-2.5">
+          <ShopLogo url={v.shopLogoUrl} />
+          <div className="min-w-0 max-w-[200px]">
+            <p className="truncate font-semibold text-gray-700">{v.shopName || v.businessName || <span className="font-normal text-gray-300">No shop name</span>}</p>
+            {v.shopName && v.businessName && v.businessName !== v.shopName && <p className="truncate text-[11px] text-gray-400">{v.businessName}</p>}
+          </div>
+        </div>
+      ),
+    },
     { key: 'city', header: 'City', render: (v) => v.city || <span className="text-gray-300">—</span> },
     { key: 'phone', header: 'Mobile', render: (v) => <span className="font-mono">{v.phone || '—'}</span> },
     { key: 'kyc', header: 'KYC', render: (v) => <KycBadge status={v.kycStatus} /> },
+    {
+      key: 'rates',
+      header: 'Rates',
+      render: (v) => (
+        <div className="whitespace-nowrap" title="NIVASA commission added on top · member discount (share of the commission)">
+          <p className="font-semibold text-gray-700">{formatPercent(v.pricing?.commissionPercent)} commission</p>
+          <p className="text-[11px] text-gray-400">{v.pricing?.memberDiscountPercent ? `${formatPercent(v.pricing.memberDiscountPercent)} back to members` : 'No member discount'}</p>
+        </div>
+      ),
+    },
     { key: 'submitted', header: 'Submitted', render: (v) => (v.submittedAt ? <span title={formatDate(v.submittedAt)}>{formatRelative(v.submittedAt)}</span> : <span className="text-gray-300">—</span>) },
     { key: 'joined', header: 'Joined', render: (v) => formatDate(v.createdAt) },
   ];

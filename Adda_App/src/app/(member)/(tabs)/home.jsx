@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Avatar, Badge, Card, ErrorState, ListRow, Screen, SectionTitle, Skeleton, T } from '../../../components/ui';
 import { BrandHeader } from '../../../components/BrandHeader';
 import { Banner } from '../../../components/Banner';
+import { NIcon } from '../../../components/NivasaIcons';
 import { ModuleCard, TileGrid } from '../../../components/Tiles';
 import { useAuth } from '../../../context/auth';
 import { useApi } from '../../../hooks/useApi';
@@ -46,6 +47,8 @@ export default function Home() {
           <ModuleCard nicon="maintenance" label={'Home\nMaintenance'} onPress={() => router.push('/services')} testID="home-services" />
           <ModuleCard nicon="community" label={'Community\n& Events'} onPress={() => router.push('/community')} testID="home-community" />
         </TileGrid>
+
+        <MarketplaceCard />
 
         {home.error && !d ? (
           <ErrorState error={home.error} onRetry={home.reload} />
@@ -127,6 +130,33 @@ export default function Home() {
   );
 }
 
+/** Members' Marketplace: vendor services (with Near me) and properties. */
+function MarketplaceCard() {
+  return (
+    <View style={styles.market}>
+      <Pressable onPress={() => router.push('/market')} accessibilityRole="button" accessibilityLabel="Marketplace: services and homes from verified vendors" testID="home-marketplace" style={({ pressed }) => [styles.marketMain, pressed && { opacity: 0.85 }]}>
+        <View style={styles.marketIcon}>
+          <NIcon name="market" size={30} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <T weight="extrabold" size={14} color={colors.navy}>
+            Marketplace
+          </T>
+          <T size={11.5} color={colors.muted} numberOfLines={2}>
+            Services and homes from verified vendors
+          </T>
+        </View>
+      </Pressable>
+      <Pressable onPress={() => router.push({ pathname: '/market', params: { near: '1' } })} accessibilityRole="button" accessibilityLabel="Services near me" testID="home-near-me" style={({ pressed }) => [styles.nearPill, pressed && { backgroundColor: colors.goldDark }]}>
+        <Ionicons name="navigate" size={14} color={colors.navy} />
+        <T weight="bold" size={12} color={colors.navy}>
+          Near me
+        </T>
+      </Pressable>
+    </View>
+  );
+}
+
 /** "Maintenance Bill Due" activity card (template: amber bell circle, text, chevron), or an all-clear card. */
 function DuesAlert({ dues }) {
   const inv = dues.nextInvoice;
@@ -191,6 +221,10 @@ const styles = StyleSheet.create({
   avatarRing: { borderRadius: 26, borderWidth: 2, borderColor: colors.white, ...shadow.card },
   alert: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: colors.white, borderWidth: 1, borderRadius: 16, padding: 12, ...shadow.card },
   alertIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  market: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, borderRadius: 16, paddingVertical: 8, paddingLeft: 12, paddingRight: 10, ...shadow.card },
+  marketMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52 },
+  marketIcon: { width: 46, height: 46, borderRadius: 14, backgroundColor: colors.goldLight, alignItems: 'center', justifyContent: 'center' },
+  nearPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 12, minHeight: 44, flexShrink: 0 },
   emptyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14 },
   event: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12 },
   eventDate: { backgroundColor: colors.goldLight, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', minWidth: 50 },

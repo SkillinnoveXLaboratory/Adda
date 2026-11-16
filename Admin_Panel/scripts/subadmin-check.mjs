@@ -82,7 +82,6 @@ const AREAS = {
   earnings: { read: ['GET', '/platform/earnings'] },
   listings: { read: ['GET', '/platform/listings'], write: ['POST', `/platform/listings/property/${FAKE}/moderate`, {}] },
   ads: { read: ['GET', '/platform/ads'], write: ['POST', `/platform/ads/${FAKE}/review`, {}] },
-  coupons: { read: ['GET', '/platform/coupons'], write: ['POST', '/platform/coupons', {}] },
   reports: { read: ['GET', '/platform/content-reports'] },
   payments: { read: ['GET', '/platform/payments'] },
   audit: { read: ['GET', '/platform/audit-logs'] },
@@ -121,10 +120,10 @@ async function main() {
   r = await call('POST', '/platform/subadmins', { token: OT, body: { ...base, email: 'not-an-email', permissions: ['vendors.view'] } });
   ok('invalid email → 400', r.status === 400, r.status);
 
-  r = await call('POST', '/platform/subadmins', { token: OT, body: { ...base, permissions: ['coupons.manage', 'made.up', 'vendors.view'] } });
+  r = await call('POST', '/platform/subadmins', { token: OT, body: { ...base, permissions: ['ads.manage', 'made.up', 'vendors.view'] } });
   if (!ok('create sub-admin → 201', r.status === 201, r)) return;
   const sub = r.json;
-  ok('manage adds view; unknown dropped', JSON.stringify(sub.permissions) === JSON.stringify(['vendors.view', 'coupons.view', 'coupons.manage']), sub.permissions);
+  ok('manage adds view; unknown dropped', JSON.stringify(sub.permissions) === JSON.stringify(['vendors.view', 'ads.view', 'ads.manage']), sub.permissions);
   ok('response has no password hash', !JSON.stringify(sub).includes('passwordHash'));
   r = await call('POST', '/platform/subadmins', { token: OT, body: { ...base, permissions: ['vendors.view'] } });
   ok('same email twice → 409', r.status === 409, r.status);
@@ -134,7 +133,7 @@ async function main() {
   r = await login(email, PASSWORD);
   if (!ok('sub-admin signs in at Master Admin login → 200', r.status === 200, r)) return;
   let ST = r.json.accessToken;
-  ok('login says platformRole sub_admin + permissions', r.json.user.platformRole === 'sub_admin' && r.json.user.platformPermissions?.includes('coupons.manage'), r.json.user);
+  ok('login says platformRole sub_admin + permissions', r.json.user.platformRole === 'sub_admin' && r.json.user.platformPermissions?.includes('ads.manage'), r.json.user);
   const me = await call('GET', '/me', { token: ST });
   ok('/me returns the same permissions', JSON.stringify(me.json?.user?.platformPermissions) === JSON.stringify(sub.permissions), me.json?.user);
   ok('owner /me has no permission list (has everything)', !owner.body.user.platformPermissions);
@@ -171,6 +170,13 @@ async function main() {
     }
   }
 
+  head('Vendor pricing needs vendors.manage');
+  await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: ['vendors.view'] } });
+  ok('vendors.view → can’t set a vendor’s commission / discount (403)', denied(await call('PATCH', `/platform/vendors/${FAKE}/pricing`, { token: ST, body: { commissionPercent: 10 } })));
+  await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: ['vendors.manage'] } });
+  ok('vendors.manage → pricing passes the guard (404 unknown vendor)', (await call('PATCH', `/platform/vendors/${FAKE}/pricing`, { token: ST, body: { commissionPercent: 10 } })).status === 404);
+  ok('coupons are gone: /platform/coupons → 404', (await call('GET', '/platform/coupons', { token: OT })).status === 404);
+
   head('Badge counts and society workspace');
   await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: ['vendors.view'] } });
   const ov = await call('GET', '/platform/overview', { token: ST });
@@ -186,19 +192,22 @@ async function main() {
 
   // ---------------------------------------------------------------- 4. lifecycle
   head('4. Changes apply at once, audit, password, disable');
-  await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: ['coupons.manage'] } });
-  ok('permission change applies without re-login', (await call('GET', '/platform/coupons', { token: ST })).status === 200 && denied(await call('GET', '/platform/societies', { token: ST })));
-  ok('/me reflects the change', JSON.stringify((await call('GET', '/me', { token: ST })).json?.user?.platformPermissions) === JSON.stringify(['coupons.view', 'coupons.manage']));
+  await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: ['vendors.manage'] } });
+  ok('permission change applies without re-login', (await call('GET', '/platform/vendors', { token: ST })).status === 200 && denied(await call('GET', '/platform/societies', { token: ST })));
+  ok('/me reflects the change', JSON.stringify((await call('GET', '/me', { token: ST })).json?.user?.platformPermissions) === JSON.stringify(['vendors.view', 'vendors.manage']));
   ok('PATCH with empty permissions → 400', (await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { permissions: [] } })).status === 400);
   ok('PATCH with nothing → 400', (await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: {} })).status === 400);
-  const cc = await call('POST', '/platform/coupons', { token: ST, body: { code: `SUB${RUN.slice(-6).toUpperCase()}`, discountPaise: 5000, maxUses: 1, active: false } });
-  ok('sub-admin with coupons.manage creates a coupon → 201', cc.status === 201, cc);
+  // A real vendor (app sign-up) so the sub-admin's pricing change is written and audited.
+  const vphone = `9${String(Date.now()).slice(-9)}`;
+  const vreg = await call('POST', '/auth/resident/register', { body: { phone: vphone, name: `Sub check vendor ${RUN}`, password: 'VendorCheck12345', accountType: 'vendor' } });
+  const cc = await call('PATCH', `/platform/vendors/${vreg.json?.user?._id}/pricing`, { token: ST, body: { commissionPercent: 15, memberDiscountPercent: 40 } });
+  ok('sub-admin with vendors.manage sets a vendor’s pricing → 200', cc.status === 200 && cc.json?.pricing?.commissionPercent === 15 && cc.json.pricing.memberDiscountPercent === 40, cc);
 
   await call('PATCH', `/platform/subadmins/${sub._id}`, { token: OT, body: { name: 'Dry Check Helper 2' } }); // name only keeps permissions
   const logs = await call('GET', '/platform/audit-logs?action=platform.subadmin&limit=50', { token: OT });
   const acts = new Set((logs.json?.items || []).filter((l) => String(l.targetId) === sub._id).map((l) => l.action));
   ok('audit: subadmin_created and subadmin_updated written', acts.has('platform.subadmin_created') && acts.has('platform.subadmin_updated'), [...acts]);
-  const couponLog = await call('GET', '/platform/audit-logs?action=platform.coupon&limit=20', { token: OT });
+  const couponLog = await call('GET', '/platform/audit-logs?action=vendor.pricing_updated&limit=20', { token: OT });
   const byHelper = (couponLog.json?.items || []).find((l) => String(l.actor?._id || l.actor) === sub._id);
   ok('audit: action by sub-admin recorded with actorRole sub_admin', byHelper?.actorRole === 'sub_admin', byHelper || couponLog.json?.items?.slice(0, 2));
   ok('sub-admin can’t read audit log without audit.view', denied(await call('GET', '/platform/audit-logs', { token: ST })));
@@ -217,7 +226,7 @@ async function main() {
 
   const dis = await call('POST', `/platform/subadmins/${sub._id}/status`, { token: OT, body: { status: 'disabled' } });
   ok('owner disables sub-admin → 200', dis.status === 200 && dis.json?.status === 'disabled', dis);
-  ok('disabled: session ended at once → 401', (await call('GET', '/platform/coupons', { token: ST })).status === 401);
+  ok('disabled: session ended at once → 401', (await call('GET', '/platform/vendors', { token: ST })).status === 401);
   ok('disabled: can’t sign in', (await login(email, 'Reset2026secure')).status >= 400);
   const en = await call('POST', `/platform/subadmins/${sub._id}/status`, { token: OT, body: { status: 'active' } });
   ok('owner enables again → can sign in', en.status === 200 && (await login(email, 'Reset2026secure')).status === 200);

@@ -2,8 +2,9 @@
 /**
  * Live contract check for the Master Admin console: owner sign-in, society workspace bridge
  * (/platform/societies/:sid/manage/*), masking + logged reveal, members directory, member profile and
- * owner actions, vendors (KYC review + logged reveal), vendor-only listings, ads (boost) review, the platform
- * commission setting, coupons (CRUD, validation, member use) and service-booking settlement (exact numbers).
+ * owner actions, vendors (KYC review + logged reveal), vendor-only listings, ads (boost) review, per-vendor
+ * pricing (commission added on top + member discount), service-booking settlement and earnings (exact numbers).
+ * Coupons and the platform-wide commission setting are gone.
  * Seeds its own society, flats, residents and a vendor. LOCAL backend only (default http://127.0.0.1:3013).
  *
  *   npm run api-check
@@ -85,7 +86,7 @@ async function vendorsAndAds(T, { AT, MT }) {
   const vPhone = randPhone();
   const vName = `Vendor ${RUN}`;
   const business = `Sharma Cooling ${RUN}`;
-  const vReg = await expect('register vendor', 201, 'POST', '/auth/vendor/register', { body: { phone: vPhone, name: vName, password: PASSWORD } });
+  const vReg = await expect('register vendor', 201, 'POST', '/auth/resident/register', { body: { phone: vPhone, name: vName, password: PASSWORD, accountType: 'vendor' } });
   const V = vReg.accessToken;
   const vId = vReg.user?._id;
   ok('vendor account type + KYC not submitted', vReg.user?.accountType === 'vendor' && vReg.vendor?.kycStatus === 'not_submitted', { user: vReg.user, vendor: vReg.vendor });
@@ -250,25 +251,23 @@ async function vendorsAndAds(T, { AT, MT }) {
 const istInDays = (days) => new Date(Date.now() + 330 * 60000 + days * 86_400_000).toISOString().slice(0, 10);
 const errCode = (r) => r?.json?.error?.code;
 
-/** Everything the Settings (commission), Coupons, Service bookings and Vendor detail settlement screens use. */
-async function couponsAndSettlement(T, { sid, societyName, buildingId, flatNumber, MT }) {
-  head('Settings: platform commission');
-  const COMM = '/platform/settings/services.commissionPercent';
-  const before = await expect('', 200, 'GET', '/platform/settings', { token: T });
-  const item = before.items?.find((i) => i.key === 'services.commissionPercent');
-  ok('setting listed as a number', item?.type === 'number' && typeof item.value === 'number', item);
-  for (const [why, value] of [['string', '12.5'], ['negative', -1], ['over 50', 50.5], ['3 decimals', 12.345], ['null', null]]) await expect(`commission ${why}`, 400, 'PUT', COMM, { token: T, body: { value } });
-  await expect('member cannot change settings', 403, 'PUT', COMM, { token: MT, body: { value: 5 } });
-  await expect('commission 12.5', 200, 'PUT', COMM, { token: T, body: { value: 12.5 } });
-  const after = await expect('', 200, 'GET', '/platform/settings', { token: T });
-  ok('saved as the number 12.5', after.items?.find((i) => i.key === 'services.commissionPercent')?.value === 12.5, after.items);
+/** Everything the Vendor detail (pricing), Service bookings, Earnings and Settings screens use. */
+async function pricingAndSettlement(T, { MT }) {
+  head('Settings: no platform-wide commission, coupons removed');
+  const settings = await expect('', 200, 'GET', '/platform/settings', { token: T });
+  ok('settings list has no commission key', !settings.items?.some((i) => i.key === 'services.commissionPercent'), settings.items?.map((i) => i.key));
+  await expect('old commission setting is unknown', 400, 'PUT', '/platform/settings/services.commissionPercent', { token: T, body: { value: 10 } });
   const cfg = await expect('', 200, 'GET', '/public/config');
-  ok('/public/config shows commissionPercent 12.5', cfg?.services?.commissionPercent === 12.5, cfg?.services);
+  ok('/public/config has no commission', cfg && !('services' in cfg), cfg && Object.keys(cfg));
+  await expect('coupons list removed', 404, 'GET', '/platform/coupons', { token: T });
+  await expect('coupon create removed', 404, 'POST', '/platform/coupons', { token: T, body: {} });
+  const subs = await expect('', 200, 'GET', '/platform/subadmins', { token: T });
+  ok('permission catalogue has no coupons area', Array.isArray(subs?.catalogue) && !subs.catalogue.some((c) => c.area === 'coupons'), subs?.catalogue?.map((c) => c.area));
 
-  head('Seed: KYC-approved vendor publishes a service');
+  head('Seed: KYC-approved vendor (app sign-up) publishes services');
   const vPhone = randPhone();
   const vName = `Settle Vendor ${RUN}`;
-  const vReg = await expect('register vendor', 201, 'POST', '/auth/vendor/register', { body: { phone: vPhone, name: vName, password: PASSWORD } });
+  const vReg = await expect('register vendor in the app', 201, 'POST', '/auth/resident/register', { body: { phone: vPhone, name: vName, password: PASSWORD, accountType: 'vendor' } });
   const V = vReg.accessToken;
   const vId = vReg.user?._id;
   const docs = [];
@@ -279,127 +278,76 @@ async function couponsAndSettlement(T, { sid, societyName, buildingId, flatNumbe
   const cats = await expect('', 200, 'GET', '/service-offers/categories', { token: V });
   const svcBody = { categoryId: cats.items?.[0]?._id, title: `Deep cleaning ${RUN}`, description: 'Kitchen and bathrooms', priceType: 'fixed', pricePaise: 99900, experienceYears: 4, serviceArea: 'Salt Lake', city: 'Kolkata', contactPhone: vPhone };
   const svc = await expect('vendor publishes a ₹999 service', 201, 'POST', '/service-offers', { token: V, body: svcBody });
-  ok('offer snapshots commissionBps 1250 (12.5%)', svc?.commissionBps === 1250, svc?.commissionBps);
+  ok('service carries no commission snapshot', svc && svc.commissionBps === undefined, svc?.commissionBps);
   const svc2 = await expect('second service ₹200', 201, 'POST', '/service-offers', { token: V, body: { ...svcBody, title: `Fan repair ${RUN}`, pricePaise: 20000 } });
-  for (const s of [svc, svc2]) if (s?.moderationStatus === 'pending') await expect('approve service', 200, 'POST', `/platform/listings/service/${s._id}/moderate`, { token: T, body: { decision: 'approved' } });
+  const svc3 = await expect('third service on request', 201, 'POST', '/service-offers', { token: V, body: { ...svcBody, title: `Custom work ${RUN}`, priceType: 'on_quote', pricePaise: undefined } });
+  for (const s of [svc, svc2, svc3]) if (s?.moderationStatus === 'pending') await expect('approve service', 200, 'POST', `/platform/listings/service/${s._id}/moderate`, { token: T, body: { decision: 'approved' } });
 
-  head('Coupons: create, validate, list');
-  const C = '/platform/coupons';
-  const SAVE = `SAVE-${RUN}`.slice(0, 20);
-  const SOC = `SOC-${RUN}`.slice(0, 20);
-  await expect('code too short', 400, 'POST', C, { token: T, body: { code: 'AB', discountPaise: 1000, maxUses: 1 } });
-  await expect('code with a space', 400, 'POST', C, { token: T, body: { code: 'BAD CODE', discountPaise: 1000, maxUses: 1 } });
-  await expect('discount below ₹1', 400, 'POST', C, { token: T, body: { code: `LOW-${RUN}`, discountPaise: 99, maxUses: 1 } });
-  await expect('discount not whole paise', 400, 'POST', C, { token: T, body: { code: `FRAC-${RUN}`, discountPaise: 150.5, maxUses: 1 } });
-  await expect('maxUses 0', 400, 'POST', C, { token: T, body: { code: `ZERO-${RUN}`, discountPaise: 1000, maxUses: 0 } });
-  await expect('bad expiry date', 400, 'POST', C, { token: T, body: { code: `DATE-${RUN}`, discountPaise: 1000, maxUses: 1, expiresOn: '31-12-2026' } });
-  await expect('unknown society', 400, 'POST', C, { token: T, body: { code: `NOSOC-${RUN}`, discountPaise: 1000, maxUses: 1, societyIds: ['5f0000000000000000000000'] } });
-  await expect('unknown field', 400, 'POST', C, { token: T, body: { code: `XTRA-${RUN}`, discountPaise: 1000, maxUses: 1, usedCount: 5 } });
-  await expect('member cannot create coupons', 403, 'POST', C, { token: MT, body: { code: `HACK-${RUN}`, discountPaise: 1000, maxUses: 1 } });
-  const save = await expect('create all-members coupon (₹150.50 × 2)', 201, 'POST', C, { token: T, body: { code: SAVE.toLowerCase(), description: 'Festive offer', discountPaise: 15050, maxUses: 2, expiresOn: istInDays(30) } });
-  ok('coupon shape: upper-cased code, allMembers, remaining, status, expiry end of IST day', save?.code === SAVE && save.allMembers === true && save.remaining === 2 && save.usedCount === 0 && save.status === 'active' && save.active === true && new Date(save.expiresAt).toISOString().endsWith('18:29:59.999Z'), save);
-  const dup = await call('POST', C, { token: T, body: { code: SAVE, discountPaise: 100, maxUses: 1 } });
-  ok('duplicate code → 409 COUPON_EXISTS', dup.status === 409 && errCode(dup) === 'COUPON_EXISTS', dup);
-  const soc = await expect('create society-only coupon', 201, 'POST', C, { token: T, body: { code: SOC, discountPaise: 5000, maxUses: 5, societyIds: [sid] } });
-  ok('society coupon lists the society by name', soc?.allMembers === false && soc.societies?.[0]?._id === sid && soc.societies[0].name === societyName, soc?.societies);
-  const big = await expect('create ₹2,000 coupon (more than the price)', 201, 'POST', C, { token: T, body: { code: `BIG-${RUN}`.slice(0, 20), discountPaise: 200000, maxUses: 3 } });
-  const off = await expect('create inactive coupon', 201, 'POST', C, { token: T, body: { code: `OFF-${RUN}`.slice(0, 20), discountPaise: 1000, maxUses: 3, active: false } });
-  const gone = await expect('create expiring coupon', 201, 'POST', C, { token: T, body: { code: `GONE-${RUN}`.slice(0, 20), discountPaise: 1000, maxUses: 3, expiresOn: istInDays(5) } });
-  const listed = await expect('list by code', 200, 'GET', `${C}?q=${RUN.toLowerCase()}&limit=50`, { token: T });
-  ok('search (case-insensitive) finds this run’s 5 coupons', isPaged(listed) && listed.total === 5, listed.items?.map((c) => c.code));
-  const act = await expect('list active', 200, 'GET', `${C}?status=active&q=${RUN}&limit=50`, { token: T });
-  ok('active tab excludes the inactive one', act.items?.length === 4 && !act.items.some((c) => c._id === off._id) && act.items.every((c) => c.status === 'active'), act.items?.map((c) => c.code));
-  const ina = await expect('list inactive', 200, 'GET', `${C}?status=inactive&q=${RUN}`, { token: T });
-  ok('inactive tab = the off coupon', ina.total === 1 && ina.items[0]._id === off._id && ina.items[0].status === 'inactive', ina.items);
-  const exp0 = await expect('list expired', 200, 'GET', `${C}?status=expired&q=${RUN}`, { token: T });
-  ok('nothing expired yet', exp0.total === 0, exp0.items);
-  const edited = await expect('edit unused: change code, clear expiry, restrict', 200, 'PATCH', `${C}/${gone._id}`, { token: T, body: { code: `GONE2-${RUN}`.slice(0, 20), expiresOn: null, societyIds: [sid], description: 'Edited' } });
-  ok('edit applied (code, no expiry, society, description)', edited?.code === `GONE2-${RUN}`.slice(0, 20) && edited.expiresAt === null && edited.allMembers === false && edited.description === 'Edited', edited);
-  await expect('edit back to all members', 200, 'PATCH', `${C}/${gone._id}`, { token: T, body: { societyIds: [] } });
-  const toOff = await expect('turn off', 200, 'PATCH', `${C}/${gone._id}`, { token: T, body: { active: false } });
-  ok('turned off → status inactive', toOff?.active === false && toOff.status === 'inactive', toOff);
-  await expect('delete unused coupon', 200, 'DELETE', `${C}/${gone._id}`, { token: T });
-  await expect('deleted coupon is gone', 404, 'GET', `${C}/${gone._id}`, { token: T });
-  await expect('unknown coupon', 404, 'GET', `${C}/5f0000000000000000000000`, { token: T });
-  await expect('member cannot list coupons', 403, 'GET', C, { token: MT });
+  head('Vendor pricing (Master Admin → vendor page)');
+  const PR = `/platform/vendors/${vId}/pricing`;
+  const d0 = await expect('', 200, 'GET', `/platform/vendors/${vId}`, { token: T });
+  ok('new vendor starts at 0% / 0%', d0?.pricing?.commissionPercent === 0 && d0.pricing.memberDiscountPercent === 0, d0?.pricing);
+  for (const [why, body] of [['over 100', { commissionPercent: 100.5 }], ['3 decimals', { commissionPercent: 12.345 }], ['negative', { memberDiscountPercent: -1 }], ['string', { commissionPercent: '12' }], ['nothing', {}], ['unknown field', { commissionBps: 1250 }]]) await expect(`pricing ${why}`, 400, 'PATCH', PR, { token: T, body });
+  await expect('member cannot set pricing', 403, 'PATCH', PR, { token: MT, body: { commissionPercent: 5 } });
+  await expect('unknown vendor', 404, 'PATCH', '/platform/vendors/5f0000000000000000000000/pricing', { token: T, body: { commissionPercent: 5 } });
+  const setP = await expect('set 12.5% commission, 40% member discount', 200, 'PATCH', PR, { token: T, body: { commissionPercent: 12.5, memberDiscountPercent: 40 } });
+  ok('saved: { commissionPercent: 12.5, memberDiscountPercent: 40 }', setP?.pricing?.commissionPercent === 12.5 && setP.pricing.memberDiscountPercent === 40, setP);
+  const vl = await expect('', 200, 'GET', `/platform/vendors?q=${encodeURIComponent(vName)}`, { token: T });
+  ok('vendor list row shows the rates', vl.items?.find((x) => x._id === vId)?.pricing?.commissionPercent === 12.5, vl.items?.[0]);
+  ok('vendor detail shows the rates', (await expect('', 200, 'GET', `/platform/vendors/${vId}`, { token: T }))?.pricing?.memberDiscountPercent === 40);
+  const plog = await expect('', 200, 'GET', '/platform/audit-logs?action=vendor.pricing_updated&limit=5', { token: T });
+  const pentry = plog.items?.find((a) => a.targetId === vId);
+  ok('audited with before / after', pentry?.changes?.before?.commissionPercent === 0 && pentry.changes.after?.commissionPercent === 12.5, pentry);
+  // ₹999 at 12.5% → commission round(12487.5) = ₹124.88 → member ₹1,123.88; discount 40% of it = round(4995.2) = ₹49.95 → ₹1,073.93.
+  const mView = await expect('member reads the service', 200, 'GET', `/service-offers/${svc._id}`, { token: MT });
+  ok('member price ₹1,123.88, discount ₹49.95 → ₹1,073.93', mView?.pricePaise === 112388 && mView.pricing?.memberPricePaise === 112388 && mView.pricing.discountPaise === 4995 && mView.pricing.payableWithDiscountPaise === 107393 && mView.pricing.discountAvailable === true, mView?.pricing);
+  ok('member never sees the vendor price or rates', mView && !['vendorPricePaise', 'commissionPercent', 'commissionPaise', 'memberDiscountPercent', 'commissionBps'].some((k) => JSON.stringify(mView).includes(`"${k}"`)), mView?.pricing);
+  const vView = await expect('vendor reads own service', 200, 'GET', `/service-offers/${svc._id}`, { token: V });
+  ok('vendor sees own price, member price and the rates', vView?.pricing?.vendorPricePaise === 99900 && vView.pricing.memberPricePaise === 112388 && vView.pricing.commissionPaise === 12488 && vView.pricing.commissionPercent === 12.5 && vView.pricing.memberDiscountPercent === 40, vView?.pricing);
 
-  head('Coupons: members book with a coupon');
+  head('Bookings with and without the member discount');
   const regM = async (name) => (await expect(`register ${name}`, 201, 'POST', '/auth/resident/register', { body: { phone: randPhone(), name, password: PASSWORD } })).accessToken;
-  const MA = await regM(`Coupon Member ${RUN}`); // member of the seeded society
-  const MB = await regM(`Outsider ${RUN}`); // no society
+  const MA = await regM(`Discount Member ${RUN}`);
+  const MB = await regM(`Full Price Member ${RUN}`);
   const MC = await regM(`Third Member ${RUN}`);
-  const join = await expect('member A joins the society', 201, 'POST', '/memberships', { token: MA, body: { societyId: sid, buildingId, flatNumber, residentType: 'owner' } });
-  await expect('approve member A', 200, 'POST', `/platform/societies/${sid}/manage/memberships/${join._id}/approve`, { token: T, body: {}, reason: 'Coupon check member' });
   const book = { preferredDate: istInDays(2), preferredTime: '10:30', address: 'Flat 202, Block A, Kolkata' };
-  const cp = `/service-offers/${svc._id}/coupon`;
-  const chk = await call('POST', cp, { token: MA, body: { code: SAVE.toLowerCase() } });
-  ok('check: ₹999 − ₹150.50 = ₹848.50', chk.status === 200 && chk.json?.discountPaise === 15050 && chk.json.payablePaise === 84850 && chk.json.listPricePaise === 99900, chk);
-  const bigChk = await call('POST', cp, { token: MC, body: { code: big.code } });
-  ok('discount never exceeds the price (₹2,000 coupon on ₹999 → ₹999 off, pay ₹0)', bigChk.status === 200 && bigChk.json?.discountPaise === 99900 && bigChk.json.payablePaise === 0, bigChk);
-  const offChk = await call('POST', cp, { token: MA, body: { code: off.code } });
-  ok('inactive coupon → 400 COUPON_INVALID', offChk.status === 400 && errCode(offChk) === 'COUPON_INVALID', offChk);
-  const socOut = await call('POST', cp, { token: MB, body: { code: SOC } });
-  ok('society-only coupon for an outsider → 403 COUPON_NOT_ELIGIBLE', socOut.status === 403 && errCode(socOut) === 'COUPON_NOT_ELIGIBLE', socOut);
-  const socIn = await call('POST', cp, { token: MA, body: { code: SOC } });
-  ok('society-only coupon for a member of that society → 200', socIn.status === 200 && socIn.json?.discountPaise === 5000, socIn);
-  const socBook = await call('POST', `/service-offers/${svc2._id}/bookings`, { token: MB, body: { ...book, couponCode: SOC } });
-  ok('outsider booking with the society coupon → 403', socBook.status === 403 && errCode(socBook) === 'COUPON_NOT_ELIGIBLE', socBook);
-  const vendorUse = await call('POST', cp, { token: V, body: { code: SAVE } });
-  ok('vendor cannot use coupons → 403', vendorUse.status === 403, vendorUse.status);
-
-  const bA = await expect('member A books with SAVE', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MA, body: { ...book, couponCode: SAVE } });
-  ok('booking pricing: list ₹999, discount ₹150.50, payable ₹848.50', bA?.pricing?.listPricePaise === 99900 && bA.pricing.discountPaise === 15050 && bA.pricing.payablePaise === 84850 && bA.pricing.couponCode === SAVE, bA?.pricing);
-  const again = await call('POST', `/service-offers/${svc2._id}/coupon`, { token: MA, body: { code: SAVE } });
-  ok('same member, second use → 409 COUPON_ALREADY_USED', again.status === 409 && errCode(again) === 'COUPON_ALREADY_USED', again);
-  const againBook = await call('POST', `/service-offers/${svc2._id}/bookings`, { token: MA, body: { ...book, couponCode: SAVE } });
-  ok('same member, second booking with it → 409', againBook.status === 409 && errCode(againBook) === 'COUPON_ALREADY_USED', againBook);
-  const bB = await expect('outsider books with SAVE (all members)', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MB, body: { ...book, couponCode: SAVE } });
-  const full = await expect('', 200, 'GET', `${C}/${save._id}`, { token: T });
-  ok('2/2 used → status used_up, remaining 0', full?.usedCount === 2 && full.remaining === 0 && full.status === 'used_up', full);
-  const ex = await call('POST', cp, { token: MC, body: { code: SAVE } });
-  ok('third member → 409 COUPON_EXHAUSTED', ex.status === 409 && errCode(ex) === 'COUPON_EXHAUSTED', ex);
-  const lower = await call('PATCH', `${C}/${save._id}`, { token: T, body: { maxUses: 1 } });
-  ok('maxUses below used count → 400', lower.status === 400, lower);
-  const recode = await call('PATCH', `${C}/${save._id}`, { token: T, body: { code: `NEW-${RUN}`.slice(0, 20) } });
-  ok('code change after use → 409 COUPON_IN_USE', recode.status === 409 && errCode(recode) === 'COUPON_IN_USE', recode);
-  const del = await call('DELETE', `${C}/${save._id}`, { token: T });
-  ok('delete a used coupon → 409 COUPON_IN_USE with a "turn it off" message', del.status === 409 && errCode(del) === 'COUPON_IN_USE' && /turn it off/i.test(del.json?.error?.message || ''), del);
-  await expect('same code with other fields is fine', 200, 'PATCH', `${C}/${save._id}`, { token: T, body: { code: SAVE, maxUses: 2, description: 'Festive offer (edited)' } });
-  await expect('outsider cancels', 200, 'POST', `/service-bookings/${bB._id}/cancel`, { token: MB, body: {} });
-  const back = await expect('', 200, 'GET', `${C}/${save._id}`, { token: T });
-  ok('cancelled booking gives the use back (1 used, 1 remaining, active)', back?.usedCount === 1 && back.remaining === 1 && back.status === 'active', back);
-  const ex2 = await call('POST', cp, { token: MC, body: { code: SAVE } });
-  ok('third member can use the freed use', ex2.status === 200, ex2);
-  ok('detail: one redemption with member name, masked phone and booking', back?.redemptions?.length === 1 && back.redemptions[0].user?.name === `Coupon Member ${RUN}` && isMasked(back.redemptions[0].user.phone) && back.redemptions[0].booking?._id === bA._id && back.redemptions[0].discountPaise === 15050, back?.redemptions);
+  const bA = await expect('member A books with "Apply discount"', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MA, body: { ...book, applyDiscount: true } });
+  ok('booking: ₹1,123.88 − ₹49.95 = ₹1,073.93', bA?.pricing?.memberPricePaise === 112388 && bA.pricing.discountPaise === 4995 && bA.pricing.payablePaise === 107393 && bA.pricing.discountApplied === true && bA.pricing.vendorPricePaise === undefined, bA?.pricing);
+  const bB = await expect('member B books without the discount', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MB, body: book });
+  ok('booking without discount: pays ₹1,123.88', bB?.pricing?.payablePaise === 112388 && bB.pricing.discountPaise === 0, bB?.pricing);
+  const nd = await call('POST', `/service-offers/${svc3._id}/bookings`, { token: MA, body: { ...book, applyDiscount: true } });
+  ok('discount on "price on request" → 409 NO_DISCOUNT', nd.status === 409 && errCode(nd) === 'NO_DISCOUNT', nd);
+  const couponTry = await call('POST', `/service-offers/${svc2._id}/bookings`, { token: MC, body: { ...book, couponCode: 'SAVE10' } });
+  ok('couponCode is no longer accepted → 400', couponTry.status === 400, couponTry.status);
+  await expect('member B cancels', 200, 'POST', `/service-bookings/${bB._id}/cancel`, { token: MB, body: {} });
 
   head('Settlement: vendor completes + marks paid');
-  await expect('mark paid before completion', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 84850 } });
+  await expect('mark paid before completion', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 107393 } });
   await expect('accept', 200, 'POST', `/vendor/bookings/${bA._id}/accept`, { token: V, body: {} });
   await expect('complete', 200, 'POST', `/vendor/bookings/${bA._id}/complete`, { token: V, body: {} });
   const unpaid = await expect('platform: unpaid filter', 200, 'GET', `/platform/service-bookings?vendorId=${vId}&paid=false`, { token: T });
   ok('completed but unpaid shows as unpaid, totals zero', unpaid.items?.some((b) => b._id === bA._id && b.payment.status === 'unpaid') && unpaid.totals?.paidBookings === 0 && unpaid.totals.cashCollectedPaise === 0, unpaid);
-  await expect('cash must be whole paise', 400, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 848.5 } });
-  const paid = await expect('vendor records ₹848.50 cash', 200, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 84850 } });
-  // gross = 84850 + 15050 = 99900; commission = round(99900 × 12.5%) = round(12487.5) = 12488; net = 12488 − 15050 = −2562
+  await expect('cash must be whole paise', 400, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 1073.5 } });
+  const paid = await expect('vendor records ₹1,073.93 cash', 200, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 107393 } });
   const p = paid?.payment || {};
-  ok('settlement exact: gross ₹999, commission ₹124.88, coupon ₹150.50, net −₹25.62', p.grossPaise === 99900 && p.commissionPaise === 12488 && p.discountPaise === 15050 && p.netToPlatformPaise === -2562 && p.amountPaise === 84850, p);
+  ok('settlement exact: commission ₹124.88, discount ₹49.95, NIVASA net ₹74.93, vendor ₹999', p.cashPaise === 107393 && p.amountPaise === 107393 && p.commissionPaise === 12488 && p.discountPaise === 4995 && p.netToPlatformPaise === 7493 && p.vendorEarningsPaise === 99900, p);
   await expect('mark paid twice', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 1 } });
-
-  // A second paid booking without a coupon: ₹200 × 12.5% = ₹25 commission, net +₹25.
-  const bC = await expect('member C books the ₹200 service (no coupon)', 201, 'POST', `/service-offers/${svc2._id}/bookings`, { token: MC, body: book });
+  // ₹200 at 12.5% → member ₹225; no discount; cash ₹225 → commission ₹25, net ₹25, vendor ₹200.
+  const bC = await expect('member C books the ₹200 service (no discount)', 201, 'POST', `/service-offers/${svc2._id}/bookings`, { token: MC, body: book });
+  ok('member C pays ₹225', bC?.pricing?.payablePaise === 22500, bC?.pricing);
   await expect('accept', 200, 'POST', `/vendor/bookings/${bC._id}/accept`, { token: V, body: {} });
   await expect('complete', 200, 'POST', `/vendor/bookings/${bC._id}/complete`, { token: V, body: {} });
-  const paidC = await expect('vendor records ₹200 cash', 200, 'POST', `/vendor/bookings/${bC._id}/mark-paid`, { token: V, body: { amountPaise: 20000 } });
-  ok('no-coupon settlement: commission ₹25, net +₹25', paidC?.payment?.commissionPaise === 2500 && paidC.payment.netToPlatformPaise === 2500 && paidC.payment.discountPaise === 0, paidC?.payment);
+  const paidC = await expect('vendor records ₹225 cash', 200, 'POST', `/vendor/bookings/${bC._id}/mark-paid`, { token: V, body: { amountPaise: 22500 } });
+  ok('no-discount settlement: commission ₹25, net ₹25, vendor ₹200', paidC?.payment?.commissionPaise === 2500 && paidC.payment.netToPlatformPaise === 2500 && paidC.payment.discountPaise === 0 && paidC.payment.vendorEarningsPaise === 20000, paidC?.payment);
 
   head('Platform: service bookings & vendor settlement');
   const SB = '/platform/service-bookings';
   const all = await expect('by vendor', 200, 'GET', `${SB}?vendorId=${vId}&limit=50`, { token: T });
   ok('paged with totals; 3 bookings for the vendor', isPaged(all) && all.total === 3 && all.totals, all.total);
   const row = all.items?.find((b) => b._id === bA._id);
-  ok('row: list price, coupon, cash, commission %, commission, net, paid date, vendor + customer', row && row.offerTitle === svcBody.title && row.listPricePaise === 99900 && row.couponCode === SAVE && row.discountPaise === 15050 && row.commissionPercent === 12.5 && row.payment.status === 'paid' && row.payment.amountPaise === 84850 && row.payment.grossPaise === 99900 && row.payment.commissionPaise === 12488 && row.payment.netToPlatformPaise === -2562 && row.payment.paidAt && row.vendor?._id === vId && row.vendor.name === vName && row.customer?.name === `Coupon Member ${RUN}` && row.status === 'completed', row);
-  const want = { paidBookings: 2, cashCollectedPaise: 104850, couponCreditsPaise: 15050, commissionPaise: 14988, netToPlatformPaise: -62 };
-  ok('vendor totals: 2 paid, cash ₹1,048.50, coupons ₹150.50, commission ₹149.88, net −₹0.62', JSON.stringify(all.totals) === JSON.stringify(want), all.totals);
+  ok('row: vendor / member price, discount, payable, rate, commission, settlement, names', row && row.offerTitle === svcBody.title && row.vendorPricePaise === 99900 && row.memberPricePaise === 112388 && row.listPricePaise === 112388 && row.discountPaise === 4995 && row.payablePaise === 107393 && row.commissionPercent === 12.5 && row.commissionPaise === 12488 && row.payment.status === 'paid' && row.payment.amountPaise === 107393 && row.payment.commissionPaise === 12488 && row.payment.netToPlatformPaise === 7493 && row.payment.vendorEarningsPaise === 99900 && row.payment.paidAt && row.vendor?._id === vId && row.vendor.name === vName && row.customer?.name === `Discount Member ${RUN}` && row.status === 'completed' && row.couponCode === undefined, row);
+  const want = { paidBookings: 2, cashCollectedPaise: 129893, memberDiscountsPaise: 4995, commissionPaise: 14988, netToPlatformPaise: 9993, vendorEarningsPaise: 119900 };
+  ok('vendor totals: 2 paid, cash ₹1,298.93, discounts ₹49.95, commission ₹149.88, net ₹99.93, vendor ₹1,199', JSON.stringify(all.totals) === JSON.stringify(want), all.totals);
   const paidOnly = await expect('paid=true', 200, 'GET', `${SB}?vendorId=${vId}&paid=true`, { token: T });
   ok('paid filter: 2 bookings, same totals', paidOnly.total === 2 && paidOnly.items.every((b) => b.payment.status === 'paid') && JSON.stringify(paidOnly.totals) === JSON.stringify(want), paidOnly.total);
   const cancelled = await expect('status=cancelled', 200, 'GET', `${SB}?vendorId=${vId}&status=cancelled`, { token: T });
@@ -412,17 +360,27 @@ async function couponsAndSettlement(T, { sid, societyName, buildingId, flatNumbe
   ok('vendor detail settlement = the same totals', JSON.stringify(vd?.settlement) === JSON.stringify(want), vd?.settlement);
   ok('vendor detail counts 3 bookings', vd?.counts?.bookings === 3, vd?.counts);
   const vdash = await expect('vendor dashboard', 200, 'GET', '/vendor/dashboard', { token: V });
-  ok('vendor dashboard shows the same settlement + current rate', JSON.stringify(vdash?.settlement) === JSON.stringify(want) && vdash.commissionPercent === 12.5, vdash?.settlement);
+  ok('vendor dashboard: same settlement + own rates, no global commission', JSON.stringify(vdash?.settlement) === JSON.stringify(want) && vdash.pricing?.commissionPercent === 12.5 && vdash.pricing.memberDiscountPercent === 40 && vdash.commissionPercent === undefined, vdash);
 
-  head('Commission change applies to new / edited services only');
-  await expect('commission 10', 200, 'PUT', COMM, { token: T, body: { value: 10 } });
-  const own = await expect('vendor reads own service', 200, 'GET', `/service-offers/${svc._id}`, { token: V });
-  ok('existing service keeps 1250 bps', own?.commissionBps === 1250, own?.commissionBps);
-  const fresh = await expect('new service', 201, 'POST', '/service-offers', { token: V, body: { ...svcBody, title: `Sofa cleaning ${RUN}` } });
-  ok('new service takes 1000 bps', fresh?.commissionBps === 1000, fresh?.commissionBps);
+  head('Earnings (platform)');
+  const pe = await expect('earnings for this vendor', 200, 'GET', `/platform/earnings?vendorId=${vId}`, { token: T });
+  ok('totals: cash ₹1,298.93, commission ₹149.88, discounts ₹49.95, NIVASA net ₹99.93, vendor ₹1,199', pe?.totals?.paidJobs === 2 && pe.totals.cashCollectedPaise === 129893 && pe.totals.commissionPaise === 14988 && pe.totals.memberDiscountsPaise === 4995 && pe.totals.platformNetPaise === 9993 && pe.totals.vendorEarningsPaise === 119900, pe?.totals);
+  ok('vendorEarnings = cash − net', pe?.totals?.vendorEarningsPaise === pe?.totals?.cashCollectedPaise - pe?.totals?.platformNetPaise);
+  ok('items carry vendor / member price and settlement', pe?.items?.some((x) => x._id === bA._id && x.vendorPricePaise === 99900 && x.memberPricePaise === 112388 && x.discountPaise === 4995 && x.vendorEarningsPaise === 99900 && x.vendor?.name === vName), pe?.items?.[0]);
+  const pall = await expect('earnings (all vendors)', 200, 'GET', '/platform/earnings', { token: T });
+  ok('all-vendor earnings has a top-vendors list (≤10, by commission)', Array.isArray(pall?.topVendors) && pall.topVendors.length <= 10 && pall.topVendors.every((x, i, a) => i === 0 || a[i - 1].commissionPaise >= x.commissionPaise), pall?.topVendors?.slice(0, 2));
+  // Shared dev DBs hold other runs' vendors, so check this vendor through the vendor filter, not its rank.
+  ok('top vendors (this vendor) shows its name and totals', pe?.topVendors?.length === 1 && String(pe.topVendors[0].vendor?._id) === vId && pe.topVendors[0].commissionPaise === 14988, pe?.topVendors);
+
+  head('Rates are live for services, fixed for bookings');
+  await expect('set 10% / 0%', 200, 'PATCH', PR, { token: T, body: { commissionPercent: 10, memberDiscountPercent: 0 } });
+  const mNow = await expect('', 200, 'GET', `/service-offers/${svc._id}`, { token: MT });
+  ok('service now ₹1,098.90 and no discount', mNow?.pricePaise === 109890 && mNow.pricing.discountAvailable === false, mNow?.pricing);
+  const still = await expect('', 200, 'GET', `${SB}?vendorId=${vId}&paid=true`, { token: T });
+  ok('the paid booking keeps its snapshot', still.items?.find((b) => b._id === bA._id)?.memberPricePaise === 112388);
   const log = await expect('', 200, 'GET', '/platform/audit-logs?limit=100', { token: T });
-  ok('coupon + setting changes audited', ['platform.coupon_created', 'platform.coupon_updated', 'platform.coupon_deleted', 'platform.setting_updated', 'vendor.booking_paid_cash'].every((a) => log.items?.some((x) => x.action === a)), [...new Set(log.items?.map((a) => a.action))].slice(0, 15));
-  await expect('reset commission to 0', 200, 'PUT', COMM, { token: T, body: { value: 0 } });
+  ok('pricing changes and cash payments audited', ['vendor.pricing_updated', 'vendor.booking_paid_cash'].every((a) => log.items?.some((x) => x.action === a)), [...new Set(log.items?.map((a) => a.action))].slice(0, 15));
+  await expect('reset rates to 0 / 0', 200, 'PATCH', PR, { token: T, body: { commissionPercent: 0, memberDiscountPercent: 0 } });
 }
 
 async function main() {
@@ -580,7 +538,7 @@ async function main() {
   await expect('suspend via bridge', 200, 'POST', `${M}/memberships/${m2._id}/suspend`, { token: T, body: { reason: 'Unpaid dues dispute' }, reason: 'Unpaid dues dispute' });
 
   await vendorsAndAds(T, { AT, MT: r2.accessToken });
-  await couponsAndSettlement(T, { sid, societyName: `Master Check ${RUN}`, buildingId: bA._id, flatNumber: flatNo('202').number, MT: r2.accessToken });
+  await pricingAndSettlement(T, { MT: r2.accessToken });
 
   // ------------------------------------------------------------------ insights
   head('Dashboard insights');

@@ -67,14 +67,22 @@ const VINV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
 /** 11 digits → 12-digit Verhoeff-valid test Aadhaar. */
 export const withVerhoeff = (base11) => base11 + VINV[base11.split('').reverse().reduce((c, d, i) => VD[c][VP[(i + 1) % 8][Number(d)]], 0)];
 
-/** Registers a vendor and submits KYC (status pending). Returns ids, token and the plain KYC numbers. */
-export async function seedVendorWithKyc(name, business) {
+/**
+ * Registers a vendor in the app's way (POST /auth/resident/register with accountType 'vendor') and submits KYC (status
+ * pending). `shop` (optional): { name, logo: true, location:{lat,lng,label} } is saved with PUT /vendor/shop.
+ * Returns ids, token and the plain KYC numbers.
+ */
+export async function seedVendorWithKyc(name, business, shop = null) {
   const phone = randPhone();
-  const reg = await apiCall('POST', '/auth/vendor/register', { body: { phone, name, password: PASSWORD } });
+  const reg = await apiCall('POST', '/auth/resident/register', { body: { phone, name, password: PASSWORD, accountType: 'vendor' } });
   const token = reg.accessToken;
   const docs = [await upload(token, 'kyc'), await upload(token, 'kyc'), await upload(token, 'kyc')];
   const stamp = String(Date.now() + Math.floor(Math.random() * 1e6));
   const kyc = { pan: `PQRST${stamp.slice(-4)}K`, aadhaar: withVerhoeff(`4${stamp.slice(-10)}`), bankAccountNumber: `7002${stamp.slice(-8)}` };
   await apiCall('PUT', '/vendor/kyc', { token, body: { businessName: business, businessType: 'business', city: 'Kolkata', address: '7 Park Street', ...kyc, bankAccountHolder: name, bankIfsc: 'HDFC0001234', bankName: 'HDFC Bank', panPhoto: docs[0], aadhaarFront: docs[1], aadhaarBack: docs[2], consent: true } });
+  if (shop) {
+    const logoId = shop.logo ? await upload(token, 'vendor_logo') : undefined;
+    await apiCall('PUT', '/vendor/shop', { token, body: { ...(shop.name ? { shopName: shop.name } : {}), ...(logoId ? { logoId } : {}), ...(shop.location ? { location: shop.location } : {}) } });
+  }
   return { id: reg.user._id, token, phone, name, business, ...kyc };
 }

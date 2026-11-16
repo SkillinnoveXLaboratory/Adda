@@ -9,6 +9,9 @@ import { Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { MetricCard } from '../../components/Charts.jsx';
 import { NetAmount, netCaption } from '../../components/Settlement.jsx';
 import { KycBadge } from '../../components/KycBadge.jsx';
+import { VendorPricingCard } from '../../components/VendorPricing.jsx';
+import { LocationInfo } from '../../components/LocationInfo.jsx';
+import { ShopLogo } from '../../components/ShopLogo.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
 
@@ -104,7 +107,7 @@ export default function VendorDetail() {
 
   return (
     <QueryState query={q} skeleton={<PageSkeleton cards={4} rows={6} />}>
-      {({ user: u, profile: p, counts, kycAvailable, settlement }) => {
+      {({ user: u, profile: p, counts, kycAvailable, settlement, pricing }) => {
         const status = p?.kycStatus || 'not_submitted';
         const canApprove = ['pending', 'rejected'].includes(status);
         const canReject = ['pending', 'approved'].includes(status);
@@ -189,20 +192,21 @@ export default function VendorDetail() {
                 )
               }
             >
-              <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5" data-testid="vendor-settlement">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-6" data-testid="vendor-settlement">
                 {[
                   ['Paid bookings', String(settlement?.paidBookings ?? 0)],
                   ['Cash collected', formatINR(settlement?.cashCollectedPaise ?? 0)],
-                  ['Coupon credits', formatINR(settlement?.couponCreditsPaise ?? 0)],
                   ['Commission', formatINR(settlement?.commissionPaise ?? 0)],
+                  ['Member discounts', formatINR(settlement?.memberDiscountsPaise ?? 0)],
+                  ['Vendor earnings', formatINR(settlement?.vendorEarningsPaise ?? 0)],
                 ].map(([k, v]) => (
                   <div key={k} className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
                     <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">{k}</p>
                     <p className="mt-1 truncate text-base font-bold text-gray-800">{v}</p>
                   </div>
                 ))}
-                <div className="col-span-2 min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3 lg:col-span-1">
-                  <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">Net payable by vendor</p>
+                <div className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                  <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">NIVASA net</p>
                   <p className="mt-1 truncate text-base" data-testid="vendor-settlement-net">
                     <NetAmount paise={settlement?.netToPlatformPaise ?? 0} className="!font-bold" />
                   </p>
@@ -210,9 +214,24 @@ export default function VendorDetail() {
                 </div>
               </div>
               <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">
-                Fixed when the vendor records cash for a completed booking ({plural(counts.bookings, 'booking')} in total). Commission is charged on the full price (cash + coupon); coupons are funded by NIVASA, so net = commission − coupon credits.
+                Fixed when the vendor records cash for a completed booking ({plural(counts.bookings, 'booking')} in total). NIVASA net = commission − member discounts; the vendor collects the cash, so this is what they owe NIVASA. Vendor earnings = cash − NIVASA net.
               </p>
             </Card>
+
+            <div className="mb-6 grid grid-cols-12 gap-6">
+              <VendorPricingCard className="col-span-12 lg:col-span-7" vendorId={u._id} pricing={pricing || p?.pricing} canEdit={manage} onSaved={q.reload} />
+              <Card className="col-span-12 lg:col-span-5" title="Shop">
+                <div className="mb-4 flex items-center gap-3" data-testid="vendor-shop">
+                  <ShopLogo url={p?.shop?.logo?.url} alt={`${p?.shop?.name || 'Shop'} logo`} size="lg" testId="vendor-shop-logo" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-gray-800" data-testid="vendor-shop-name">{p?.shop?.name || <span className="font-medium text-gray-400">No shop name yet</span>}</p>
+                    <p className="text-[11px] text-gray-400">{p?.shop?.logo?.url ? 'Shown with the vendor’s services' : 'No logo uploaded'}</p>
+                  </div>
+                </div>
+                <KeyValue cols={1} items={[['Shop location', <LocationInfo key="loc" location={p?.shop?.location} empty="Not set — this vendor’s services don’t appear in members’ “near me” search" testId="vendor-shop-location" />]]} />
+                <p className="mt-4 text-[11px] text-brand-muted">The vendor sets the shop name, logo and location in the app (Shop settings).</p>
+              </Card>
+            </div>
 
             <div className="mb-6 grid grid-cols-12 gap-6">
               <Card className="col-span-12 lg:col-span-5" title="Account">

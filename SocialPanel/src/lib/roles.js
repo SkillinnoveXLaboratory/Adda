@@ -1,9 +1,9 @@
 /** Mirrors STAFF_PERMISSIONS in Backend/server.js (see API.md "Roles"). The server stays the authority. */
 export const STAFF_PERMISSIONS = {
   admin: ['*'],
-  secretary: ['society.read', 'members', 'members.read', 'community', 'complaints', 'facilities', 'services', 'announcements', 'listings', 'reports', 'finance.read', 'audit'],
+  secretary: ['society.read', 'members', 'members.read', 'community', 'complaints', 'facilities', 'services', 'announcements', 'listings', 'reports', 'finance.read', 'audit', 'gate'],
   treasurer: ['society.read', 'finance', 'finance.read', 'reports', 'members.read', 'audit'],
-  manager: ['society.read', 'complaints', 'facilities', 'services', 'community', 'members.read', 'listings'],
+  manager: ['society.read', 'complaints', 'facilities', 'services', 'community', 'members.read', 'listings', 'gate'],
   committee: ['society.read', 'members.read', 'announcements', 'finance.read', 'reports'],
 };
 

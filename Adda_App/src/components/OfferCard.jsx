@@ -5,6 +5,28 @@ import { offerPrice } from '../lib/format';
 import { colors, shadow } from '../theme';
 import { Badge, T } from './ui';
 
+/** "1.2 km away" from the server's distanceKm (near-me search). */
+export const distanceText = (km) => (km == null ? null : `${Number(km).toFixed(1)} km away`);
+
+/** Shop logo + shop name (services show the vendor's shop). */
+export function ShopBadge({ shop, size = 22 }) {
+  if (!shop?.name) return null;
+  return (
+    <View style={styles.shop}>
+      {shop.logoUrl ? (
+        <Image source={{ uri: shop.logoUrl }} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.goldLight }} accessibilityIgnoresInvertColors />
+      ) : (
+        <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.goldLight, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="storefront-outline" size={size * 0.6} color={colors.goldDark} />
+        </View>
+      )}
+      <T weight="semibold" size={11.5} color={colors.textSoft} numberOfLines={1} style={{ flex: 1, minWidth: 0 }}>
+        {shop.name}
+      </T>
+    </View>
+  );
+}
+
 /** A provider's service in a list (prototype "Popular Services" card): text left, photo / icon right. */
 export function OfferCard({ item, onPress, showModeration }) {
   const photo = item.photos?.[0]?.url;
@@ -25,9 +47,21 @@ export function OfferCard({ item, onPress, showModeration }) {
         <T weight="extrabold" size={13} color={colors.navy}>
           {offerPrice(item)}
         </T>
-        <T size={11} color={colors.muted} numberOfLines={1}>
-          {[item.contactName || item.postedBy, item.experienceYears ? `${item.experienceYears} yrs exp.` : null].filter(Boolean).join(' · ')}
-        </T>
+        {item.shop?.name ? (
+          <ShopBadge shop={item.shop} size={20} />
+        ) : (
+          <T size={11} color={colors.muted} numberOfLines={1}>
+            {[item.contactName || item.postedBy, item.experienceYears ? `${item.experienceYears} yrs exp.` : null].filter(Boolean).join(' · ')}
+          </T>
+        )}
+        {item.distanceKm != null ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }} testID="offer-distance">
+            <Ionicons name="navigate-outline" size={12} color={colors.goldDark} />
+            <T weight="bold" size={11} color={colors.goldText}>
+              {distanceText(item.distanceKm)}
+            </T>
+          </View>
+        ) : null}
         {where ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <Ionicons name="location-outline" size={12} color="#94a3b8" />
@@ -63,6 +97,7 @@ export function PopularServiceCard({ item, onPress, onBook }) {
         </T>
         <T weight="semibold" size={11} color="#94a3b8" numberOfLines={1}>
           {offerPrice(item)}
+          {item.shop?.name ? ` · ${item.shop.name}` : ''}
         </T>
         {onBook ? (
           <Pressable onPress={onBook} accessibilityRole="button" accessibilityLabel={`Book ${item.title}`} hitSlop={6} style={({ pressed }) => [styles.bookBtn, pressed && { backgroundColor: colors.goldDark }]}>
@@ -78,6 +113,7 @@ export function PopularServiceCard({ item, onPress, onBook }) {
 }
 
 const styles = StyleSheet.create({
+  shop: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   popular: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 12, ...shadow.card },
   popularIcon: { width: 48, height: 48, borderRadius: 12, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
   popularPhoto: { width: 96, height: 80, borderRadius: 12, backgroundColor: '#f1f5f9' },
