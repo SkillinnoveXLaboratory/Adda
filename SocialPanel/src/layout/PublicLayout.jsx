@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { cx, Icon, Logo } from '../components/ui.jsx';
+import { LegalFooter } from '../components/LegalFooter.jsx';
 
 const FEATURES = [
   ['fa-solid fa-file-invoice', 'Maintenance billing, receipts & dues tracking'],
@@ -18,7 +19,7 @@ export function PublicLayout({ children, variant = 'split', title, subtitle }) {
       <div className="min-h-screen bg-azea-bg">
         <header className="sticky top-0 z-20 border-b border-gray-100 bg-white">
           <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 sm:px-6">
-            <Link to="/login" aria-label="adda sign in">
+            <Link to="/login" aria-label="NIVASA sign in">
               <Logo />
             </Link>
             <nav className="flex items-center gap-1 text-xs font-semibold sm:gap-2">
@@ -41,7 +42,7 @@ export function PublicLayout({ children, variant = 'split', title, subtitle }) {
           )}
           {children}
         </main>
-        <footer className="pb-8 text-center text-[11px] text-azea-muted">© {new Date().getFullYear()} adda · Society management platform</footer>
+        <LegalFooter className="px-4 pb-8" />
       </div>
     );
   }
@@ -67,7 +68,7 @@ export function PublicLayout({ children, variant = 'split', title, subtitle }) {
             ))}
           </ul>
         </div>
-        <p className="text-[11px] text-white/60">© {new Date().getFullYear()} adda · Society management platform</p>
+        <p className="text-[11px] text-white/60">© {new Date().getFullYear()} NIVASA · Society management platform</p>
         <div className="pointer-events-none absolute -bottom-24 -right-24 h-72 w-72 rounded-full border-[40px] border-white/5" aria-hidden="true" />
       </aside>
       <main className="flex min-w-0 flex-1 flex-col items-center justify-center px-4 py-10 sm:px-8">
@@ -75,6 +76,7 @@ export function PublicLayout({ children, variant = 'split', title, subtitle }) {
           <Logo />
         </div>
         <div className={cx('w-full max-w-md')}>{children}</div>
+        <LegalFooter className="mt-10 w-full max-w-md" />
       </main>
     </div>
   );

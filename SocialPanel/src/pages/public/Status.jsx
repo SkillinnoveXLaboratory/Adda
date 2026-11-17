@@ -13,7 +13,7 @@ function Timeline({ status, submittedAt, reviewedAt }) {
   const reviewing = status === 'under_review';
   const steps = [
     { label: status === 'draft' ? 'Draft saved' : 'Submitted', sub: submittedAt ? formatDateTime(submittedAt) : status === 'draft' ? 'Not submitted yet' : '', state: status === 'draft' ? 'current' : 'done' },
-    { label: 'Under review', sub: reviewing ? 'The adda team is reviewing your application' : approved || rejected ? 'Review complete' : 'Waiting for a reviewer', state: reviewing ? 'current' : approved || rejected ? 'done' : 'todo' },
+    { label: 'Under review', sub: reviewing ? 'The NIVASA team is reviewing your application' : approved || rejected ? 'Review complete' : 'Waiting for a reviewer', state: reviewing ? 'current' : approved || rejected ? 'done' : 'todo' },
     { label: rejected ? 'Rejected' : 'Approved', sub: approved || rejected ? formatDateTime(reviewedAt) : 'Decision pending', state: approved ? 'done' : rejected ? 'failed' : 'todo' },
   ];
   return (
@@ -105,7 +105,7 @@ export default function Status() {
   const [activated, setActivated] = useState(null);
 
   useEffect(() => {
-    document.title = 'Application status · adda';
+    document.title = 'Application status · NIVASA';
   }, []);
 
   const check = async (e) => {

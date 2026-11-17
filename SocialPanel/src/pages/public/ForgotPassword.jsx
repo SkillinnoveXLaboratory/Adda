@@ -16,7 +16,7 @@ export default function ForgotPassword() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    document.title = 'Reset password · adda';
+    document.title = 'Reset password · NIVASA';
   }, []);
 
   const submit = async (e) => {

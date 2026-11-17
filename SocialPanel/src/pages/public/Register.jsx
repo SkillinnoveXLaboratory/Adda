@@ -110,7 +110,7 @@ function Success({ result, onDone }) {
   const navigate = useNavigate();
   const [saved, setSaved] = useState(false);
   const text = [
-    'adda — Society registration',
+    'NIVASA — Society registration',
     '============================',
     `Society: ${result.societyName}`,
     `Submitted: ${formatDateTime(result.submittedAt)}`,
@@ -145,7 +145,7 @@ function Success({ result, onDone }) {
               icon="fa-solid fa-download"
               className="flex-1"
               onClick={() => {
-                saveBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `adda-registration-${result.referenceCode}.txt`);
+                saveBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `nivasa-registration-${result.referenceCode}.txt`);
                 setSaved(true);
               }}
             >
@@ -172,7 +172,7 @@ function Success({ result, onDone }) {
           <div className="rounded-xl bg-azea-bg p-4">
             <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500">What happens next</p>
             <ol className="mt-2 space-y-1.5 text-xs text-gray-600">
-              <li>1. The adda team reviews your application and documents.</li>
+              <li>1. The NIVASA team reviews your application and documents.</li>
               <li>2. Once approved you receive a society code.</li>
               <li>3. Activate your admin account from the status page (or the email link, if email is set up) and sign in.</li>
             </ol>
@@ -196,7 +196,7 @@ export default function Register() {
   const [result, setResult] = useState(null);
 
   useEffect(() => {
-    document.title = 'Register your society · adda';
+    document.title = 'Register your society · NIVASA';
   }, []);
   useEffect(() => {
     try {
@@ -304,7 +304,7 @@ export default function Register() {
 
   const f = { values, errors, onChange };
   return (
-    <PublicLayout variant="wide" title="Register your society" subtitle="Tell us about your society. It takes about 5 minutes — the adda team reviews every application before it goes live.">
+    <PublicLayout variant="wide" title="Register your society" subtitle="Tell us about your society. It takes about 5 minutes — the NIVASA team reviews every application before it goes live.">
       <div className="mx-auto max-w-3xl">
         <Stepper step={step} onJump={jump} maxReached={maxReached} />
         <div className="card">

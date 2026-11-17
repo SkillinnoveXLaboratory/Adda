@@ -13,6 +13,7 @@ const ForgotPassword = page(() => import('./pages/public/ForgotPassword.jsx'));
 const Register = page(() => import('./pages/public/Register.jsx'));
 const Status = page(() => import('./pages/public/Status.jsx'));
 const SetPassword = page(() => import('./pages/public/SetPassword.jsx'));
+const Legal = lazy(() => import('./pages/public/Legal.jsx'));
 
 // Society admin
 const SDashboard = page(() => import('./pages/society/Dashboard.jsx'));
@@ -68,6 +69,9 @@ export default function App() {
             <Route path="/register" element={<Suspense fallback={<PublicFallback />}><Register /></Suspense>} />
             <Route path="/status" element={<Suspense fallback={<PublicFallback />}><Status /></Suspense>} />
             <Route path="/set-password" element={<Suspense fallback={<PublicFallback />}><SetPassword /></Suspense>} />
+            {["contact", "terms", "privacy", "refunds", "shipping"].map((pg) => (
+              <Route key={pg} path={'/' + pg} element={<Suspense fallback={<PublicFallback />}><Legal page={pg} /></Suspense>} />
+            ))}
 
             <Route
               path="/society"

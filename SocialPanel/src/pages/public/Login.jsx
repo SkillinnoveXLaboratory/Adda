@@ -27,7 +27,7 @@ export default function Login() {
 
   useEffect(() => {
     clearEndReason();
-    document.title = 'Sign in · adda';
+    document.title = 'Sign in · NIVASA';
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -59,7 +59,7 @@ export default function Login() {
       <PublicCard>
         <div className="mb-6">
           <h1 className="text-xl font-bold tracking-tight text-gray-800">Welcome back</h1>
-          <p className="mt-1 text-xs text-azea-muted">Sign in to the adda society admin portal.</p>
+          <p className="mt-1 text-xs text-azea-muted">Sign in to the NIVASA society admin portal.</p>
         </div>
         {reason && !error && (
           <Alert tone={reason[0]} className="mb-4">

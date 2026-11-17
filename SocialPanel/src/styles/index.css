@@ -191,3 +191,7 @@
 .leaflet-container .leaflet-control-attribution {
   font-size: 10px;
 }
+
+/* Policy pages (Contact, Terms, Privacy, Refunds, Shipping) */
+.legal-page h2 { margin-top: 1.25rem; margin-bottom: 0.35rem; font-size: 0.95rem; font-weight: 700; color: #1f2937; }
+.legal-page p { margin-top: 0.5rem; }

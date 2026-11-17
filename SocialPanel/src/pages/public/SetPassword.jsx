@@ -17,7 +17,7 @@ export default function SetPassword() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    document.title = 'Set password · adda';
+    document.title = 'Set password · NIVASA';
   }, []);
 
   const submit = async (e) => {
@@ -66,7 +66,7 @@ export default function SetPassword() {
         ) : (
           <>
             <h1 className="text-xl font-bold tracking-tight text-gray-800">Set your password</h1>
-            <p className="mt-1 text-xs leading-relaxed text-azea-muted">Choose a password for your adda admin account. Links expire, so finish this now.</p>
+            <p className="mt-1 text-xs leading-relaxed text-azea-muted">Choose a password for your NIVASA admin account. Links expire, so finish this now.</p>
             {error && (
               <Alert tone="danger" className="mt-4" title="Couldn’t set the password">
                 {error.message}
