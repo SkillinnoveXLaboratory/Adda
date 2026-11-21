@@ -29,7 +29,7 @@ function rangeFor(period) {
 }
 
 /**
- * Vendor earnings (GET /vendor/earnings): paid jobs only. "You earned" = cash collected − NIVASA's share;
+ * Vendor earnings (GET /vendor/earnings): paid service jobs + paid product orders. "You earned" = amount received − NIVASA's share;
  * NIVASA's share = its fee − the discounts it gave members.
  */
 export default function Earnings() {
@@ -77,6 +77,7 @@ export default function Earnings() {
   };
 
   const t = state.data?.totals;
+  const bd = state.data?.breakdown; // services + products (totals include both)
   const months = state.data?.months || [];
   const maxMonth = Math.max(1, ...months.map((x) => x.vendorEarningsPaise || 0));
 
@@ -114,19 +115,29 @@ export default function Earnings() {
                 {money(t.vendorEarningsPaise)}
               </T>
               <T size={11.5} color={colors.muted}>
-                {t.paidJobs} paid job{t.paidJobs === 1 ? '' : 's'}
+                {bd ? `${plural(bd.services?.paidJobs, 'job')} · ${plural(bd.products?.paidJobs, 'order')}` : plural(t.paidJobs, 'paid job')}
                 {state.data.range?.from ? ` · ${formatDate(state.data.range.from)} – ${formatDate(state.data.range.to)}` : ' · all time'}
               </T>
             </View>
           </View>
 
           <View style={styles.grid}>
-            <Stat label="Cash collected" value={money(t.cashCollectedPaise)} />
+            <Stat label="Amount received" value={money(t.cashCollectedPaise)} note="cash + online" />
             <Stat label="NIVASA share" value={money(t.platformNetPaise)} />
             <Stat label="NIVASA fee" value={money(t.commissionPaise)} />
             <Stat label="Member discounts" value={money(t.memberDiscountsPaise)} note="paid by NIVASA" />
           </View>
-          <Hint icon="information-circle-outline">You earned = cash collected − NIVASA’s share. NIVASA’s share is its fee minus the discounts it gave members.</Hint>
+          <Hint icon="information-circle-outline">You earned = amount received − NIVASA’s share. NIVASA’s share is its fee minus the discounts it gave members.</Hint>
+
+          {bd ? (
+            <>
+              <SectionTitle title="Services and products" />
+              <View style={styles.grid} testID="earnings-breakdown">
+                <Split title="Services" icon="maintenance" b={bd.services} unit="job" />
+                <Split title="Products" icon="market" b={bd.products} unit="order" />
+              </View>
+            </>
+          ) : null}
 
           {months.length ? (
             <>
@@ -146,7 +157,7 @@ export default function Earnings() {
                       <View style={[styles.bar, { width: `${Math.max(2, Math.round(((mo.vendorEarningsPaise || 0) / maxMonth) * 100))}%` }]} />
                     </View>
                     <T size={10.5} color={colors.muted}>
-                      {mo.paidJobs} job{mo.paidJobs === 1 ? '' : 's'} · cash {money(mo.cashCollectedPaise)} · NIVASA {money(mo.platformNetPaise)}
+                      {plural(mo.paidJobs, 'sale')} · received {money(mo.cashCollectedPaise)} · NIVASA {money(mo.platformNetPaise)}
                     </T>
                   </View>
                 ))}
@@ -154,7 +165,7 @@ export default function Earnings() {
             </>
           ) : null}
 
-          <SectionTitle title="Paid jobs" />
+          <SectionTitle title="Paid service jobs" />
           {state.items.length ? (
             <View style={{ gap: 10 }}>
               {state.items.map((it) => (
@@ -179,11 +190,32 @@ export default function Earnings() {
               {state.data.pages > state.page ? <Button title="Show more" variant="alt" loading={state.more} onPress={loadMore} /> : null}
             </View>
           ) : (
-            <EmptyState icon="wallet-outline" title="No paid jobs in this period" message="After a job, mark the booking as paid (cash) and it shows up here." />
+            <EmptyState icon="wallet-outline" title="No paid service jobs in this period" message="After a job, mark the booking as paid and it shows up here. Product orders count in the totals above." />
           )}
         </>
       ) : null}
     </Screen>
+  );
+}
+
+const plural = (n, word) => `${n || 0} ${word}${n === 1 ? '' : 's'}`;
+
+function Split({ title, icon, b, unit }) {
+  return (
+    <View style={styles.stat}>
+      <View style={styles.rowBetween}>
+        <T weight="bold" size={12.5} color={colors.navy}>
+          {title}
+        </T>
+        <NIcon name={icon} size={22} />
+      </View>
+      <T weight="extrabold" size={15} color={colors.green} numberOfLines={1}>
+        {money(b?.vendorEarningsPaise || 0)}
+      </T>
+      <T size={10.5} color={colors.muted} numberOfLines={2}>
+        {plural(b?.paidJobs, unit)} · received {money(b?.cashCollectedPaise || 0)} · NIVASA {money(b?.platformNetPaise || 0)}
+      </T>
+    </View>
   );
 }
 

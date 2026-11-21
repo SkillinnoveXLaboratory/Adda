@@ -3,6 +3,7 @@ import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, View } from 
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { LocationPicker } from '../../components/LocationPicker';
+import { PayoutStatusCard } from '../../components/PayoutStatusCard';
 import { AsyncView, Button, Card, DetailHeader, Field, Hint, LoadingList, Screen, SectionTitle, T } from '../../components/ui';
 import { useAuth } from '../../context/auth';
 import { useToast } from '../../context/toast';
@@ -15,14 +16,23 @@ import { colors } from '../../theme';
 const MAX_MB = 5;
 const sameLoc = (a, b) => (!a && !b) || (a && b && a.lat === b.lat && a.lng === b.lng && (a.label || '') === (b.label || ''));
 
-/** Shop settings (vendors): shop name, logo (purpose vendor_logo) and shop location → PUT /vendor/shop. */
+/**
+ * Shop settings (vendors): shop name, logo (purpose vendor_logo) and shop location → PUT /vendor/shop,
+ * plus the Cashfree payout account status for online payments (GET /vendor/profile → payout).
+ */
 export default function ShopSettings() {
   const profile = useApi('/vendor/profile', { refetchOnFocus: false });
   return (
     <Screen header={<DetailHeader title="Shop settings" fallback="/vendor-profile" />}>
       <AsyncView state={profile} skeleton={<LoadingList rows={3} card={90} />}>
         {/* After a save the server copy is the new baseline: remount the form with it. */}
-        {(d) => <ShopForm key={JSON.stringify(d.shop || {})} profile={d} onSaved={(p) => profile.setData(p)} />}
+        {(d) => (
+          <>
+            <ShopForm key={JSON.stringify(d.shop || {})} profile={d} onSaved={(p) => profile.setData((cur) => ({ ...cur, ...p }))} />
+            <SectionTitle title="Online payments" />
+            <PayoutStatusCard key={`${d.payout?.status}|${d.payout?.updatedAt}`} payout={d.payout} kycStatus={d.kycStatus} />
+          </>
+        )}
       </AsyncView>
     </Screen>
   );

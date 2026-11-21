@@ -11,7 +11,8 @@ import { DataTable, Pagination, Toolbar } from '../../components/DataTable.jsx';
 import { Field, Input, Select, Textarea } from '../../components/Form.jsx';
 import { Drawer, Modal, ReasonDialog } from '../../components/Modal.jsx';
 import { useToast } from '../../components/Toast.jsx';
-import { PAYMENT_METHODS } from '../../lib/finance.js';
+import { paymentMethodLabel, providerName } from '../../lib/finance.js';
+import { GatewayLabel, usePaymentGateway } from '../../components/PaymentGateway.jsx';
 
 function RefundModal({ open, onClose, payment, onDone }) {
   const toast = useToast();
@@ -104,13 +105,14 @@ function PaymentDrawer({ id, onClose, reason, onChanged }) {
           <KeyValue
             items={[
               ['Amount', formatINR(p.amountPaise)],
-              ['Method', PAYMENT_METHODS[p.method] || humanize(p.method)],
+              ['Method', paymentMethodLabel(p)],
               ['Paid on', formatDate(p.paidOn || p.createdAt)],
               ['Receipt', p.receipt?.receiptNumber],
               ['Invoice', p.invoice ? `${p.invoice.invoiceNumber} (${formatPeriod(p.invoice.period)})` : '—'],
               ['Flat', p.flat?.number],
               ['Payer', p.payer?.name],
               ['Recorded by', p.recordedBy?.name || (p.channel === 'online' ? 'Payment gateway' : '—')],
+              p.channel === 'online' ? ['Gateway', [providerName(p.provider), p.providerMethod && p.providerMethod.toUpperCase()].filter(Boolean).join(' · ') || null] : null,
               ['Reference', p.referenceNumber || p.providerPaymentId],
               p.refundedPaise ? ['Refunded', formatINR(p.refundedPaise)] : null,
               p.reversalReason ? ['Reversal reason', p.reversalReason] : null,
@@ -137,12 +139,13 @@ export default function Payments() {
   const [dl, setDl] = useState(null);
   const charges = useQuery(() => api.get('/society/charges'), []);
   const online = charges.data?.onlinePayments;
+  const gateway = usePaymentGateway();
   const columns = [
     { key: 'receipt', header: 'Receipt', render: (p) => <span className="font-mono text-[11px] font-semibold text-brand">{p.receipt?.receiptNumber || '—'}</span> },
     { key: 'date', header: 'Paid on', render: (p) => formatDate(p.paidOn || p.createdAt) },
     { key: 'flat', header: 'Flat', render: (p) => <span className="font-semibold text-gray-700">{p.flat?.number || '—'}</span> },
     { key: 'invoice', header: 'Invoice', render: (p) => (p.invoice ? <span>{p.invoice.invoiceNumber} <span className="text-gray-400">· {formatPeriod(p.invoice.period)}</span></span> : '—') },
-    { key: 'method', header: 'Method', render: (p) => PAYMENT_METHODS[p.method] || humanize(p.method) },
+    { key: 'method', header: 'Method', render: (p) => paymentMethodLabel(p) },
     { key: 'channel', header: 'Channel', render: (p) => <Badge tone={p.channel === 'online' ? 'purple' : 'info'}>{humanize(p.channel)}</Badge> },
     { key: 'amount', header: 'Amount', align: 'right', render: (p) => <span className={p.status === 'reversed' ? 'text-gray-400 line-through' : 'font-semibold text-gray-800'}>{formatINR(p.amountPaise)}</span> },
     { key: 'status', header: 'Status', render: (p) => <Badge status={p.status} /> },
@@ -181,6 +184,11 @@ export default function Payments() {
       {online && !online.available && (
         <Alert tone="warning" className="mb-5" icon="fa-solid fa-credit-card" title="Online payments are unavailable">
           {online.reason}
+        </Alert>
+      )}
+      {online?.available && (
+        <Alert tone="success" className="mb-5" icon="fa-solid fa-credit-card" title={<span className="inline-flex flex-wrap items-center gap-2">Online payments are on <GatewayLabel gateway={gateway || { gatewayConfigured: true, provider: online.provider }} /></span>}>
+          Residents pay their bills in the app through {providerName(online.provider) || 'the payment gateway'}; each payment and receipt appears here automatically.{gateway?.mode === 'sandbox' ? ' The gateway is in test mode — no real money moves.' : ''}
         </Alert>
       )}
       <Tabs className="mb-4" tabs={[{ value: '', label: 'All' }, { value: 'offline', label: 'Offline' }, { value: 'online', label: 'Online' }]} value={channel} onChange={setChannel} />

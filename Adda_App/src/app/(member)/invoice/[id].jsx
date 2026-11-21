@@ -1,5 +1,6 @@
 import { View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { PayButton, useCheckout } from '../../../components/Checkout';
 import { Logo } from '../../../components/Logo';
 import { AsyncView, Badge, Card, DetailHeader, Divider, Hint, KeyValue, ListRow, LoadingList, Screen, SectionTitle, T } from '../../../components/ui';
 import { useAuth } from '../../../context/auth';
@@ -11,6 +12,8 @@ export default function InvoiceDetail() {
   const { id } = useLocalSearchParams();
   const { user, activeMembership } = useAuth();
   const inv = useApi(`/resident/invoices/${id}`);
+  // After paying online the server records the payment + receipt; reload to show them.
+  const pay = useCheckout({ onResult: inv.refresh, onClose: inv.refresh });
 
   return (
     <Screen header={<DetailHeader title="Invoice details" fallback="/bills" />} refreshing={inv.refreshing} onRefresh={inv.refresh}>
@@ -55,11 +58,16 @@ export default function InvoiceDetail() {
               <Hint tone="amber" icon="close-circle-outline">
                 This invoice was cancelled by the society office and does not need to be paid.
               </Hint>
+            ) : d.balancePaise > 0 && d.onlinePayment?.available ? (
+              <View style={{ gap: 8 }}>
+                <PayButton title={`Pay ${money(d.balancePaise)}`} onPress={() => pay.start(`/resident/invoices/${d._id}/pay`)} loading={pay.busy} testID="invoice-pay" />
+                <T size={12} color={colors.muted} style={{ lineHeight: 17 }}>
+                  Pay securely with UPI, card or net banking. Your receipt appears here once the payment is confirmed. You can also pay at the society office.
+                </T>
+              </View>
             ) : d.balancePaise > 0 ? (
               <Hint icon="business-outline">
-                {d.onlinePayment?.available
-                  ? 'Online payment will be available here soon.'
-                  : `Pay ${money(d.balancePaise)} at your society office (cash, bank transfer, cheque or UPI). Once the office records it, your receipt appears here automatically.`}
+                {`Pay ${money(d.balancePaise)} at your society office (cash, bank transfer, cheque or UPI). Once the office records it, your receipt appears here automatically.`}
               </Hint>
             ) : (
               <Hint tone="green" icon="checkmark-circle-outline">
@@ -86,6 +94,7 @@ export default function InvoiceDetail() {
           </>
         )}
       </AsyncView>
+      {pay.sheet}
     </Screen>
   );
 }

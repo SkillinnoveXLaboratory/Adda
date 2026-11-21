@@ -14,13 +14,17 @@ const KIND_HELP = {
   service: 'Home services (plumbing, electrical, cleaning …). Shown as tiles with these icons in the app’s Home Maintenance screen, in this order.',
   complaint: 'Shown when residents raise a complaint.',
   marketplace: 'Used to classify marketplace listings.',
+  product: 'Vendor products (groceries, home decor …). Members filter the Products tab by these; vendors pick one for each product.',
 };
+
+const KIND_LABEL = { service: 'Service', product: 'Product', complaint: 'Complaint', marketplace: 'Marketplace' };
 
 function CategoryModal({ open, onClose, item, kind, basePath, platform, onSaved }) {
   const toast = useToast();
   const [v, setV] = useState({});
   const [errors, setErrors] = useState({});
   const service = kind === 'service';
+  const freeIcon = kind === 'product'; // free-text icon name (only service categories use the NIVASA icon set)
   useEffect(() => {
     if (open) {
       setV({ name: item?.name || '', icon: service ? (item ? resolveIconKey(item.icon, item.name) : '') : item?.icon || '', description: item?.description || '', active: item ? item.active !== false : true, sortOrder: String(item?.sortOrder ?? 0) });
@@ -29,21 +33,21 @@ function CategoryModal({ open, onClose, item, kind, basePath, platform, onSaved 
   }, [open, item, service]);
   const [save, busy] = useAction(
     () => {
-      const body = { kind, name: v.name.trim(), description: v.description.trim() || undefined, active: v.active, sortOrder: Number(v.sortOrder || 0), ...(service && { icon: v.icon }) };
+      const body = { kind, name: v.name.trim(), description: v.description.trim() || undefined, active: v.active, sortOrder: Number(v.sortOrder || 0), ...(service && { icon: v.icon }), ...(freeIcon && v.icon.trim() && { icon: v.icon.trim() }) };
       return item ? api.patch(`${basePath}/${item._id}`, body) : api.post(basePath, body);
     },
     { toast, success: item ? 'Category updated' : 'Category added', onDone: () => (onSaved(), onClose()) },
   );
   const submit = (e) => {
     e?.preventDefault();
-    const errs = runRules(v, { name: [req('Enter a name'), minLen(2), maxLen(80)], description: [maxLen(300)], sortOrder: [intRange(0, 1000)] });
+    const errs = runRules(v, { name: [req('Enter a name'), minLen(2), maxLen(80)], description: [maxLen(300)], icon: freeIcon ? [maxLen(60)] : [], sortOrder: [intRange(0, 1000)] });
     if (service && !v.icon) errs.icon = 'Choose an icon';
     setErrors(errs);
     if (!Object.keys(errs).length) save();
   };
   const set = (k) => (e) => (setV({ ...v, [k]: e.target.value }), setErrors((x) => ({ ...x, [k]: undefined })));
   return (
-    <Modal open={open} onClose={onClose} busy={busy} size={service ? 'lg' : undefined} title={item ? 'Edit category' : `Add ${kind} category`} icon="fa-solid fa-tags" footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={submit} loading={busy} data-testid="save-category">{item ? 'Save' : 'Add category'}</Button></>}>
+    <Modal open={open} onClose={onClose} busy={busy} size={service ? 'lg' : undefined} title={item ? 'Edit category' : `Add ${KIND_LABEL[kind] || kind} category`} icon="fa-solid fa-tags" footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={submit} loading={busy} data-testid="save-category">{item ? 'Save' : 'Add category'}</Button></>}>
       <form onSubmit={submit} noValidate className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto]">
           <Field label="Name" required error={errors.name}>
@@ -64,6 +68,11 @@ function CategoryModal({ open, onClose, item, kind, basePath, platform, onSaved 
             <IconPicker value={v.icon} name={v.name} onChange={(key) => (setV({ ...v, icon: key }), setErrors((x) => ({ ...x, icon: undefined })))} />
           </Field>
         ) : null}
+        {freeIcon ? (
+          <Field label="Icon" error={errors.icon} hint="Optional icon name the app can show with the category, e.g. basket, leaf, gift">
+            <Input name="icon" value={v.icon || ''} onChange={set('icon')} maxLength={60} invalid={Boolean(errors.icon)} placeholder="e.g. basket" />
+          </Field>
+        ) : null}
         <Field label="Description" error={errors.description}>
           <Textarea name="description" rows={2} value={v.description || ''} onChange={set('description')} />
         </Field>
@@ -81,7 +90,7 @@ function CategoryModal({ open, onClose, item, kind, basePath, platform, onSaved 
 /** Category CRUD — platform (all kinds) or society (complaint/service, society-scoped only). */
 /** `readOnly` (Master Admin sub-admin with "Categories · view"): the list without add / edit / delete. */
 export function CategoriesManager({ platform = false, writeReason, readOnly = false }) {
-  const kinds = platform ? ['service', 'complaint', 'marketplace'] : ['complaint', 'service'];
+  const kinds = platform ? ['service', 'product', 'complaint', 'marketplace'] : ['complaint', 'service'];
   const basePath = platform ? '/platform/categories' : '/society/categories';
   const toast = useToast();
   const [kind, setKind] = useState(kinds[0]);
@@ -95,6 +104,7 @@ export function CategoriesManager({ platform = false, writeReason, readOnly = fa
   const columns = [
     ...(kind === 'service' ? [{ key: 'icon', header: '', className: 'w-12', render: (c) => <CategoryIcon icon={c.icon} name={c.name} size={28} /> }] : []),
     { key: 'name', header: 'Name', render: (c) => <span className="font-semibold text-gray-700">{c.name}</span> },
+    ...(kind === 'product' ? [{ key: 'icon', header: 'Icon', render: (c) => (c.icon ? <span className="font-mono text-[11px] text-gray-500">{c.icon}</span> : <span className="text-gray-300">—</span>) }] : []),
     { key: 'desc', header: 'Description', className: 'max-w-[280px] truncate', render: (c) => c.description || '—' },
     ...(platform ? [{ key: 'sort', header: 'Order', align: 'center', render: (c) => c.sortOrder ?? 0 }] : [{ key: 'scope', header: 'Source', render: (c) => <Badge tone={c.scope === 'society' ? 'purple' : 'neutral'}>{c.scope === 'society' ? 'Your society' : 'NIVASA default'}</Badge> }]),
     { key: 'active', header: 'Status', render: (c) => <Badge status={c.active === false ? 'inactive' : 'active'} /> },
@@ -112,8 +122,8 @@ export function CategoriesManager({ platform = false, writeReason, readOnly = fa
   ].filter(Boolean);
   return (
     <div>
-      <PageHeader title="Categories" subtitle={platform ? 'Categories for home services, complaints and the marketplace' : 'Complaint and service categories residents choose from — add your own alongside the NIVASA defaults'} actions={!readOnly && <Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({})} data-testid="add-category">Add category</Button>} />
-      <Tabs className="mb-4" tabs={kinds.map((k) => ({ value: k, label: humanize(k) }))} value={kind} onChange={setKind} />
+      <PageHeader title="Categories" subtitle={platform ? 'Categories for home services, vendor products, complaints and the marketplace' : 'Complaint and service categories residents choose from — add your own alongside the NIVASA defaults'} actions={!readOnly && <Button icon="fa-solid fa-plus" disabledReason={writeReason} onClick={() => setModal({})} data-testid="add-category">Add category</Button>} />
+      <Tabs className="mb-4" tabs={kinds.map((k) => ({ value: k, label: KIND_LABEL[k] || humanize(k) }))} value={kind} onChange={setKind} />
       <div className="card">
         <Toolbar right={q.data && <span className="text-[11px] text-brand-muted">{q.data.items.length} categories</span>}>
           <p className="text-xs text-gray-500">{KIND_HELP[kind]}</p>

@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { confirm } from '../lib/dialog';
 import { dayLabel, formatDateTime, money, time12, titleCase, toPaise } from '../lib/format';
 import { colors, shadow } from '../theme';
+import { PayButton, useCheckout } from './Checkout';
 import { Badge, Button, Field, T } from './ui';
 
 const ACTION_LABEL = { accept: 'Accept', decline: 'Decline', complete: 'Mark job done', cancel: 'Cancel booking' };
@@ -45,6 +46,9 @@ export function BookingCard({ booking: b, onChanged }) {
   const paid = pay.status === 'paid';
   const priced = pr.memberPricePaise > 0 || pr.listPricePaise > 0;
   const memberPrice = pr.memberPricePaise ?? pr.listPricePaise;
+  // Members can pay a completed fixed-price job online (POST /service-bookings/:id/pay) or in cash as before.
+  const checkout = useCheckout({ onResult: onChanged, onClose: onChanged });
+  const canPayOnline = !vendorView && b.status === 'completed' && !paid && priced && (payable || 0) >= 100;
 
   const run = async (action) => {
     if (['decline', 'cancel'].includes(action)) {
@@ -112,7 +116,7 @@ export function BookingCard({ booking: b, onChanged }) {
           </T>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
             <Badge status={b.status} label={STATUS_LABEL[b.status] || titleCase(b.status)} />
-            {paid ? <Badge tone="success" label={`Paid ${money(pay.amountPaise)} · cash`} /> : vendorView && b.status === 'completed' ? <Badge tone="warning" label="Payment not recorded" /> : null}
+            {paid ? <Badge tone="success" label={`Paid ${money(pay.amountPaise)} · ${pay.method === 'online' ? 'online' : 'cash'}`} /> : vendorView && b.status === 'completed' ? <Badge tone="warning" label="Payment not recorded" /> : null}
           </View>
         </View>
       </View>
@@ -164,6 +168,16 @@ export function BookingCard({ booking: b, onChanged }) {
           Last update: {titleCase(b.timeline[b.timeline.length - 1].status)} · {formatDateTime(b.timeline[b.timeline.length - 1].at)}
         </T>
       ) : null}
+
+      {canPayOnline ? (
+        <View style={{ gap: 6 }} testID="booking-pay-online">
+          <PayButton small title={`Pay online · ${money(payable)}`} onPress={() => checkout.start(`/service-bookings/${b._id}/pay`)} loading={checkout.busy} />
+          <T size={11.5} color={colors.muted} style={{ lineHeight: 16 }}>
+            Or pay the vendor in cash — they record it and it shows here.
+          </T>
+        </View>
+      ) : null}
+      {checkout.sheet}
 
       {contact?.phone && !['declined', 'cancelled'].includes(b.status) ? (
         <View style={styles.actions}>

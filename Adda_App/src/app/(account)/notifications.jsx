@@ -9,17 +9,18 @@ import { api } from '../../lib/api';
 import { timeAgo } from '../../lib/format';
 import { colors } from '../../theme';
 
-const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', poll: 'checkbox', system: 'information-circle', vendor: 'shield-checkmark', ad: 'rocket', visitor: 'person-add' };
+const ICON = { membership: 'people', announcement: 'megaphone', complaint: 'construct', bill: 'receipt', payment: 'wallet', reminder: 'alarm', booking: 'calendar', service: 'build', listing: 'pricetag', community: 'chatbubbles', poll: 'checkbox', system: 'information-circle', vendor: 'shield-checkmark', ad: 'rocket', visitor: 'person-add', order: 'cube' };
 
 /** Maps the server's notification route hint to an app screen. */
 function hrefFor(n, isMember, isVendor) {
   const id = n.data?.id;
   const r = n.data?.route;
   if (isVendor) {
-    const vendorRoutes = { MyProperties: '/vendor-listings?tab=property', MyServices: '/vendor-listings?tab=service', VendorServices: '/vendor-listings?tab=service', VendorBookings: '/vendor-bookings', VendorAds: '/ads', VendorKyc: '/kyc', Home: '/dashboard' };
+    const vendorRoutes = { MyProperties: '/vendor-listings?tab=property', MyServices: '/vendor-listings?tab=service', VendorServices: '/vendor-listings?tab=service', VendorBookings: '/vendor-bookings', VendorAds: '/ads', VendorKyc: '/kyc', Home: '/dashboard', MyProducts: '/vendor-listings?tab=product', VendorOrders: id ? `/vendor-orders/${id}` : '/vendor-bookings?tab=orders' };
     return vendorRoutes[r] || null;
   }
   if (r === 'MyServiceBookings') return '/service-bookings';
+  if (r === 'MyOrders') return id ? `/my-orders/${id}` : '/my-orders';
   if (!isMember && !['MyProperties', 'MyMarketplace', 'MyServices'].includes(r)) return null;
   switch (r) {
     case 'Invoice':

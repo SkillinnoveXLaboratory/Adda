@@ -134,7 +134,7 @@ export function Card({ children, style, onPress, accessibilityLabel }) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
-export function Button({ title, onPress, variant = 'primary', icon, loading, disabled, style, small, accessibilityLabel }) {
+export function Button({ title, onPress, variant = 'primary', icon, loading, disabled, style, small, accessibilityLabel, testID }) {
   const v = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.primary;
   const isDisabled = disabled || loading;
   return (
@@ -143,6 +143,7 @@ export function Button({ title, onPress, variant = 'primary', icon, loading, dis
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel || title}
       accessibilityState={{ disabled: !!isDisabled, busy: !!loading }}
+      testID={testID}
       style={({ pressed }) => [styles.button, small && styles.buttonSmall, v.box, isDisabled && styles.disabled, pressed && !isDisabled && { transform: [{ scale: 0.98 }] }, style]}
     >
       {loading ? (

@@ -128,7 +128,7 @@ function BookingForm({ offer }) {
       <Field label="Address for the visit" value={address} onChangeText={setAddress} multiline maxLength={300} placeholder="Flat, building, society, area" error={errors.address} />
       <Field label="Note for the vendor (optional)" value={note} onChangeText={setNote} multiline maxLength={500} placeholder="e.g. AC is not cooling; please bring gas" />
 
-      <Hint icon="cash-outline">Pay the vendor directly after the job is done. They record the payment, and you’ll see it under My service bookings.</Hint>
+      <Hint icon="cash-outline">Pay after the job is done — in cash to the vendor (they record it) or online from My service bookings.</Hint>
     </Screen>
   );
 }

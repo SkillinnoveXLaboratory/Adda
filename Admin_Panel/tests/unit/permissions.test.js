@@ -59,12 +59,15 @@ describe('platform permissions', () => {
     expect(areaForPath('/admin')).toBe('dashboard');
     expect(areaForPath('/admin/vendors/abc')).toBe('vendors');
     expect(areaForPath('/admin/service-bookings')).toBe('service_bookings');
+    expect(areaForPath('/admin/product-orders')).toBe('orders');
     expect(areaForPath('/admin/subadmins')).toBe('owner');
     expect(areaForPath('/admin/users')).toBe('accounts');
   });
 
   it('earnings is a view-only area with its own page and sidebar item', () => {
     expect(VIEW_ONLY_AREAS.has('earnings')).toBe(true);
+    expect(VIEW_ONLY_AREAS.has('orders')).toBe(true);
+    expect(canManageArea(sub(['orders.view', 'orders.manage']), 'orders')).toBe(false);
     expect(normalizePermissions(['earnings.manage'])).toEqual([]);
     expect(normalizePermissions(['earnings.view'])).toEqual(['earnings.view']);
     const u = sub(['earnings.view']);

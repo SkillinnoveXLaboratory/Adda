@@ -8,6 +8,7 @@ import { KycStatusCard } from '../../../components/KycStatusCard';
 import { NIcon } from '../../../components/NivasaIcons';
 import { GridTile, TileGrid } from '../../../components/Tiles';
 import { useAuth } from '../../../context/auth';
+import { orderCount } from '../../../components/VendorOrderCard';
 import { useApi } from '../../../hooks/useApi';
 import { greeting, money } from '../../../lib/format';
 import { colors, shadow } from '../../../theme';
@@ -20,12 +21,15 @@ export default function VendorDashboard() {
   const dash = useApi('/vendor/dashboard');
   const open = useApi('/vendor/bookings', { query: { status: 'open', limit: 3 } });
   const unread = useApi('/notifications', { query: { limit: 1 } });
+  // Product orders summary: `counts` (all statuses) come with any page of GET /vendor/orders.
+  const orders = useApi('/vendor/orders', { query: { status: 'open', limit: 1 } });
   const d = dash.data;
   const verified = d?.kycStatus === 'approved';
   const refresh = () => {
     dash.refresh();
     open.refresh();
     unread.refresh();
+    orders.refresh();
     refreshProfile().catch(() => {});
   };
   const needKyc = (go) => () => (verified ? go() : router.push('/kyc'));
@@ -106,6 +110,8 @@ export default function VendorDashboard() {
           </Pressable>
         ) : null}
 
+        {verified && orders.data ? <OrdersCard open={orderCount(orders.data.counts, 'open')} fresh={orders.data.counts?.placed || 0} delivered={orders.data.counts?.delivered || 0} /> : null}
+
         <SectionTitle title="Quick actions" />
         <TileGrid columns={3}>
           <GridTile nicon="shop" label={'Shop\nsettings'} onPress={() => router.push('/shop')} testID="vendor-shop" />
@@ -133,6 +139,27 @@ export default function VendorDashboard() {
         )}
       </View>
     </Screen>
+  );
+}
+
+/** Product orders at a glance (open to fulfil, new to confirm); opens the Orders side of the Bookings tab. */
+function OrdersCard({ open, fresh, delivered }) {
+  const summary = open ? `${open} open${fresh ? ` · ${fresh} new to confirm` : ''}` : delivered ? `No open orders · ${delivered} delivered` : 'No orders yet. Add products members can buy.';
+  return (
+    <Pressable onPress={() => router.push({ pathname: '/vendor-bookings', params: { tab: 'orders' } })} accessibilityRole="button" accessibilityLabel={`Product orders: ${summary}. View orders`} style={({ pressed }) => [styles.orders, pressed && { borderColor: colors.gold }]} testID="vendor-orders-card">
+      <NIcon name="market" size={34} />
+      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        <T weight="bold" size={13.5} color={colors.navy}>
+          Product orders
+        </T>
+        <T size={12} color={colors.muted} numberOfLines={2}>
+          {summary}
+        </T>
+      </View>
+      <T weight="bold" size={12} color={colors.link}>
+        View
+      </T>
+    </Pressable>
   );
 }
 
@@ -176,6 +203,7 @@ const styles = StyleSheet.create({
   stat: { width: '48%', flexGrow: 1, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 1, ...shadow.card },
   empty: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14 },
   settle: { backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 6, ...shadow.card },
+  orders: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, minHeight: 64, ...shadow.card },
   settleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   settleTotal: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8, marginTop: 2 },
 });

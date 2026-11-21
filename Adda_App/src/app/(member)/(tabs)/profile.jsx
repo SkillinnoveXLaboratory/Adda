@@ -12,6 +12,7 @@ import { colors } from '../../../theme';
 
 const OPTIONS = [
   ['My Service Bookings', 'calendar-number-outline', '/service-bookings'],
+  ['My Orders', 'cube-outline', '/my-orders'],
   ['My Listings', 'pricetags-outline', '/my-listings'],
   ['My Society', 'business-outline', '/memberships'],
   ['My Bookings', 'calendar-outline', '/bookings'],

@@ -16,6 +16,11 @@ import { SetupLinkModal } from '../../components/SetupLinkModal.jsx';
 import { LocationInfo } from '../../components/LocationInfo.jsx';
 import { ShopLogo } from '../../components/ShopLogo.jsx';
 
+const SETTLEMENT_HELP = {
+  cashfree_split: 'Residents pay through Cashfree and each payment is split straight to the society’s bank account (the society’s Cashfree Easy Split vendor). NIVASA keeps nothing.',
+  platform_collect: 'Residents pay into NIVASA’s Cashfree account; NIVASA pays the society outside the app. Use only when that arrangement is agreed in writing.',
+};
+
 /** Online payment settings; `readOnly` (Societies · view only) shows the values without Save. */
 function PaymentsConfig({ society, onSaved, readOnly = false }) {
   const toast = useToast();
@@ -29,6 +34,7 @@ function PaymentsConfig({ society, onSaved, readOnly = false }) {
     e.preventDefault();
     if (v.onlineEnabled && v.settlementMode === 'none') return setError('Choose a verified settlement mode before enabling online collection');
     if (v.settlementMode === 'razorpay_route' && !/^acc_[A-Za-z0-9]+$/.test(v.linkedAccountId.trim())) return setError('Razorpay Route needs the society’s linked account id (acc_…)');
+    if (v.settlementMode === 'cashfree_split' && !/^[A-Za-z0-9_]{3,50}$/.test(v.linkedAccountId.trim())) return setError('Cashfree Easy Split needs the society’s Cashfree vendor id: 3–50 letters, digits or _ (e.g. society_greenpark)');
     setError(null);
     save();
   };
@@ -37,13 +43,15 @@ function PaymentsConfig({ society, onSaved, readOnly = false }) {
       <p className="text-xs leading-relaxed text-gray-600">
         Residents can pay maintenance online only when (1) the server has payment-gateway keys configured, and (2) you have verified where this society’s money settles and enabled it here. Until then residents see “online payment unavailable” and the society records payments offline.
       </p>
-      <Toggle label="Enable online collection" description="Turn on only after verifying the society’s bank / Razorpay account." checked={v.onlineEnabled} disabled={readOnly} onChange={(x) => (setV({ ...v, onlineEnabled: x }), setError(null))} />
+      <Toggle label="Enable online collection" description="Turn on only after verifying the society’s bank or payment-gateway account." checked={v.onlineEnabled} disabled={readOnly} onChange={(x) => (setV({ ...v, onlineEnabled: x }), setError(null))} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Settlement mode">
           <Select value={v.settlementMode || 'none'} disabled={readOnly} onChange={(e) => (setV({ ...v, settlementMode: e.target.value }), setError(null))}>
             <option value="none">None (not verified)</option>
             <option value="razorpay_route">Razorpay Route (linked account)</option>
             <option value="society_merchant">Society’s own merchant account</option>
+            <option value="cashfree_split">Cashfree Easy Split → society bank</option>
+            <option value="platform_collect">Collected by NIVASA, settled manually</option>
           </Select>
         </Field>
         {v.settlementMode === 'razorpay_route' && (
@@ -51,7 +59,13 @@ function PaymentsConfig({ society, onSaved, readOnly = false }) {
             <Input value={v.linkedAccountId || ''} readOnly={readOnly} onChange={(e) => (setV({ ...v, linkedAccountId: e.target.value }), setError(null))} placeholder="acc_XXXXXXXXXXXX" className="font-mono" />
           </Field>
         )}
+        {v.settlementMode === 'cashfree_split' && (
+          <Field label="Society’s Cashfree vendor id" hint="From Cashfree → Easy Split → Vendors. 3–50 letters, digits or _.">
+            <Input value={v.linkedAccountId || ''} readOnly={readOnly} maxLength={50} onChange={(e) => (setV({ ...v, linkedAccountId: e.target.value }), setError(null))} placeholder="society_greenpark" className="font-mono" data-testid="cashfree-vendor-id" />
+          </Field>
+        )}
       </div>
+      {SETTLEMENT_HELP[v.settlementMode] && <p className="text-[11px] leading-relaxed text-brand-muted">{SETTLEMENT_HELP[v.settlementMode]}</p>}
       {error && <Alert tone="danger">{error}</Alert>}
       {society.payments?.verifiedAt && (
         <p className="text-[11px] text-brand-muted">

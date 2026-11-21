@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { api, mediaHref } from '../lib/api.js';
 import { useAction, usePaged } from '../lib/hooks.js';
 import { formatDateTime, formatINR, formatNumber, formatPhone, formatRelative, humanize, plural } from '../lib/format.js';
@@ -9,7 +9,10 @@ import { Checkbox, Select } from './Form.jsx';
 import { Drawer, ReasonDialog } from './Modal.jsx';
 import { useToast } from './Toast.jsx';
 
-const KIND_ICON = { property: 'fa-solid fa-house', marketplace: 'fa-solid fa-tag', service: 'fa-solid fa-screwdriver-wrench' };
+const KIND_ICON = { property: 'fa-solid fa-house', marketplace: 'fa-solid fa-tag', service: 'fa-solid fa-screwdriver-wrench', product: 'fa-solid fa-box' };
+const KINDS = ['property', 'marketplace', 'service', 'product'];
+const KIND_NOUN = { service: 'service', product: 'product' };
+const kindPlural = (kind) => ({ service: 'services', product: 'products' })[kind] || `${kind} listings`;
 const PRICE_SUFFIX = { starting_from: 'from', per_hour: '/hour', per_visit: '/visit' };
 /** Listing price as the owner set it (services can be "on request" or per hour / visit). */
 export const priceText = (l, kind, whole = true) => {
@@ -24,14 +27,16 @@ export const priceText = (l, kind, whole = true) => {
 const DECISION = { approved: ['Approve', 'success-outline', 'fa-solid fa-check'], rejected: ['Reject', 'danger-outline', 'fa-solid fa-xmark'], removed: ['Remove', 'danger-outline', 'fa-regular fa-trash-can'] };
 
 /**
- * Property / marketplace / service-offer moderation queue.
+ * Property / marketplace / service-offer / vendor-product moderation queue (products: platform only).
  * society: GET /society/listings, POST /society/listings/:kind/:id/moderate
  * platform: GET /platform/listings (+scope, reported), POST /platform/listings/:kind/:id/moderate
  */
 export function ListingsModeration({ platform = false, onChanged, readOnly = false }) {
   const toast = useToast();
   const base = platform ? '/platform/listings' : '/society/listings';
-  const [kind, setKind] = useState('property');
+  const [params] = useSearchParams();
+  // ?kind=product (linked from a vendor's page) opens that tab.
+  const [kind, setKind] = useState(() => (KINDS.includes(params.get('kind')) && (platform || params.get('kind') !== 'product') ? params.get('kind') : 'property'));
   const [status, setStatus] = useState('pending');
   const [scope, setScope] = useState('');
   const [reported, setReported] = useState(false);
@@ -44,13 +49,15 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
     onDone: () => (setAct(null), setView(null), list.reload(), onChanged?.()),
   });
 
-  const owner = (l) => l.owner || l.seller || l.provider;
+  const owner = (l) => l.owner || l.seller || l.provider || l.vendor;
   const describe = (l) =>
     kind === 'property'
       ? `${humanize(l.listingType)} · ${humanize(l.propertyType)}${l.bedrooms ? ` · ${l.bedrooms} BHK` : ''}`
       : kind === 'service'
         ? [l.category?.name, l.experienceYears ? `${l.experienceYears} yrs exp.` : null].filter(Boolean).join(' · ')
-        : humanize(l.condition);
+        : kind === 'product'
+          ? [l.category?.name, l.unit, l.status === 'paused' ? 'Paused by vendor' : null].filter(Boolean).join(' · ')
+          : humanize(l.condition);
   // readOnly (Listings · view only): no moderation buttons.
   const decisions = (l) => (readOnly ? [] : ['approved', 'rejected', 'removed']).filter((d) => d !== l.moderationStatus && !(d === 'rejected' && l.moderationStatus === 'removed'));
   const columns = [
@@ -67,9 +74,22 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
         </div>
       ),
     },
-    { key: 'price', header: 'Price', align: 'right', render: (l) => <span className="font-semibold text-gray-700">{priceText(l, kind)}{kind === 'property' && l.listingType === 'rent' ? <span className="text-[10px] font-normal text-gray-400">/mo</span> : null}</span> },
-    ...(platform ? [{ key: 'society', header: 'Society', render: (l) => l.society?.name || <span className="text-gray-400">Independent</span> }] : []),
-    { key: 'owner', header: { property: 'Vendor', marketplace: 'Seller', service: 'Vendor' }[kind], render: (l) => owner(l)?.name || '—' },
+    { key: 'price', header: kind === 'product' ? 'Vendor price' : 'Price', align: 'right', render: (l) => <span className="font-semibold text-gray-700">{priceText(l, kind)}{kind === 'property' && l.listingType === 'rent' ? <span className="text-[10px] font-normal text-gray-400">/mo</span> : null}{kind === 'product' && l.unit ? <span className="block text-[10px] font-normal text-gray-400">per {l.unit}</span> : null}</span> },
+    ...(kind === 'product' ? [{ key: 'stock', header: 'Stock', align: 'right', render: (l) => (l.stock > 0 ? formatNumber(l.stock) : <Badge tone="danger">Out of stock</Badge>) }] : []),
+    ...(platform && kind !== 'product' ? [{ key: 'society', header: 'Society', render: (l) => l.society?.name || <span className="text-gray-400">Independent</span> }] : []),
+    {
+      key: 'owner',
+      header: { property: 'Vendor', marketplace: 'Seller', service: 'Vendor', product: 'Vendor' }[kind],
+      render: (l) =>
+        kind === 'product' ? (
+          <div className="min-w-0 max-w-[160px]">
+            <p className="truncate font-medium text-gray-700">{owner(l)?.name || '—'}</p>
+            {owner(l)?.phone && <p className="truncate font-mono text-[11px] text-gray-400">{owner(l).phone}</p>}
+          </div>
+        ) : (
+          owner(l)?.name || '—'
+        ),
+    },
     { key: 'created', header: 'Posted', render: (l) => formatRelative(l.createdAt) },
     { key: 'status', header: 'Status', render: (l) => <Badge status={l.moderationStatus} /> },
     {
@@ -89,13 +109,14 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
   const v = view;
   return (
     <div>
-      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property and service listings from verified vendors, and marketplace listings from members, across Nivasa' : 'Listings linked to your society'} />
+      <PageHeader title={platform ? 'Listings moderation' : 'Listings'} subtitle={platform ? 'Property listings, services and products from verified vendors, and marketplace listings from members, across Nivasa' : 'Listings linked to your society'} />
       <Tabs
         className="mb-4"
         tabs={[
           { value: 'property', label: 'Property', icon: 'fa-solid fa-house' },
           { value: 'marketplace', label: 'Marketplace', icon: 'fa-solid fa-tag' },
           { value: 'service', label: 'Services', icon: KIND_ICON.service },
+          ...(platform ? [{ value: 'product', label: 'Products', icon: KIND_ICON.product }] : []),
         ]}
         value={kind}
         onChange={setKind}
@@ -109,7 +130,7 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
               </option>
             ))}
           </Select>
-          {platform && (
+          {platform && kind !== 'product' && (
             <Select value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Scope" className="sm:w-48">
               <option value="">All listings</option>
               <option value="independent">Independent (no society)</option>
@@ -117,7 +138,7 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
           )}
           {platform && <Checkbox checked={reported} onChange={setReported} label="Reported only" />}
         </Toolbar>
-        <DataTable testId="listings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={setView} empty={<EmptyState compact icon={KIND_ICON[kind]} title={`No ${status} ${kind === 'service' ? 'services' : `${kind} listings`}`} message={status === 'pending' ? 'New listings that need review appear here.' : undefined} />} />
+        <DataTable testId="listings-table" columns={columns} rows={list.data?.items} loading={list.loading} error={list.error} onRetry={list.reload} dim={list.reloading} onRowClick={setView} empty={<EmptyState compact icon={KIND_ICON[kind]} title={`No ${status} ${kindPlural(kind)}`} message={status === 'pending' ? 'New listings that need review appear here.' : undefined} />} />
         {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       </div>
 
@@ -152,6 +173,7 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
             <div className="flex flex-wrap items-center gap-2">
               <Badge status={v.moderationStatus} />
               <span className="text-lg font-bold text-gray-800">{priceText(v, kind, false)}</span>
+              {kind === 'product' && <span className="text-[11px] text-gray-400">vendor price{v.unit ? ` per ${v.unit}` : ''} · members pay this + commission</span>}
               {v.negotiable && <Badge tone="info">Negotiable</Badge>}
             </div>
             {v.description && <p className="whitespace-pre-wrap text-xs leading-relaxed text-gray-600">{v.description}</p>}
@@ -159,11 +181,16 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
               {[
                 ['Location', [v.locality || v.serviceArea, v.city].filter(Boolean).join(', ')],
                 kind === 'property' ? ['Type', `${humanize(v.listingType)} · ${humanize(v.propertyType)}`] : ['Category', v.category?.name],
-                kind === 'property' ? ['Area', v.areaSqft ? `${formatNumber(v.areaSqft)} sq ft` : null] : kind === 'service' ? ['Pricing', humanize(v.priceType)] : ['Condition', humanize(v.condition)],
-                kind === 'property' ? ['Furnishing', v.furnishing && humanize(v.furnishing)] : ['Visibility', humanize(v.visibility)],
+                kind === 'property' ? ['Area', v.areaSqft ? `${formatNumber(v.areaSqft)} sq ft` : null] : kind === 'service' ? ['Pricing', humanize(v.priceType)] : kind === 'product' ? ['Vendor price', formatINR(v.pricePaise)] : ['Condition', humanize(v.condition)],
+                kind === 'property' ? ['Furnishing', v.furnishing && humanize(v.furnishing)] : kind === 'product' ? ['Unit', v.unit] : ['Visibility', humanize(v.visibility)],
+                kind === 'product' && ['Stock', v.stock > 0 ? `${formatNumber(v.stock)} in stock` : 'Out of stock'],
+                kind === 'product' && ['Max per order', v.maxPerOrder ? String(v.maxPerOrder) : null],
+                kind === 'product' && ['Fulfilment', [v.delivery && `Delivery${v.deliveryChargePaise ? ` (${formatINR(v.deliveryChargePaise)})` : ' (free)'}`, v.pickup && 'Pickup'].filter(Boolean).join(' · ')],
+                kind === 'product' && ['Selling', v.status === 'paused' ? 'Paused by vendor' : 'Active'],
+                kind === 'product' && ['Vendor mobile', owner(v)?.phone ? <span className="font-mono">{owner(v).phone}</span> : null],
                 kind === 'service' && ['Experience', v.experienceYears ? `${v.experienceYears} years` : null],
                 kind === 'service' && ['Availability', v.availabilityNote],
-                ['Contact', [v.contactName, formatPhone(v.contactPhone)].filter((x) => x && x !== '—').join(' · ')],
+                kind !== 'product' && ['Contact', [v.contactName, formatPhone(v.contactPhone)].filter((x) => x && x !== '—').join(' · ')],
                 ['Posted by', platform && kind !== 'marketplace' && owner(v)?._id ? <Link className="link" to={`/admin/vendors/${owner(v)._id}`}>{owner(v).name || 'Vendor'}</Link> : owner(v)?.name],
                 ['Reports', String(v.reportCount || 0)],
                 v.moderationNote && ['Moderator note', v.moderationNote],
@@ -179,7 +206,7 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
           </div>
         )}
       </Drawer>
-      <ReasonDialog open={Boolean(act)} onClose={() => setAct(null)} onSubmit={(n) => run(n)} busy={busy} required={false} tone={act?.decision === 'approved' ? 'primary' : 'danger'} label={kind === 'marketplace' ? 'Note to the seller' : 'Note to the vendor'} title={`${DECISION[act?.decision]?.[0] || ''} ${kind === 'service' ? 'service' : 'listing'}`} confirmLabel={DECISION[act?.decision]?.[0]} message={`“${act?.item?.title}” will be ${act?.decision}. The ${kind === 'marketplace' ? 'seller' : 'vendor'} is notified.`} />
+      <ReasonDialog open={Boolean(act)} onClose={() => setAct(null)} onSubmit={(n) => run(n)} busy={busy} required={false} tone={act?.decision === 'approved' ? 'primary' : 'danger'} label={kind === 'marketplace' ? 'Note to the seller' : 'Note to the vendor'} title={`${DECISION[act?.decision]?.[0] || ''} ${KIND_NOUN[kind] || 'listing'}`} confirmLabel={DECISION[act?.decision]?.[0]} message={`“${act?.item?.title}” will be ${act?.decision}. The ${kind === 'marketplace' ? 'seller' : 'vendor'} is notified.`} />
     </div>
   );
 }

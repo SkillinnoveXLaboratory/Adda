@@ -20,6 +20,67 @@ const DOCS = [
   ['aadhaarFront', 'Aadhaar · front'],
   ['aadhaarBack', 'Aadhaar · back'],
 ];
+const PAYOUT_STATUS = {
+  not_created: ['Not created', 'neutral'],
+  pending: ['Pending', 'warning'],
+  active: ['Active', 'success'],
+  failed: ['Failed', 'danger'],
+  blocked: ['Blocked', 'danger'],
+};
+
+/**
+ * Cashfree Easy Split vendor account: needed before members can pay this vendor online (services, products).
+ * Create / refresh → POST /platform/vendors/:id/payout (vendors.manage).
+ */
+function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, className = '' }) {
+  const toast = useToast();
+  const po = payout || { status: 'not_created', available: false };
+  const [label, tone] = PAYOUT_STATUS[po.status] || [humanize(po.status), 'neutral'];
+  const [sync, syncing] = useAction(() => api.post(`/platform/vendors/${vendorId}/payout`), {
+    toast,
+    success: (r) => (r?.status === 'active' ? 'Payout account is active' : `Payout account: ${(PAYOUT_STATUS[r?.status]?.[0] || humanize(r?.status || 'updated')).toLowerCase()}`),
+    onDone: onSaved,
+  });
+  const blocked = !po.available ? 'Cashfree is not configured on the server' : kycStatus !== 'approved' ? 'Approve the vendor’s KYC first' : null;
+  return (
+    <Card
+      className={className}
+      title="Cashfree payout account"
+      actions={
+        canManage && (
+          <Button size="xs" variant="outline" icon="fa-solid fa-rotate-right" loading={syncing} disabledReason={blocked} onClick={() => sync()} data-testid="payout-sync">
+            Create / refresh
+          </Button>
+        )
+      }
+    >
+      <div data-testid="vendor-payout">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Badge tone={tone}>{label}</Badge>
+          {po.ready && <span className="text-[11px] text-emerald-600">Members can pay this vendor online</span>}
+        </div>
+        {!po.available && (
+          <Alert tone="warning" className="mb-3">
+            Cashfree is not configured on the server, so payout accounts can’t be created and members can only pay this vendor in cash.
+          </Alert>
+        )}
+        <KeyValue
+          items={[
+            ['Cashfree vendor id', po.cfVendorId ? <span key="cf" className="font-mono">{po.cfVendorId}</span> : null],
+            ['Provider status', po.providerStatus],
+            ['Message', po.message],
+            ['Last updated', po.updatedAt ? formatDateTime(po.updatedAt) : null],
+          ]}
+        />
+        <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">
+          Created from the approved KYC (bank + PAN) when KYC is approved. Online payments to this vendor need an <b>active</b> account; until then members pay cash (COD). The vendor’s account needs an email address.
+          {!canManage && ' Creating or refreshing it needs the “Vendors & KYC · manage” permission.'}
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 const spacedAadhaar = (a) => String(a || '').replace(/\D/g, '').replace(/(\d{4})(?=\d)/g, '$1 ');
 
 /** One private KYC document: thumbnail (image) or a PDF tile, opening the full file in a new tab. */
@@ -107,7 +168,7 @@ export default function VendorDetail() {
 
   return (
     <QueryState query={q} skeleton={<PageSkeleton cards={4} rows={6} />}>
-      {({ user: u, profile: p, counts, kycAvailable, settlement, pricing }) => {
+      {({ user: u, profile: p, counts, kycAvailable, settlement, pricing, payout }) => {
         const status = p?.kycStatus || 'not_submitted';
         const canApprove = ['pending', 'rejected'].includes(status);
         const canReject = ['pending', 'approved'].includes(status);
@@ -165,10 +226,38 @@ export default function VendorDetail() {
               </Alert>
             )}
 
-            <div className="mb-6 grid grid-cols-2 gap-4 sm:gap-6 xl:grid-cols-4">
+            <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6 xl:grid-cols-6">
               <MetricCard tone="purple" label="Properties" value={counts.properties} icon="fa-solid fa-house" />
               <MetricCard tone="cyan" label="Services" value={counts.services} icon="fa-solid fa-screwdriver-wrench" />
               <MetricCard tone="green" label="Bookings" value={counts.bookings} icon="fa-regular fa-calendar-check" />
+              <MetricCard
+                tone="purple"
+                label="Products"
+                value={counts.products ?? 0}
+                icon="fa-solid fa-box"
+                testId="vendor-products-count"
+                footer={
+                  canView('listings') ? (
+                    <Link to="/admin/listings?kind=product" className="link text-[11px]">
+                      Product moderation
+                    </Link>
+                  ) : null
+                }
+              />
+              <MetricCard
+                tone="cyan"
+                label="Orders"
+                value={counts.orders ?? 0}
+                icon="fa-solid fa-bag-shopping"
+                testId="vendor-orders-count"
+                footer={
+                  canView('orders') ? (
+                    <Link to={`/admin/product-orders?vendorId=${u._id}`} className="link text-[11px]" data-testid="vendor-orders-link">
+                      View product orders
+                    </Link>
+                  ) : null
+                }
+              />
               <MetricCard tone="orange" label="Ads" value={counts.ads} icon="fa-solid fa-rocket" />
             </div>
 
@@ -232,6 +321,8 @@ export default function VendorDetail() {
                 <p className="mt-4 text-[11px] text-brand-muted">The vendor sets the shop name, logo and location in the app (Shop settings).</p>
               </Card>
             </div>
+
+            <PayoutCard className="mb-6" vendorId={u._id} payout={payout} kycStatus={status} canManage={manage} onSaved={q.reload} />
 
             <div className="mb-6 grid grid-cols-12 gap-6">
               <Card className="col-span-12 lg:col-span-5" title="Account">

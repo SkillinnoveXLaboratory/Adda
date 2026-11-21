@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.jsx';
-import { useDebounced, usePaged, useQuery } from '../../lib/hooks.js';
+import { usePaged, useQuery } from '../../lib/hooks.js';
 import { formatDate, formatDateTime, formatINR, formatINRShort, formatNumber, plural, todayIST } from '../../lib/format.js';
 import { monthLabel, PERIODS, periodRange, rangeError } from '../../lib/period.js';
 import { Alert, Button, Card, cx, EmptyState, ErrorState, Icon, PageHeader, Skeleton, Tabs } from '../../components/ui.jsx';
@@ -10,6 +10,7 @@ import { DataTable, Pagination } from '../../components/DataTable.jsx';
 import { Field, Input } from '../../components/Form.jsx';
 import { BarChart, Legend, MetricCard, SERIES } from '../../components/Charts.jsx';
 import { NetAmount } from '../../components/Settlement.jsx';
+import { VendorPicker } from '../../components/VendorPicker.jsx';
 import { formatPercent } from '../../lib/pricing.js';
 
 const money = (paise, none = '—') => (paise === null || paise === undefined ? <span className="whitespace-nowrap text-gray-300">{none}</span> : <span className="whitespace-nowrap">{formatINR(paise)}</span>);
@@ -56,7 +57,7 @@ export default function Earnings() {
           )
         }
         title="Earnings"
-        subtitle="NIVASA’s commission on vendor services, the member discounts given back, NIVASA’s net earnings and what vendors earned. Figures are fixed when the vendor records the cash."
+        subtitle="NIVASA’s commission on vendor services and products, the member discounts given back, NIVASA’s net earnings and what vendors earned. Figures are fixed when the payment is recorded (cash or online)."
       />
 
       <div className="mb-6 flex flex-col gap-3">
@@ -71,7 +72,7 @@ export default function Earnings() {
               </button>
             </span>
           ) : (
-            canSeeVendors && <VendorPicker onPick={setVendor} />
+            canSeeVendors && <VendorPicker onPick={setVendor} testId="earnings-vendor-picker" />
           )}
         </div>
         {period === 'custom' && <CustomRange value={custom} onApply={setCustom} />}
@@ -95,8 +96,14 @@ export default function Earnings() {
             <MetricCard tone="orange" label="Member discounts" value={formatINR(t.memberDiscountsPaise)} icon="fa-solid fa-tag" footer="Given back to members out of the commission" testId="earn-discounts" />
             <MetricCard tone="cyan" label="Vendor earnings" value={formatINR(t.vendorEarningsPaise)} icon="fa-solid fa-wallet" footer="Cash − NIVASA net" testId="earn-vendors" />
             <MetricCard tone="purple" label="Member prices" value={formatINR(t.grossPaise)} icon="fa-solid fa-indian-rupee-sign" footer={`${formatINR(t.cashCollectedPaise)} cash + ${formatINR(t.memberDiscountsPaise)} member discounts`} testId="earn-gross" />
-            <MetricCard tone="green" label="Paid jobs" value={formatNumber(t.paidJobs)} icon="fa-solid fa-circle-check" footer="Jobs vendors marked as paid" testId="earn-jobs" />
+            <MetricCard tone="green" label="Paid jobs & orders" value={formatNumber(t.paidJobs)} icon="fa-solid fa-circle-check" footer={d.breakdown ? `${formatNumber(d.breakdown.services?.paidJobs || 0)} service jobs · ${formatNumber(d.breakdown.products?.paidJobs || 0)} product orders` : 'Jobs vendors marked as paid'} testId="earn-jobs" />
           </div>
+
+          {d.breakdown && (
+            <Card title="Services vs products" padded={false}>
+              <Breakdown breakdown={d.breakdown} totals={t} />
+            </Card>
+          )}
 
           <Card title="By month">
             <MonthChart months={d.months || []} />
@@ -114,7 +121,7 @@ export default function Earnings() {
             <Pagination page={list.page} pages={d.pages || 1} total={d.total || 0} limit={list.limit} onPage={list.setPage} />
           </Card>
           <Alert tone="info" title="How it is worked out">
-            Each vendor has their own rates (set on the vendor’s page). <b>Member price</b> = vendor price + <b>commission</b> (commission % of the vendor price). A member who applies the discount pays member price − <b>member discount</b> (discount % of the commission). For each paid job: <b>NIVASA net</b> = commission − member discount; <b>vendor earned</b> = cash − NIVASA net. For “price on request” jobs the commission is taken out of the cash recorded. Vendors collect the cash, so NIVASA’s net is settled with them separately (see Service bookings).
+            Each vendor has their own rates (set on the vendor’s page). <b>Member price</b> = vendor price + <b>commission</b> (commission % of the vendor price). A member who applies the discount pays member price − <b>member discount</b> (discount % of the commission). For each paid job: <b>NIVASA net</b> = commission − member discount; <b>vendor earned</b> = cash − NIVASA net. For “price on request” jobs the commission is taken out of the cash recorded. Vendors collect the cash, so NIVASA’s net is settled with them separately (see Service bookings). Product orders use the same rates per unit (the delivery charge goes to the vendor, without commission); cash-on-delivery orders count when delivered, online orders when paid — Cashfree splits the vendor’s share at payment. The “Paid jobs” list below shows service bookings only (see Product orders).
           </Alert>
         </div>
       )}
@@ -122,53 +129,33 @@ export default function Earnings() {
   );
 }
 
-function VendorPicker({ onPick }) {
-  const [text, setText] = useState('');
-  const [open, setOpen] = useState(false);
-  const q = useDebounced(text.trim());
-  const listId = useId();
-  const res = useQuery(() => (q.length >= 2 ? api.get('/platform/vendors', { q, limit: 8, sort: 'businessName' }) : Promise.resolve(null)), [q]);
-  const items = res.data?.items || [];
-  return (
-    <div className="relative w-full lg:w-72" data-testid="earnings-vendor-picker">
-      <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
-        <Icon name="fa-solid fa-magnifying-glass" className="text-xs" />
-      </span>
-      <input
-        type="search"
-        value={text}
-        onChange={(e) => (setText(e.target.value), setOpen(true))}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        placeholder="Filter by vendor (name, business)…"
-        aria-label="Filter by vendor"
-        role="combobox"
-        aria-expanded={open && q.length >= 2}
-        aria-controls={listId}
-        className="form-input pl-8"
-      />
-      {open && q.length >= 2 && (
-        <ul id={listId} role="listbox" className="absolute right-0 z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-gray-100 bg-white py-1 shadow-lg">
-          {res.loading && !res.data ? (
-            <li className="px-3 py-2 text-xs text-gray-400">Searching…</li>
-          ) : res.error ? (
-            <li className="px-3 py-2 text-xs text-rose-500">{res.error.message}</li>
-          ) : !items.length ? (
-            <li className="px-3 py-2 text-xs text-gray-400">No vendors match</li>
-          ) : (
-            items.map((v) => (
-              <li key={v._id} role="option" aria-selected="false">
-                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => (onPick(v._id), setText(''), setOpen(false))} className="flex min-h-[40px] w-full flex-col items-start px-3 py-1.5 text-left hover:bg-gray-50">
-                  <span className="max-w-full truncate text-xs font-semibold text-gray-700">{vendorLabel(v)}</span>
-                  {v.businessName && v.name && <span className="max-w-full truncate text-[11px] text-gray-400">{v.name}</span>}
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
-      )}
-    </div>
-  );
+/** Totals split into service bookings and product orders (GET /platform/earnings → breakdown). */
+function Breakdown({ breakdown, totals }) {
+  const rows = [
+    { _id: 'services', label: 'Services', icon: 'fa-solid fa-screwdriver-wrench', ...breakdown.services },
+    { _id: 'products', label: 'Products', icon: 'fa-solid fa-box', ...breakdown.products },
+    { _id: 'total', label: 'Total', total: true, ...totals },
+  ];
+  const cell = (paise, r) => <span className={cx('whitespace-nowrap', r.total && 'font-bold text-gray-800')}>{formatINR(paise || 0)}</span>;
+  const columns = [
+    {
+      key: 'label',
+      header: 'Source',
+      render: (r) => (
+        <span className={cx('inline-flex items-center gap-2 whitespace-nowrap', r.total ? 'font-bold text-gray-800' : 'font-semibold text-gray-700')}>
+          {r.icon && <Icon name={r.icon} className="text-[11px] text-gray-400" />}
+          {r.label}
+        </span>
+      ),
+    },
+    { key: 'paid', header: 'Paid', align: 'right', render: (r) => <span className={cx(r.total && 'font-bold text-gray-800')}>{formatNumber(r.paidJobs || 0)}</span> },
+    { key: 'gross', header: 'Member prices', align: 'right', render: (r) => cell(r.grossPaise, r) },
+    { key: 'commission', header: 'Commission', align: 'right', render: (r) => cell(r.commissionPaise, r) },
+    { key: 'discounts', header: 'Member discounts', align: 'right', render: (r) => cell(r.memberDiscountsPaise, r) },
+    { key: 'net', header: 'NIVASA net', align: 'right', render: (r) => <NetAmount paise={r.platformNetPaise || 0} /> },
+    { key: 'vendor', header: 'Vendor earnings', align: 'right', render: (r) => cell(r.vendorEarningsPaise, r) },
+  ];
+  return <DataTable testId="earnings-breakdown" columns={columns} rows={rows} maxHeight="" />;
 }
 
 function CustomRange({ value, onApply }) {

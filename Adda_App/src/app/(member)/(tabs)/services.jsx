@@ -70,12 +70,13 @@ export default function Services() {
       <SectionTitle title="Find a vendor" />
       <View style={{ gap: 10 }}>
         <ListRow icon="navigate-outline" tone="gold" title="Services near me" subtitle="Nearest vendors first, within the distance you choose" onPress={() => router.push({ pathname: '/offers', params: { near: '1' } })} />
-        <ListRow icon="storefront-outline" tone="blue" title="Marketplace" subtitle="All vendor services and properties" onPress={() => router.push('/market')} />
+        <ListRow icon="storefront-outline" tone="blue" title="Marketplace" subtitle="Vendor services, shop products and properties" onPress={() => router.push('/market')} />
       </View>
 
       <SectionTitle title="Your requests" />
       <View style={{ gap: 10 }}>
         <ListRow icon="calendar-number-outline" tone="gold" title="My service bookings" subtitle="Vendor visits you booked, their status and payment" onPress={() => router.push('/service-bookings')} />
+        <ListRow icon="cube-outline" tone="gold" title="My orders" subtitle="Products you bought from local shops and their delivery" onPress={() => router.push('/my-orders')} />
         <ListRow icon="build-outline" tone="green" title="Society service requests" subtitle="Requests to your society office" onPress={() => router.push('/service-requests')} />
         <ListRow icon="calendar-outline" tone="blue" title="Amenity bookings" subtitle="Clubhouse, hall and other amenities" onPress={() => router.push('/bookings')} />
         <ListRow icon="megaphone-outline" tone="coral" title="My complaints" subtitle="Society maintenance issues" onPress={() => router.push('/complaints')} />

@@ -12,6 +12,9 @@ import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
 
 const SLOTS = [30, 60, 90, 120, 180, 240];
+/** Online fee payment of a facility booking (payment.status) → [label, badge tone]. Unpaid shows nothing. */
+const FEE_PAYMENT = { paid: ['Paid online', 'success'], refund_pending: ['Refund pending', 'info'], refunded: ['Refunded', 'neutral'] };
+const paidOnline = (b) => b?.payment?.status === 'paid';
 // The resident app picks its icon from this hint + the facility name (Adda_App/src/lib/icons.js).
 const ICONS = [
   ['', 'Automatic (from the name)'],
@@ -240,14 +243,31 @@ function BookingsTab({ refreshCounts }) {
       if (act.action === 'cancel') return api.post(`/society/bookings/${act.b._id}/cancel`, { reason });
       return api.post(`/society/bookings/${act.b._id}/decision`, { decision: act.action === 'approve' ? 'confirmed' : 'rejected', reason: reason || undefined });
     },
-    { toast, success: () => ({ approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking cancelled' })[act.action], onDone: () => (setAct(null), list.reload(), refreshCounts()) },
+    { toast, success: () => (act.action === 'cancel' && paidOnline(act.b) ? 'Booking cancelled — the online fee is being refunded' : { approve: 'Booking confirmed', reject: 'Booking rejected', cancel: 'Booking cancelled' }[act.action]), onDone: () => (setAct(null), list.reload(), refreshCounts()) },
   );
   const columns = [
     { key: 'facility', header: 'Facility', render: (b) => <span className="font-semibold text-gray-700">{b.facility?.name || '—'}</span> },
     { key: 'who', header: 'Resident', render: (b) => <div><p className="font-medium text-gray-700">{b.user?.name || '—'}</p><p className="text-[11px] text-gray-400">{formatPhone(b.user?.phone)}</p></div> },
     { key: 'flat', header: 'Flat', render: (b) => b.membership?.flat?.number || '—' },
     { key: 'when', header: 'Date & time', render: (b) => <div><p className="font-medium text-gray-700">{formatDate(b.date || b.start)}</p><p className="text-[11px] text-gray-400">{formatTime(b.start)} – {formatTime(b.end)}</p></div> },
-    { key: 'fee', header: 'Fee', align: 'right', render: (b) => (b.feePaise ? formatINR(b.feePaise) : 'Free') },
+    {
+      key: 'fee',
+      header: 'Fee',
+      align: 'right',
+      render: (b) =>
+        b.feePaise ? (
+          <div className="whitespace-nowrap">
+            <p>{formatINR(b.feePaise)}</p>
+            {FEE_PAYMENT[b.payment?.status] && (
+              <Badge className="mt-0.5" tone={FEE_PAYMENT[b.payment.status][1]}>
+                {FEE_PAYMENT[b.payment.status][0]}
+              </Badge>
+            )}
+          </div>
+        ) : (
+          'Free'
+        ),
+    },
     { key: 'purpose', header: 'Purpose', className: 'max-w-[200px] truncate', render: (b) => b.purpose || '—' },
     { key: 'status', header: 'Status', render: (b) => <div><Badge status={b.status} />{b.decisionReason && <p className="mt-0.5 max-w-[180px] truncate text-[10px] text-gray-400" title={b.decisionReason}>{b.decisionReason}</p>}</div> },
     {
@@ -305,7 +325,7 @@ function BookingsTab({ refreshCounts }) {
       {list.data && <Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} />}
       <ConfirmDialog open={act?.action === 'approve'} onClose={() => setAct(null)} onConfirm={() => run()} busy={busy} tone="primary" title="Confirm booking" confirmLabel="Confirm" message={`${act?.b?.facility?.name} for ${act?.b?.user?.name} on ${formatDate(act?.b?.date || act?.b?.start)}, ${formatTime(act?.b?.start)}–${formatTime(act?.b?.end)}.`} />
       <ReasonDialog open={act?.action === 'reject'} onClose={() => setAct(null)} onSubmit={(r) => run(r)} busy={busy} required={false} title="Reject booking" confirmLabel="Reject" message="The resident is notified. Adding a reason helps them rebook." />
-      <ReasonDialog open={act?.action === 'cancel'} onClose={() => setAct(null)} onSubmit={(r) => run(r)} busy={busy} title="Cancel booking" confirmLabel="Cancel booking" message="The slot is released and the resident is notified with your reason." />
+      <ReasonDialog open={act?.action === 'cancel'} onClose={() => setAct(null)} onSubmit={(r) => run(r)} busy={busy} title="Cancel booking" confirmLabel="Cancel booking" message={paidOnline(act?.b) ? `The member paid ${formatINR(act.b.payment.amountPaise ?? act.b.feePaise)} online — cancelling refunds it automatically. The slot is released and the resident is notified with your reason.` : 'The slot is released and the resident is notified with your reason.'} />
     </div>
   );
 }

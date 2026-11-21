@@ -2,7 +2,7 @@ import { Tabs } from 'expo-router';
 import { TabBar } from '../../../components/TabBar';
 import { colors } from '../../../theme';
 
-/** Vendor bottom navigation (template style): Home · Listings · Bookings · Boost · Profile. */
+/** Vendor bottom navigation (template style): Home · Listings · Bookings (service bookings + product orders) · Boost · Profile. */
 const TABS = {
   dashboard: ['home', 'home-outline', 'Home', true],
   'vendor-listings': ['pricetags', 'pricetags-outline', 'Listings'],

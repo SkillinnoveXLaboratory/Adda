@@ -58,7 +58,13 @@ const schema = z.object({
   OTP_MAX_ATTEMPTS: z.coerce.number().default(5),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().default(60),
 
-  PAYMENT_PROVIDER: z.enum(['none', 'razorpay']).default('none'),
+  PAYMENT_PROVIDER: z.enum(['none', 'razorpay', 'cashfree']).default('none'),
+  // Cashfree PG + Easy Split (skills/cashfree-payments). CASHFREE_ENV=sandbox labels every payment "Test mode".
+  CASHFREE_APP_ID: z.string().optional(),
+  CASHFREE_SECRET_KEY: z.string().optional(),
+  CASHFREE_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
+  // Tests only: a local fake gateway. Ignored in production.
+  CASHFREE_API_BASE: z.string().optional(),
   RAZORPAY_KEY_ID: z.string().optional(),
   PAYMENT_SECRET_KEY: z.string().optional(),
   PAYMENT_WEBHOOK_SECRET: z.string().optional(),
@@ -119,13 +125,16 @@ if (env.KYC_ENCRYPTION_KEY) {
   env.kycKey = key;
 }
 
-env.paymentsConfigured = env.PAYMENT_PROVIDER === 'razorpay' && !!env.RAZORPAY_KEY_ID && !!env.PAYMENT_SECRET_KEY;
+env.paymentsConfigured =
+  env.PAYMENT_PROVIDER === 'cashfree' ? !!env.CASHFREE_APP_ID && !!env.CASHFREE_SECRET_KEY : env.PAYMENT_PROVIDER === 'razorpay' && !!env.RAZORPAY_KEY_ID && !!env.PAYMENT_SECRET_KEY;
+env.paymentMode = env.PAYMENT_PROVIDER === 'cashfree' ? env.CASHFREE_ENV : env.PAYMENT_PROVIDER === 'razorpay' ? 'production' : null;
 env.otpTestEnabled = !env.isProd && env.OTP_PROVIDER === 'test' && env.OTP_TEST_MODE;
 
 const REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
   'req.headers["x-razorpay-signature"]',
+  'req.headers["x-webhook-signature"]',
   'res.headers["set-cookie"]',
   '*.password',
   '*.passwordHash',
@@ -347,7 +356,9 @@ const societySchema = new Schema$5(
     payments: {
       // Online collection stays disabled until the platform has verified a settlement route for this society.
       onlineEnabled: { type: Boolean, default: false },
-      settlementMode: { type: String, enum: ['none', 'razorpay_route', 'society_merchant'], default: 'none' },
+      // cashfree_split: linkedAccountId = the society's Cashfree Easy Split vendor id (money goes to the society's bank);
+      // platform_collect: collected in NIVASA's Cashfree account and settled to the society outside the app.
+      settlementMode: { type: String, enum: ['none', 'razorpay_route', 'society_merchant', 'cashfree_split', 'platform_collect'], default: 'none' },
       linkedAccountId: { type: String, trim: true },
       verifiedAt: Date,
       verifiedBy: { type: ObjectId$5, ref: 'User' },
@@ -773,6 +784,15 @@ const vendorProfileSchema = new Schema$3(
     // discount is a share OF that commission given back when the member taps "Apply discount".
     commissionBps: { type: Number, min: 0, max: 10000, default: 0 },
     memberDiscountBps: { type: Number, min: 0, max: 10000, default: 0 },
+    // Cashfree Easy Split vendor account (created on KYC approval) — needed for online payments to this vendor.
+    payout: {
+      provider: { type: String, enum: ['cashfree'] },
+      cfVendorId: String,
+      status: { type: String, enum: ['not_created', 'pending', 'active', 'failed', 'blocked'], default: 'not_created' },
+      providerStatus: String,
+      message: { type: String, maxlength: 300 },
+      updatedAt: Date,
+    },
   },
   { timestamps: true },
 );
@@ -817,7 +837,8 @@ const serviceBookingSchema = new Schema$3(
     timeline: [{ status: String, note: String, by: { type: ObjectId$3, ref: 'User' }, at: { type: Date, default: Date.now } }],
     payment: {
       status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
-      method: { type: String, enum: ['cash'] },
+      method: { type: String, enum: ['cash', 'online'] },
+      providerOrderId: String,
       amountPaise: { type: Number, min: 0, validate: { validator: (v) => v === undefined || v === null || Number.isInteger(v), message: 'Amount must be whole paise' } },
       paidAt: Date,
       markedBy: { type: ObjectId$3, ref: 'User' },
@@ -920,13 +941,148 @@ adCampaignSchema.index({ vendor: 1, createdAt: -1 });
 adCampaignSchema.index({ listing: 1, status: 1 });
 const AdCampaign = model$3('AdCampaign', adCampaignSchema);
 
+// ---------- Online checkout + products (skills/cashfree-payments, skills/vendor-products) ----------
+const GATEWAY_KINDS = ['invoice', 'facility', 'booking', 'order'];
+const GATEWAY_PREFIX = { invoice: 'inv', facility: 'fac', booking: 'bkg', order: 'ord' };
+const GATEWAY_ORDER_ID = /^(inv|fac|bkg|ord)_[a-f0-9]{24}$/;
+const CHECKOUT_MINUTES = 30;
+const gatewayOrderSchema = new mongoose.Schema(
+  {
+    orderId: { type: String, required: true, unique: true },
+    provider: { type: String, default: 'cashfree' },
+    mode: String,
+    kind: { type: String, enum: GATEWAY_KINDS, required: true },
+    ref: { type: mongoose.Schema.Types.ObjectId, required: true },
+    society: { type: mongoose.Schema.Types.ObjectId, ref: 'Society' },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    amountPaise: { type: Number, required: true, min: 100, validate: { validator: Number.isInteger, message: 'Amount must be whole paise' } },
+    splits: [{ vendorId: String, amountPaise: Number, _id: false }],
+    sessionId: { type: String, select: false },
+    status: { type: String, enum: ['created', 'paid', 'expired', 'amount_mismatch'], default: 'created' },
+    providerPaymentId: String,
+    method: String,
+    paidAt: Date,
+    lastError: { type: String, maxlength: 300 },
+    expiresAt: Date,
+    // purpose "cancel" refunds change the order/booking; "duplicate" refunds only return a second payment.
+    refunds: [{ refundId: String, amountPaise: Number, status: String, purpose: String, note: String, at: Date, updatedAt: Date, _id: false }],
+  },
+  { timestamps: true },
+);
+gatewayOrderSchema.index({ kind: 1, ref: 1, status: 1 });
+gatewayOrderSchema.index({ user: 1, createdAt: -1 });
+const GatewayOrder = mongoose.model('GatewayOrder', gatewayOrderSchema);
+
+const PRODUCT_LIMIT = 200;
+const productSchema = new mongoose.Schema(
+  {
+    vendor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    category: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCategory', required: true },
+    title: { type: String, required: true, trim: true, maxlength: 140 },
+    description: { type: String, trim: true, maxlength: 3000 },
+    photos: [{ type: mongoose.Schema.Types.ObjectId, ref: 'UploadedMedia' }],
+    // The vendor's own price per unit (paise). Members see vendor price + commission.
+    pricePaise: { type: Number, required: true, min: 100, validate: { validator: Number.isInteger, message: 'Price must be whole paise' } },
+    unit: { type: String, trim: true, maxlength: 40 },
+    stock: { type: Number, required: true, min: 0, default: 0, validate: { validator: Number.isInteger, message: 'Stock must be a whole number' } },
+    maxPerOrder: { type: Number, min: 1, max: 100, default: 10 },
+    delivery: { type: Boolean, default: true },
+    pickup: { type: Boolean, default: false },
+    deliveryChargePaise: { type: Number, min: 0, default: 0, validate: { validator: Number.isInteger, message: 'Charge must be whole paise' } },
+    city: { type: String, trim: true, maxlength: 80 },
+    status: { type: String, enum: ['active', 'paused'], default: 'active' },
+    location: geoPointField(),
+    locationLabel: { type: String, trim: true, maxlength: 200 },
+    ...moderation$1,
+  },
+  { timestamps: true },
+);
+productSchema.index({ moderationStatus: 1, status: 1, category: 1, createdAt: -1 });
+productSchema.index({ location: '2dsphere' });
+productSchema.index({ vendor: 1, createdAt: -1 });
+const Product = mongoose.model('Product', productSchema);
+
+/** Product order: one product × quantity. Every status change carries a status guard. */
+const ORDER_TRANSITIONS = {
+  awaiting_payment: ['placed', 'cancelled'],
+  placed: ['confirmed', 'cancelled'],
+  confirmed: ['packed', 'cancelled'],
+  packed: ['shipped', 'ready_for_pickup', 'cancelled'],
+  shipped: ['out_for_delivery', 'delivered'],
+  out_for_delivery: ['delivered'],
+  ready_for_pickup: ['delivered'],
+  delivered: [],
+  cancelled: [],
+};
+const MEMBER_CANCELLABLE = ['awaiting_payment', 'placed', 'confirmed'];
+const productOrderSchema = new mongoose.Schema(
+  {
+    orderNumber: { type: String, required: true, unique: true },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    vendor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // Snapshots taken when the order is placed.
+    title: { type: String, required: true, maxlength: 140 },
+    unit: String,
+    photo: { type: mongoose.Schema.Types.ObjectId, ref: 'UploadedMedia' },
+    quantity: { type: Number, required: true, min: 1, max: 100 },
+    vendorUnitPaise: Number,
+    commissionBps: { type: Number, default: 0 },
+    commissionUnitPaise: Number,
+    memberUnitPaise: Number,
+    discountBps: { type: Number, default: 0 },
+    discountUnitPaise: { type: Number, default: 0 },
+    vendorTotalPaise: Number,
+    commissionPaise: Number,
+    memberTotalPaise: Number,
+    discountPaise: { type: Number, default: 0 },
+    deliveryChargePaise: { type: Number, default: 0 },
+    payablePaise: { type: Number, required: true, min: 0 },
+    fulfilment: { type: String, enum: ['delivery', 'pickup'], required: true },
+    address: { type: String, trim: true, maxlength: 300 },
+    customerName: { type: String, maxlength: 120 },
+    customerPhone: String,
+    note: { type: String, trim: true, maxlength: 300 },
+    shopName: String,
+    pickupAddress: { type: String, maxlength: 300 },
+    paymentMethod: { type: String, enum: ['cod', 'online'], required: true },
+    status: { type: String, enum: Object.keys(ORDER_TRANSITIONS), required: true },
+    timeline: [{ status: String, note: String, by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, at: { type: Date, default: Date.now }, _id: false }],
+    cancelledBy: { type: String, enum: ['member', 'vendor', 'system'] },
+    cancelReason: { type: String, maxlength: 300 },
+    stockRestored: { type: Boolean, default: false },
+    payment: {
+      status: { type: String, enum: ['unpaid', 'paid', 'refund_pending', 'refunded'], default: 'unpaid' },
+      method: { type: String, enum: ['cash', 'online'] },
+      providerOrderId: String,
+      amountPaise: Number,
+      paidAt: Date,
+      refundedAt: Date,
+      // Settlement (same formula as service bookings): net = commission − discount; vendorEarnings = amount − net.
+      grossPaise: Number,
+      discountPaise: Number,
+      commissionBps: Number,
+      commissionPaise: Number,
+      netToPlatformPaise: Number,
+      vendorEarningsPaise: Number,
+    },
+  },
+  { timestamps: true },
+);
+productOrderSchema.index({ vendor: 1, status: 1, createdAt: -1 });
+productOrderSchema.index({ customer: 1, createdAt: -1 });
+productOrderSchema.index({ status: 1, createdAt: 1 });
+productOrderSchema.index({ vendor: 1, 'payment.status': 1, 'payment.paidAt': -1 });
+const ProductOrder = mongoose.model('ProductOrder', productOrderSchema);
+
+
 const { Schema: Schema$2, model: model$2 } = mongoose;
 const ObjectId$2 = Schema$2.Types.ObjectId;
 
 /** Admin-managed categories for complaints, service requests and marketplace items. society=null means platform-wide. */
 const categorySchema = new Schema$2(
   {
-    kind: { type: String, enum: ['complaint', 'service', 'marketplace'], required: true },
+    kind: { type: String, enum: ['complaint', 'service', 'marketplace', 'product'], required: true },
     society: { type: ObjectId$2, ref: 'Society', default: null },
     name: { type: String, required: true, trim: true, maxlength: 80 },
     icon: { type: String, trim: true, maxlength: 60 },
@@ -1002,6 +1158,14 @@ const bookingSchema = new Schema$2(
     end: { type: Date, required: true },
     date: { type: String, required: true },
     feePaise: { type: Number, default: 0 },
+    // Online fee payment (Cashfree). Office cash collection is not tracked here.
+    payment: {
+      status: { type: String, enum: ['unpaid', 'paid', 'refund_pending', 'refunded'], default: 'unpaid' },
+      amountPaise: Number,
+      providerOrderId: String,
+      paidAt: Date,
+      refundedAt: Date,
+    },
     purpose: { type: String, maxlength: 300 },
     status: { type: String, enum: ['pending', 'confirmed', 'rejected', 'cancelled'], required: true },
     decisionReason: String,
@@ -1110,7 +1274,7 @@ const paymentSchema = new Schema$1(
     unappliedPaise: { type: Number, default: 0 },
     channel: { type: String, enum: ['online', 'offline'], required: true },
     method: { type: String, enum: ['gateway', 'cash', 'bank_transfer', 'cheque', 'upi_direct'], required: true },
-    provider: { type: String, enum: ['razorpay', 'manual'], required: true },
+    provider: { type: String, enum: ['razorpay', 'cashfree', 'manual'], required: true },
     providerOrderId: String,
     providerPaymentId: String,
     providerMethod: String,
@@ -1221,7 +1385,7 @@ const notificationSchema = new Schema(
     society: { type: ObjectId, ref: 'Society' },
     type: {
       type: String,
-      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad', 'poll', 'visitor'],
+      enum: ['membership', 'announcement', 'complaint', 'bill', 'payment', 'reminder', 'booking', 'service', 'listing', 'community', 'system', 'vendor', 'ad', 'poll', 'visitor', 'order'],
       required: true,
     },
     title: { type: String, required: true, maxlength: 160 },
@@ -1261,7 +1425,7 @@ const mediaSchema = new Schema(
   {
     owner: { type: ObjectId, ref: 'User' },
     society: { type: ObjectId, ref: 'Society' },
-    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'registration', 'expense', 'announcement', 'avatar', 'kyc', 'society_logo', 'vendor_logo'], required: true },
+    purpose: { type: String, enum: ['complaint', 'post', 'property', 'marketplace', 'service', 'product', 'registration', 'expense', 'announcement', 'avatar', 'kyc', 'society_logo', 'vendor_logo'], required: true },
     visibility: { type: String, enum: ['public', 'society', 'private'], required: true },
     storageKey: { type: String, required: true, unique: true },
     mimeType: { type: String, required: true },
@@ -2109,6 +2273,68 @@ const razorpay = {
   },
 };
 
+
+/**
+ * Cashfree PG adapter (API 2025-01-01). Talks rupees with 2 decimals; everything else in the app is paise.
+ * Secrets stay server-side. CASHFREE_API_BASE (tests only) points at a local fake gateway.
+ */
+const cfBase = () =>
+  (!env.isProd && env.CASHFREE_API_BASE) || (env.CASHFREE_ENV === 'production' ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg');
+const rupeesOf = (paise) => Number((paise / 100).toFixed(2));
+
+async function cfCall(method, path, body, { idempotencyKey } = {}) {
+  const headers = { 'x-client-id': env.CASHFREE_APP_ID, 'x-client-secret': env.CASHFREE_SECRET_KEY, 'x-api-version': '2025-01-01', 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
+  const res = await fetch(`${cfBase().replace(/\/$/, '')}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new AppError(502, 'PAYMENT_PROVIDER_ERROR', json?.message ? `Cashfree: ${String(json.message).slice(0, 200)}` : 'Payment provider request failed');
+    err.providerStatus = res.status;
+    err.providerCode = json?.code;
+    throw err;
+  }
+  return json;
+}
+
+const cashfree = {
+  name: 'cashfree',
+  publicKeyId: () => null,
+  /** splits: [{ vendorId, amountPaise }] → Cashfree order_splits (Easy Split). */
+  async createOrder({ orderId, amountPaise, customer, note, tags, splits, returnUrl, notifyUrl, expiresAt }) {
+    const body = {
+      order_id: orderId,
+      order_amount: rupeesOf(amountPaise),
+      order_currency: 'INR',
+      customer_details: { customer_id: customer.id, customer_phone: customer.phone, ...(customer.name ? { customer_name: customer.name.slice(0, 100) } : {}), ...(customer.email ? { customer_email: customer.email } : {}) },
+      order_meta: { return_url: returnUrl, notify_url: notifyUrl },
+      ...(note ? { order_note: note.slice(0, 200) } : {}),
+      ...(tags ? { order_tags: tags } : {}),
+      ...(expiresAt ? { order_expiry_time: expiresAt.toISOString() } : {}),
+    };
+    if (splits?.length) body.order_splits = splits.map((s) => ({ vendor_id: s.vendorId, amount: rupeesOf(s.amountPaise) }));
+    const o = await cfCall('POST', '/orders', body, { idempotencyKey: crypto.randomUUID() });
+    return { id: o.order_id, amount: toPaise(o.order_amount), sessionId: o.payment_session_id, status: o.order_status };
+  },
+  getOrder: (orderId) => cfCall('GET', `/orders/${encodeURIComponent(orderId)}`),
+  getOrderPayments: (orderId) => cfCall('GET', `/orders/${encodeURIComponent(orderId)}/payments`),
+  refundOrder: ({ orderId, refundId, amountPaise, note, splits }) =>
+    cfCall('POST', `/orders/${encodeURIComponent(orderId)}/refunds`, {
+      refund_amount: rupeesOf(amountPaise),
+      refund_id: refundId,
+      ...(note ? { refund_note: note.replace(/[^A-Za-z0-9 .,_-]/g, '').slice(0, 100) || undefined } : {}),
+      ...(splits?.length ? { refund_splits: splits.map((s) => ({ vendor_id: s.vendorId, amount: rupeesOf(s.amountPaise) })) } : {}),
+    }),
+  createVendor: (body) => cfCall('POST', '/easy-split/vendors', body),
+  getVendor: (vendorId) => cfCall('GET', `/easy-split/vendors/${encodeURIComponent(vendorId)}`),
+  /** base64(HMAC-SHA256(timestamp + rawBody, client secret)) — over the exact raw bytes. */
+  verifyWebhookSignature(rawBody, signature, timestamp) {
+    if (!env.CASHFREE_SECRET_KEY || !signature || !timestamp || !rawBody) return false;
+    const expected = crypto.createHmac('sha256', env.CASHFREE_SECRET_KEY).update(String(timestamp)).update(rawBody).digest('base64');
+    return safeEqual(expected, signature);
+  },
+  verifyCheckoutSignature: () => false,
+};
+
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
 async function sendExpoPush(tokens, { title, body, data }) {
@@ -2391,11 +2617,12 @@ async function balanceBefore(societyId, date) {
   return totals.netPaise;
 }
 
-let provider = razorpay;
+const defaultProvider = env.PAYMENT_PROVIDER === 'cashfree' ? cashfree : razorpay;
+let provider = defaultProvider;
 let providerConfigured = () => env.paymentsConfigured;
 /** Test seam: swap the gateway adapter (never used by application code). */
 function __setPaymentProvider(mock, configured = true) {
-  provider = mock || razorpay;
+  provider = mock || defaultProvider;
   providerConfigured = () => (mock ? configured : env.paymentsConfigured);
 }
 
@@ -2461,6 +2688,18 @@ async function initiateOnlinePayment({ user, membership, invoiceId }) {
 
   // Reuse a recent open order for the same user/invoice/amount to avoid duplicate orders on retries.
   const recent = await Payment.findOne({ invoice: invoice._id, payer: user._id, status: 'created', amountPaise: balance, createdAt: { $gt: new Date(Date.now() - 20 * 60000) } });
+  if (provider.name === 'cashfree') {
+    // Hosted Cashfree checkout (skills/cashfree-payments); "paid" is decided by syncGatewayOrder.
+    let go = recent ? await GatewayOrder.findOne({ orderId: recent.providerOrderId, status: 'created', expiresAt: { $gt: new Date(Date.now() + 5 * 60000) } }) : null;
+    let payment = go ? recent : null;
+    if (!go) {
+      const orderId = newGatewayOrderId('invoice');
+      payment = new Payment({ society: invoice.society, invoice: invoice._id, flat: invoice.flat, payer: user._id, amountPaise: balance, channel: 'online', method: 'gateway', provider: 'cashfree', providerOrderId: orderId, status: 'created', statusHistory: [{ status: 'created', source: 'initiate' }] });
+      go = await startGatewayCheckout({ kind: 'invoice', ref: payment._id, society: invoice.society, user, amountPaise: balance, splits: societySplits(society, balance), note: `Maintenance ${invoice.invoiceNumber}`, orderId, reuse: false });
+      await payment.save();
+    }
+    return { paymentId: payment._id, provider: 'cashfree', ...presentCheckout(go), currency: 'INR', invoiceNumber: invoice.invoiceNumber, societyName: society.name };
+  }
   let payment = recent;
   if (!payment) {
     const order = await provider.createOrder({
@@ -2753,6 +2992,15 @@ async function requestGatewayRefund(req, paymentId, amountPaise, reason) {
   if (!providerConfigured()) throw unavailable('Payment gateway is not configured', 'PAYMENTS_UNAVAILABLE');
   const max = payment.amountPaise - payment.refundedPaise;
   const amount = Math.min(amountPaise || max, max);
+  if (provider.name === 'cashfree') {
+    const go = await GatewayOrder.findOne({ orderId: payment.providerOrderId });
+    const r = await refundGatewayOrder(go, amount, reason, 'cancel');
+    payment.statusHistory.push({ status: payment.status, source: 'refund_requested', note: `Refund ${r.refundId} requested: ${reason}` });
+    await Payment.updateOne({ _id: payment._id }, { $push: { statusHistory: payment.statusHistory[payment.statusHistory.length - 1] } });
+    await audit(req, { action: 'payment.refund_requested', targetType: 'Payment', targetId: payment._id, summary: `${formatINR(amount)} — ${reason}` });
+    notifyUsers([payment.payer].filter(Boolean), { society: payment.society, type: 'payment', title: 'Refund initiated', body: `${formatINR(amount)} refund initiated.`, route: 'Payments' }).catch(() => {});
+    return Payment.findById(payment._id);
+  }
   const refund = await provider.refund(payment.providerPaymentId, amount, { reason: reason?.slice(0, 200) });
   payment.statusHistory.push({ status: payment.status, source: 'refund_requested', note: `Refund ${refund.id} requested: ${reason}` });
   await payment.save();
@@ -2773,7 +3021,7 @@ async function config(_req, res) {
     environment: env.NODE_ENV,
     otp: otpStatus$1(),
     passwordLogin: { available: env.RESIDENT_PASSWORD_LOGIN },
-    payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: env.paymentsConfigured ? 'razorpay' : null },
+    payments: { gatewayConfigured: paymentAvailability({ payments: { onlineEnabled: true } }).available, provider: providerConfigured() ? provider.name : null, mode: providerConfigured() ? env.paymentMode : null },
     uploads: { maxMb: env.MAX_UPLOAD_MB, types: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] },
     ads: { dayOptions },
   });
@@ -2981,7 +3229,7 @@ async function serveMedia(req, res) {
   fs$1.createReadStream(full).pipe(res);
 }
 
-const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'expense', 'announcement', 'avatar', 'kyc', 'vendor_logo', 'society_logo'];
+const UPLOAD_PURPOSES = ['complaint', 'post', 'property', 'marketplace', 'service', 'product', 'expense', 'announcement', 'avatar', 'kyc', 'vendor_logo', 'society_logo'];
 async function uploadMedia(req, res) {
   const purpose = req.body?.purpose;
   if (!UPLOAD_PURPOSES.includes(purpose)) throw badRequest(`purpose must be one of ${UPLOAD_PURPOSES.join(', ')}`);
@@ -3745,8 +3993,10 @@ async function myBookings(req, res) {
 }
 
 async function cancelBooking(req, res) {
+  const paid = await FacilityBooking.exists({ _id: req.valid.params.id, society: req.societyId, user: req.user._id, 'payment.status': 'paid' });
+  if (paid) throw conflict('This booking fee is paid online. Ask the society office to cancel it — they will refund you.', 'PAID_BOOKING');
   const b = await FacilityBooking.findOneAndUpdate(
-    { _id: req.valid.params.id, society: req.societyId, user: req.user._id, status: { $in: ['pending', 'confirmed'] }, start: { $gt: new Date() } },
+    { _id: req.valid.params.id, society: req.societyId, user: req.user._id, status: { $in: ['pending', 'confirmed'] }, start: { $gt: new Date() }, 'payment.status': { $nin: ['paid'] } },
     { status: 'cancelled', cancelledAt: new Date() },
     { returnDocument: 'after' },
   );
@@ -3888,6 +4138,7 @@ const PLATFORM_PERMISSIONS = [
   { area: 'accounts', label: 'Accounts', view: 'See all accounts', manage: 'Enable / disable accounts' },
   { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors, KYC (masked) and their rates', manage: 'Approve / reject KYC, reveal KYC details, set commission and member discount' },
   { area: 'service_bookings', label: 'Service bookings', viewOnly: true, view: 'See service bookings and settlement' },
+  { area: 'orders', label: 'Product orders', viewOnly: true, view: 'See product orders, delivery status and settlement' },
   { area: 'earnings', label: 'Earnings', viewOnly: true, view: 'See NIVASA commission earnings and vendor earnings' },
   { area: 'listings', label: 'Listings moderation', view: 'See listings', manage: 'Approve, reject, remove listings' },
   { area: 'ads', label: 'Ads (boosts)', view: 'See boost requests', manage: 'Approve / reject boosts' },
@@ -4398,8 +4649,8 @@ const SERVICE_ICON_GUESS = [
 ];
 const guessServiceIcon = (name = '') => SERVICE_ICON_GUESS.find(([rx]) => rx.test(name))?.[1] || 'others';
 
-const categoryUpsert = z.object({ kind: z.enum(['complaint', 'service', 'marketplace']), name: text(80, 2), icon: optText(60), description: optText(300), active: z.boolean().default(true), sortOrder: z.number().int().min(0).max(1000).default(0) });
-const societyPayments = z.object({ onlineEnabled: z.boolean(), settlementMode: z.enum(['none', 'razorpay_route', 'society_merchant']), linkedAccountId: z.string().trim().max(60).optional() });
+const categoryUpsert = z.object({ kind: z.enum(['complaint', 'service', 'marketplace', 'product']), name: text(80, 2), icon: optText(60), description: optText(300), active: z.boolean().default(true), sortOrder: z.number().int().min(0).max(1000).default(0) });
+const societyPayments = z.object({ onlineEnabled: z.boolean(), settlementMode: z.enum(['none', 'razorpay_route', 'society_merchant', 'cashfree_split', 'platform_collect']), linkedAccountId: z.string().trim().max(60).optional() });
 const platformSetting$1 = z.object({ value: z.union([z.boolean(), z.number(), z.string().max(500)]) });
 const adminCreate = z.object({ name: text(120, 2), email, phone: phone.optional(), role: z.enum(['admin', 'treasurer', 'secretary', 'manager', 'committee']).default('admin') });
 
@@ -4816,11 +5067,12 @@ async function deleteOffer(req, res) {
 }
 
 /** kind → model / owner field, shared by reporting and moderation. */
-const LISTING_MODELS = { property: PropertyListing, marketplace: MarketplaceListing, service: ServiceOffer };
-const LISTING_OWNER = { property: 'owner', marketplace: 'seller', service: 'provider' };
-const LISTING_ROUTE = { property: 'MyProperties', marketplace: 'MyMarketplace', service: 'MyServices' };
+const LISTING_MODELS = { property: PropertyListing, marketplace: MarketplaceListing, service: ServiceOffer, product: Product };
+const LISTING_OWNER = { property: 'owner', marketplace: 'seller', service: 'provider', product: 'vendor' };
+const LISTING_ROUTE = { property: 'MyProperties', marketplace: 'MyMarketplace', service: 'MyServices', product: 'MyProducts' };
 const listingKind = (k) => (LISTING_MODELS[k] ? k : 'property');
-const pendingListingCount = (filter) => Promise.all(Object.values(LISTING_MODELS).map((M) => M.countDocuments({ ...filter, moderationStatus: 'pending' }))).then((n) => n.reduce((a, b) => a + b, 0));
+// Society-scoped counts skip models without a society (vendor products are moderated by the platform only).
+const pendingListingCount = (filter) => Promise.all(Object.values(LISTING_MODELS).filter((M) => !('society' in filter) || M.schema.path('society')).map((M) => M.countDocuments({ ...filter, moderationStatus: 'pending' }))).then((n) => n.reduce((a, b) => a + b, 0));
 
 const reportListing = (kind) => async (req, res) => {
   const Model = LISTING_MODELS[kind];
@@ -4956,14 +5208,18 @@ async function updateShop(req, res) {
     Object.assign($unset, ops.$unset || {});
   }
   await VendorProfile.updateOne({ user: req.user._id }, { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) }, { upsert: true });
-  if (location !== undefined) await ServiceOffer.updateMany({ provider: req.user._id }, locationOps(location));
+  if (location !== undefined) {
+    await ServiceOffer.updateMany({ provider: req.user._id }, locationOps(location));
+    await Product.updateMany({ vendor: req.user._id }, locationOps(location));
+  }
   if ($set.logo) await UploadedMedia.updateOne({ _id: $set.logo }, { attachedTo: `VendorProfile:${req.user._id}` });
   await audit(req, { action: 'vendor.shop_updated', targetType: 'User', targetId: req.user._id, changes: { shopName, logo: logoId === undefined ? undefined : logoId ? 'set' : 'removed', location: location === undefined ? undefined : location ? 'set' : 'cleared' } });
   res.json({ ...presentVendorProfile(await loadVendorProfile(req.user._id)), kycAvailable: !!env.kycKey });
 }
 
 async function getVendorProfile(req, res) {
-  res.json({ ...presentVendorProfile(await loadVendorProfile(req.user._id)), kycAvailable: !!env.kycKey });
+  const profile = await loadVendorProfile(req.user._id);
+  res.json({ ...presentVendorProfile(profile), kycAvailable: !!env.kycKey, payout: presentPayout(profile) });
 }
 
 async function submitKyc(req, res) {
@@ -5311,14 +5567,26 @@ async function earningsReport(req, base, { withVendors }) {
   const { match, range } = earningsMatch(req.query, base);
   const month = { $dateToString: { format: '%Y-%m', date: '$payment.paidAt', timezone: '+05:30' } };
   const q = { ...req.valid.query, sort: '-payment.paidAt' };
-  const [totals, months, page, vendors] = await Promise.all([
+  const [totals, months, page, vendors, pTotals, pMonths, pVendors] = await Promise.all([
     ServiceBooking.aggregate([{ $match: match }, { $group: { _id: null, ...EARNINGS_GROUP } }]),
     ServiceBooking.aggregate([{ $match: match }, { $group: { _id: month, ...EARNINGS_GROUP } }, { $sort: { _id: -1 } }, { $limit: 24 }]),
     pagedFind(ServiceBooking, match, q, { sortable: ['payment.paidAt'], populate: [{ path: 'customer', select: 'name' }, ...(withVendors ? [{ path: 'vendor', select: 'name' }] : [])] }),
     withVendors
-      ? ServiceBooking.aggregate([{ $match: match }, { $group: { _id: '$vendor', ...EARNINGS_GROUP } }, { $sort: { commission: -1, gross: -1 } }, { $limit: 10 }])
+      ? ServiceBooking.aggregate([{ $match: match }, { $group: { _id: '$vendor', ...EARNINGS_GROUP } }])
       : Promise.resolve(null),
+    // Product orders (skills/vendor-products): same settlement fields on order.payment.
+    ProductOrder.aggregate([{ $match: match }, { $group: { _id: null, ...EARNINGS_GROUP } }]),
+    ProductOrder.aggregate([{ $match: match }, { $group: { _id: month, ...EARNINGS_GROUP } }]),
+    withVendors ? ProductOrder.aggregate([{ $match: match }, { $group: { _id: '$vendor', ...EARNINGS_GROUP } }]) : Promise.resolve(null),
   ]);
+  const serviceTotals = totals[0];
+  totals[0] = mergeEarningGroups([totals[0], pTotals[0]].filter(Boolean))[0];
+  const mergedMonths = mergeEarningGroups([...months, ...pMonths]).sort((a, b) => String(b._id).localeCompare(String(a._id))).slice(0, 24);
+  months.splice(0, months.length, ...mergedMonths);
+  if (vendors) {
+    const merged = mergeEarningGroups([...vendors, ...(pVendors || [])]).sort((a, b) => b.commission - a.commission || b.gross - a.gross).slice(0, 10);
+    vendors.splice(0, vendors.length, ...merged);
+  }
   let topVendors;
   if (vendors) {
     const [users, profiles] = await Promise.all([User.find({ _id: { $in: vendors.map((v) => v._id) } }).select('name').lean(), VendorProfile.find({ user: { $in: vendors.map((v) => v._id) } }).select('user businessName').lean()]);
@@ -5329,11 +5597,24 @@ async function earningsReport(req, base, { withVendors }) {
   return {
     range,
     totals: presentEarnings(totals[0]),
+    breakdown: { services: presentEarnings(serviceTotals), products: presentEarnings(pTotals[0]) },
     months: months.map((m) => ({ month: m._id, ...presentEarnings(m) })),
     ...(topVendors ? { topVendors } : {}),
     ...page,
     items: page.items.map((b) => presentEarningItem(b, withVendors)),
   };
+}
+
+/** Sum $group rows (EARNINGS_GROUP fields) that share an _id. */
+function mergeEarningGroups(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const k = String(r._id);
+    const cur = map.get(k) || { _id: r._id, n: 0, gross: 0, cash: 0, commission: 0, discount: 0, net: 0, vendor: 0 };
+    for (const f of ['n', 'gross', 'cash', 'commission', 'discount', 'net', 'vendor']) cur[f] += r[f] || 0;
+    map.set(k, cur);
+  }
+  return [...map.values()];
 }
 
 async function vendorEarnings(req, res) {
@@ -5528,7 +5809,8 @@ async function getVendor(req, res) {
     user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
     profile: presentVendorProfile(profile, 900),
     pricing: presentRates(profile),
-    counts: { properties, services, bookings, ads },
+    counts: { properties, services, bookings, ads, products: await Product.countDocuments({ vendor: user._id, moderationStatus: { $ne: 'removed' } }), orders: await ProductOrder.countDocuments({ vendor: user._id, status: { $ne: 'awaiting_payment' } }) },
+    payout: presentPayout(profile),
     kycAvailable: !!env.kycKey,
   });
 }
@@ -5559,6 +5841,7 @@ async function decideVendorKyc(req, res) {
   ).populate([...KYC_DOCS, 'logo']);
   if (!p) throw conflict(decision === 'approved' ? 'Only submitted KYC can be approved.' : 'Only submitted or approved KYC can be rejected.', 'INVALID_TRANSITION');
   await audit(req, { action: `platform.vendor_kyc_${decision}`, targetType: 'User', targetId: user._id, summary: note || p.businessName });
+  if (decision === 'approved' && gatewayReady()) ensureVendorPayout(user._id).catch((err) => logger.warn({ err: err.message }, 'Vendor payout account not created'));
   notifyUsers([user._id], { type: 'vendor', title: decision === 'approved' ? 'KYC approved' : 'KYC needs changes', body: decision === 'approved' ? 'You can now list properties and services.' : note, route: 'VendorKyc' }).catch(() => {});
   res.json(presentVendorProfile(p.toObject(), 900));
 }
@@ -6194,6 +6477,995 @@ vendorRouter.get('/ads', page$1, myAds);
 vendorRouter.post('/ads', validate({ body: adCreate }), createAd);
 vendorRouter.post('/ads/:id/cancel', id$1, cancelAd);
 
+
+// ======================= Online payments: Cashfree checkout (skills/cashfree-payments) =======================
+/**
+ * One generic checkout for every kind of payment. The amount is always computed by the server; "paid" is decided only
+ * from Cashfree's API (GET order = PAID + a SUCCESS payment), never from the redirect or the webhook payload alone.
+ */
+
+
+const gatewayReady = () => providerConfigured() && provider.name === 'cashfree';
+function assertGatewayReady() {
+  if (!gatewayReady()) throw unavailable('Online payment is not available yet. Please pay in cash or at the office.', 'PAYMENTS_UNAVAILABLE');
+}
+const newGatewayOrderId = (kind) => `${GATEWAY_PREFIX[kind]}_${new mongoose.Types.ObjectId().toHexString()}`;
+const checkoutToken = (orderId) => hmac(env.JWT_ACCESS_SECRET, `checkout:${orderId}`).slice(0, 32);
+const apiBase = () => env.PUBLIC_API_BASE_URL.replace(/\/$/, '');
+const APP_RETURN_URL = 'addaapp://payment-result';
+
+function presentCheckout(go) {
+  return {
+    orderId: go.orderId,
+    kind: go.kind,
+    ref: go.ref,
+    amountPaise: go.amountPaise,
+    status: go.status,
+    mode: env.paymentMode,
+    paidAt: go.paidAt || null,
+    lastError: go.lastError || null,
+    checkoutUrl: go.status === 'created' ? `${apiBase()}/api/v1/pay/checkout/${go.orderId}?t=${checkoutToken(go.orderId)}` : null,
+    returnUrl: APP_RETURN_URL,
+  };
+}
+
+/** Society money (dues, facility fees) goes to the society's Cashfree vendor account when one is set. */
+const societySplits = (society, amountPaise) =>
+  society?.payments?.settlementMode === 'cashfree_split' && society.payments.linkedAccountId ? [{ vendorId: society.payments.linkedAccountId, amountPaise }] : [];
+
+/** Creates (or reuses an open) Cashfree order for one thing to pay. */
+async function startGatewayCheckout({ kind, ref, society, user, amountPaise, splits = [], note, orderId, reuse = true }) {
+  assertGatewayReady();
+  if (!Number.isInteger(amountPaise) || amountPaise < 100) throw badRequest('Online payment needs an amount of at least ₹1.');
+  if (reuse) {
+    const open = await GatewayOrder.findOne({ kind, ref, user: user._id, status: 'created', amountPaise, expiresAt: { $gt: new Date(Date.now() + 5 * 60000) } }).sort({ createdAt: -1 });
+    if (open) return open;
+  }
+  if (!/^[6-9]\d{9}$/.test(user.phone || '')) throw badRequest('Add your mobile number to your profile to pay online.', 'PHONE_REQUIRED');
+  const id = orderId || newGatewayOrderId(kind);
+  const expiresAt = new Date(Date.now() + CHECKOUT_MINUTES * 60000);
+  const o = await provider.createOrder({
+    orderId: id,
+    amountPaise,
+    customer: { id: `u${user._id}`, phone: user.phone, name: user.name, email: user.email },
+    note,
+    tags: { kind, ref: String(ref) },
+    splits,
+    returnUrl: `${apiBase()}/api/v1/pay/return?order_id=${id}`,
+    notifyUrl: `${apiBase()}/api/v1/payments/webhook/cashfree`,
+    expiresAt,
+  });
+  if (o.amount !== amountPaise) throw new AppError(502, 'PAYMENT_PROVIDER_ERROR', 'Gateway order amount mismatch');
+  return GatewayOrder.create({ orderId: id, mode: env.paymentMode, kind, ref, society, user: user._id, amountPaise, splits, sessionId: o.sessionId, status: 'created', expiresAt });
+}
+
+/** Ask Cashfree for the order's state and apply it. Safe to call any number of times (redirect, webhook, app, job). */
+async function syncGatewayOrder(orderId, source = 'sync') {
+  const go = await GatewayOrder.findOne({ orderId });
+  if (!go) return null;
+  if (go.status !== 'created' || !gatewayReady()) return go;
+  const o = await provider.getOrder(orderId);
+  if (o.order_status === 'PAID') {
+    const pays = await provider.getOrderPayments(orderId);
+    const ok = (Array.isArray(pays) ? pays : []).find((p) => p.payment_status === 'SUCCESS');
+    if (!ok) return go;
+    const amountPaise = toPaise(ok.payment_amount);
+    const info = { providerPaymentId: String(ok.cf_payment_id), method: ok.payment_group, amountPaise, source };
+    if (amountPaise !== go.amountPaise) {
+      logger.error({ orderId, paid: amountPaise, expected: go.amountPaise }, 'Cashfree amount mismatch — not applied');
+      return GatewayOrder.findOneAndUpdate({ _id: go._id, status: 'created' }, { status: 'amount_mismatch', providerPaymentId: info.providerPaymentId, lastError: `Paid ${amountPaise} paise, expected ${go.amountPaise}` }, { returnDocument: 'after' });
+    }
+    const outcome = await settleGatewayOrder(go, info);
+    const done = await GatewayOrder.findOneAndUpdate({ _id: go._id, status: 'created' }, { status: 'paid', providerPaymentId: info.providerPaymentId, method: info.method, paidAt: new Date(), lastError: null }, { returnDocument: 'after' });
+    if (done && outcome === 'duplicate') {
+      // Already paid through another checkout: give this second payment back in full.
+      await refundGatewayOrder(done, done.amountPaise, 'Duplicate payment', 'duplicate').catch((err) => logger.error({ orderId, err: err.message }, 'Duplicate payment refund failed'));
+    }
+    return done || GatewayOrder.findById(go._id);
+  }
+  if (['EXPIRED', 'TERMINATED'].includes(o.order_status)) {
+    const exp = await GatewayOrder.findOneAndUpdate({ _id: go._id, status: 'created' }, { status: 'expired' }, { returnDocument: 'after' });
+    if (exp && exp.kind === 'order') await expireOrderCheckout(exp.ref);
+    return exp || GatewayOrder.findById(go._id);
+  }
+  const pays = await provider.getOrderPayments(orderId).catch(() => []);
+  const last = Array.isArray(pays) && pays.length ? pays[pays.length - 1] : null;
+  if (last && ['FAILED', 'USER_DROPPED', 'CANCELLED', 'VOID'].includes(last.payment_status)) {
+    go.lastError = (last.payment_message || (last.payment_status === 'USER_DROPPED' ? 'Payment was not completed' : 'Payment failed')).slice(0, 300);
+    await GatewayOrder.updateOne({ _id: go._id, status: 'created' }, { lastError: go.lastError });
+  }
+  return go;
+}
+
+/** Apply a confirmed payment to what was paid for. Returns 'applied' or 'duplicate' (already paid another way). */
+async function settleGatewayOrder(go, info) {
+  if (go.kind === 'invoice') {
+    const p = await Payment.findOne({ providerOrderId: go.orderId }).select('_id').lean();
+    if (!p) return 'applied';
+    await markCaptured(p._id, { providerPaymentId: info.providerPaymentId, providerMethod: info.method, source: info.source, amountPaise: info.amountPaise });
+    return 'applied';
+  }
+  if (go.kind === 'facility') return facilityPaidOnline(go, info);
+  if (go.kind === 'booking') return bookingPaidOnline(go, info);
+  return orderPaidOnline(go, info);
+}
+
+async function facilityPaidOnline(go, info) {
+  const now = new Date();
+  const b = await FacilityBooking.findOneAndUpdate(
+    { _id: go.ref, 'payment.status': { $nin: ['paid', 'refund_pending', 'refunded'] } },
+    { $set: { 'payment.status': 'paid', 'payment.amountPaise': info.amountPaise, 'payment.providerOrderId': go.orderId, 'payment.paidAt': now } },
+    { returnDocument: 'after' },
+  ).populate('facility', 'name');
+  if (!b) return 'duplicate';
+  await postLedgerEntry({ society: b.society, direction: 'credit', amountPaise: info.amountPaise, account: 'gateway', category: 'Facility booking', entryType: 'other_income', sourceType: 'payment', sourceId: go._id, memo: `Online fee ${b.facility?.name || ''} ${b.date} · ${info.providerPaymentId}`.trim(), eventKey: `gateway:${go.orderId}:capture` });
+  notifyUsers([b.user], { society: b.society, type: 'payment', title: 'Booking fee paid', body: `${formatINR(info.amountPaise)} paid for ${b.facility?.name || 'your booking'} on ${b.date}.`, route: 'Bookings' }).catch(() => {});
+  if (b.status !== 'confirmed') {
+    // Cancelled/declined while the member was paying: refund straight away.
+    await FacilityBooking.updateOne({ _id: b._id }, { 'payment.status': 'refund_pending' });
+    const fresh = await GatewayOrder.findById(go._id);
+    await refundGatewayOrder(fresh, info.amountPaise, 'Booking no longer active', 'cancel', { force: true }).catch((err) => logger.error({ err: err.message }, 'Facility refund failed'));
+  }
+  return 'applied';
+}
+
+/** Service booking paid online: the same settlement numbers as a cash "mark paid". */
+async function bookingPaidOnline(go, info) {
+  const cur = await ServiceBooking.findById(go.ref).lean();
+  if (!cur) return 'applied';
+  const now = new Date();
+  const s = serviceOnlineSettlement(cur, info.amountPaise);
+  const b = await ServiceBooking.findOneAndUpdate(
+    { _id: go.ref, 'payment.status': { $ne: 'paid' } },
+    {
+      $set: { payment: { status: 'paid', method: 'online', providerOrderId: go.orderId, amountPaise: info.amountPaise, paidAt: now, markedBy: go.user, ...s } },
+      $push: { timeline: { status: 'paid', note: `Paid online: ${formatINR(info.amountPaise)}`, by: go.user, at: now } },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!b) return 'duplicate';
+  notifyUsers([b.vendor], { type: 'payment', title: 'Online payment received', body: `${formatINR(info.amountPaise)} paid online for "${b.offerTitle}". Your share is settled by Cashfree.`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
+  return 'applied';
+}
+
+function serviceOnlineSettlement(b, amountPaise) {
+  const discountPaise = b.discountPaise || 0;
+  const commissionPaise = b.commissionPaise || 0;
+  const netToPlatformPaise = commissionPaise - discountPaise;
+  return { discountPaise, grossPaise: amountPaise + discountPaise, commissionBps: b.commissionBps || 0, commissionPaise, netToPlatformPaise, vendorEarningsPaise: amountPaise - netToPlatformPaise };
+}
+
+async function orderPaidOnline(go, info) {
+  const cur = await ProductOrder.findById(go.ref).lean();
+  if (!cur) return 'applied';
+  const now = new Date();
+  const o = await ProductOrder.findOneAndUpdate(
+    { _id: go.ref, 'payment.status': 'unpaid' },
+    { $set: { payment: { status: 'paid', method: 'online', providerOrderId: go.orderId, paidAt: now, ...orderSettlement(cur, info.amountPaise) } } },
+    { returnDocument: 'after' },
+  );
+  if (!o) return 'duplicate';
+  if (o.status === 'awaiting_payment') {
+    const placed = await ProductOrder.findOneAndUpdate({ _id: o._id, status: 'awaiting_payment' }, { status: 'placed', $push: { timeline: { status: 'placed', note: `Paid online: ${formatINR(info.amountPaise)}`, at: now } } }, { returnDocument: 'after' });
+    if (placed) {
+      notifyUsers([placed.vendor], { type: 'order', title: 'New order (paid online)', body: `${placed.quantity} × ${placed.title} · ${placed.orderNumber}`, route: 'VendorOrders', id: String(placed._id) }).catch(() => {});
+      notifyUsers([placed.customer], { type: 'order', title: 'Order placed', body: `${placed.orderNumber}: payment received, the shop will confirm soon.`, route: 'MyOrders', id: String(placed._id) }).catch(() => {});
+    }
+  } else if (o.status === 'cancelled') {
+    // Cancelled (e.g. payment window closed) before the payment arrived: refund it.
+    await ProductOrder.updateOne({ _id: o._id }, { 'payment.status': 'refund_pending' });
+    const fresh = await GatewayOrder.findById(go._id);
+    await refundGatewayOrder(fresh, info.amountPaise, `Order ${o.orderNumber} cancelled`, 'cancel', { force: true }).catch((err) => logger.error({ err: err.message }, 'Order refund failed'));
+  }
+  return 'applied';
+}
+
+/**
+ * Refund through Cashfree. Splits are pulled back from the same vendor/society accounts in proportion.
+ * force: the order is still "created" in our records while the payment is being applied.
+ */
+async function refundGatewayOrder(go, amountPaise, note, purpose = 'cancel', { force = false } = {}) {
+  assertGatewayReady();
+  if (!go || (!force && go.status !== 'paid')) throw conflict('Only a completed online payment can be refunded.', 'NOT_PAID');
+  const refundId = `rf_${new mongoose.Types.ObjectId().toHexString()}`;
+  const splits = (go.splits || []).map((s) => ({ vendorId: s.vendorId, amountPaise: Math.round((s.amountPaise * amountPaise) / go.amountPaise) })).filter((s) => s.amountPaise > 0);
+  await GatewayOrder.updateOne({ _id: go._id }, { $push: { refunds: { refundId, amountPaise, status: 'REQUESTED', purpose, note: note?.slice(0, 200), at: new Date() } } });
+  let r;
+  try {
+    r = await provider.refundOrder({ orderId: go.orderId, refundId, amountPaise, note, splits });
+  } catch (err) {
+    await GatewayOrder.updateOne({ _id: go._id, 'refunds.refundId': refundId }, { $set: { 'refunds.$.status': 'FAILED', 'refunds.$.updatedAt': new Date() } });
+    throw err;
+  }
+  await applyGatewayRefund(go.orderId, refundId, r.refund_status || 'PENDING');
+  return { refundId, status: r.refund_status || 'PENDING' };
+}
+
+/** Refund status from the API or the REFUND_STATUS_WEBHOOK. Each refund changes our records once. */
+async function applyGatewayRefund(orderId, refundId, providerStatus) {
+  const final = providerStatus === 'SUCCESS' ? 'SUCCESS' : ['CANCELLED', 'REJECTED'].includes(providerStatus) ? 'FAILED' : 'PENDING';
+  const go = await GatewayOrder.findOneAndUpdate(
+    { orderId, refunds: { $elemMatch: { refundId, status: { $nin: ['SUCCESS', 'FAILED'] } } } },
+    { $set: { 'refunds.$.status': final, 'refunds.$.updatedAt': new Date() } },
+    { returnDocument: 'after' },
+  );
+  if (!go || final !== 'SUCCESS') return go ? `refund_${final.toLowerCase()}` : 'refund_unknown';
+  const rf = go.refunds.find((r) => r.refundId === refundId);
+  if (rf.purpose === 'duplicate') return 'refund_duplicate';
+  const now = new Date();
+  if (go.kind === 'invoice') {
+    await applyRefund(go.providerPaymentId, rf.amountPaise, refundId);
+  } else if (go.kind === 'facility') {
+    const b = await FacilityBooking.findOneAndUpdate({ _id: go.ref }, { 'payment.status': 'refunded', 'payment.refundedAt': now }, { returnDocument: 'after' });
+    if (b) {
+      await postLedgerEntry({ society: b.society, direction: 'debit', amountPaise: rf.amountPaise, account: 'gateway', category: 'Facility booking refund', entryType: 'refund', sourceType: 'payment', sourceId: go._id, memo: `Refund ${refundId}`, eventKey: `refund:${refundId}` });
+      notifyUsers([b.user], { society: b.society, type: 'payment', title: 'Refund done', body: `${formatINR(rf.amountPaise)} refunded for your ${b.date} booking.`, route: 'Bookings' }).catch(() => {});
+    }
+  } else if (go.kind === 'order') {
+    const o = await ProductOrder.findOneAndUpdate({ _id: go.ref }, { 'payment.status': 'refunded', 'payment.refundedAt': now }, { returnDocument: 'after' });
+    if (o) notifyUsers([o.customer], { type: 'order', title: 'Refund done', body: `${formatINR(rf.amountPaise)} refunded for order ${o.orderNumber}.`, route: 'MyOrders', id: String(o._id) }).catch(() => {});
+  }
+  return 'refund_success';
+}
+
+/** Signed, idempotent Cashfree webhook. Payment events only trigger a server-side sync. */
+async function handleCashfreeWebhook(rawBody, signature, timestamp) {
+  if (!gatewayReady() || !provider.verifyWebhookSignature(rawBody, signature, timestamp)) throw badRequest('Invalid webhook signature');
+  let payload;
+  try {
+    payload = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    throw badRequest('Invalid webhook body');
+  }
+  const eventId = sha256(rawBody);
+  try {
+    await PaymentWebhookEvent.create({ provider: 'cashfree', eventId, event: String(payload.type || ''), payloadHash: eventId });
+  } catch (err) {
+    if (err.code === 11000) return 'duplicate';
+    throw err;
+  }
+  let outcome = 'ignored';
+  try {
+    const type = String(payload.type || '');
+    if (type.startsWith('PAYMENT_')) {
+      const orderId = payload.data?.order?.order_id;
+      const go = orderId ? await syncGatewayOrder(String(orderId), 'webhook') : null;
+      outcome = go ? go.status : 'unknown_order';
+    } else if (type.startsWith('REFUND')) {
+      const r = payload.data?.refund;
+      if (r?.order_id && r?.refund_id) outcome = await applyGatewayRefund(String(r.order_id), String(r.refund_id), r.refund_status);
+    }
+    await PaymentWebhookEvent.updateOne({ provider: 'cashfree', eventId }, { processedAt: new Date(), outcome });
+  } catch (err) {
+    await PaymentWebhookEvent.deleteOne({ provider: 'cashfree', eventId });
+    throw err;
+  }
+  return outcome;
+}
+
+// ---------- hosted checkout + return pages (opened by the app in a browser) ----------
+const htmlEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+function payPage(res, { title, body, script, nonce, status = 200 }) {
+  res.status(status);
+  res.set('Cache-Control', 'no-store');
+  res.set(
+    'Content-Security-Policy',
+    `default-src 'none'; script-src 'nonce-${nonce}' https://sdk.cashfree.com; connect-src https://*.cashfree.com; frame-src https://*.cashfree.com; img-src https: data:; style-src 'unsafe-inline' https://*.cashfree.com; font-src https: data:; base-uri 'none'; form-action https:`,
+  );
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)} · NIVASA</title>
+<style>body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f4ef;color:#1d2433;display:flex;min-height:100vh;align-items:center;justify-content:center}main{background:#fff;max-width:420px;width:calc(100% - 32px);border-radius:16px;padding:28px 22px;box-shadow:0 6px 24px rgba(0,0,0,.08);text-align:center}h1{font-size:20px;margin:0 0 4px;color:#0f3d3e}.amt{font-size:28px;font-weight:700;margin:14px 0}.badge{display:inline-block;background:#fff3cd;color:#7a5b00;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600;margin-top:8px}.btn{display:inline-block;margin-top:18px;background:#0f3d3e;color:#fff;text-decoration:none;padding:12px 22px;border-radius:12px;font-weight:600}.muted{color:#6b7280;font-size:14px}</style>
+</head><body><main><h1>NIVASA</h1>${body}</main>${script ? `<script nonce="${nonce}">${script}</script>` : ''}</body></html>`);
+}
+
+async function checkoutPage(req, res) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const orderId = String(req.params.orderId || '');
+  const go = GATEWAY_ORDER_ID.test(orderId) && safeEqual(checkoutToken(orderId), String(req.query.t || '')) ? await GatewayOrder.findOne({ orderId }).select('+sessionId') : null;
+  if (!go) return payPage(res, { title: 'Payment', nonce, status: 404, body: '<p class="muted">This payment link is not valid. Go back to the app and try again.</p>' });
+  const back = `${APP_RETURN_URL}?order_id=${encodeURIComponent(orderId)}&status=${go.status}`;
+  const test = go.mode === 'sandbox' ? '<div class="badge">Test mode — no real money is charged</div>' : '';
+  if (go.status !== 'created' || (go.expiresAt && go.expiresAt < new Date())) {
+    return payPage(res, { title: 'Payment', nonce, body: `<p class="muted">${go.status === 'paid' ? 'This payment is already complete.' : 'This payment link has expired. Go back to the app and try again.'}</p><a class="btn" href="${htmlEscape(back)}">Back to NIVASA</a>` });
+  }
+  const mode = go.mode === 'production' ? 'production' : 'sandbox';
+  payPage(res, {
+    title: 'Pay securely',
+    nonce,
+    body: `${test}<div class="amt">${htmlEscape(formatINR(go.amountPaise))}</div><p id="msg" class="muted">Opening secure Cashfree checkout…</p><noscript><p class="muted">Turn on JavaScript to pay.</p></noscript><script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>`,
+    script: `(function(){var m=document.getElementById('msg');function go(){try{var cf=Cashfree({mode:${JSON.stringify(mode)}});cf.checkout({paymentSessionId:${JSON.stringify(go.sessionId).replace(/</g, '\\u003c')},redirectTarget:"_self"});}catch(e){m.textContent='Could not open the payment page. Go back to the app and try again.';}}if(window.Cashfree){go();}else{window.addEventListener('load',function(){if(window.Cashfree){go();}else{m.textContent='Could not load the payment page. Check your internet and try again.';}});}})();`,
+  });
+}
+
+async function checkoutReturnPage(req, res) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const orderId = String(req.query.order_id || '');
+  if (!GATEWAY_ORDER_ID.test(orderId)) return payPage(res, { title: 'Payment', nonce, status: 400, body: '<p class="muted">Unknown payment.</p>' });
+  let go = await GatewayOrder.findOne({ orderId });
+  if (!go) return payPage(res, { title: 'Payment', nonce, status: 404, body: '<p class="muted">Unknown payment.</p>' });
+  go = (await syncGatewayOrder(orderId, 'return').catch((err) => logger.warn({ orderId, err: err.message }, 'Return sync failed'))) || go;
+  const status = go.status === 'paid' ? 'paid' : go.status === 'created' ? (go.lastError ? 'failed' : 'pending') : go.status;
+  const back = `${APP_RETURN_URL}?order_id=${encodeURIComponent(orderId)}&status=${status}`;
+  const text = { paid: 'Payment successful.', pending: 'We are confirming your payment with the bank…', failed: go.lastError || 'Payment was not completed.', expired: 'This payment link expired.', amount_mismatch: 'We could not confirm this payment. Contact support.' }[status] || 'Payment status updated.';
+  payPage(res, {
+    title: 'Payment',
+    nonce,
+    body: `${go.mode === 'sandbox' ? '<div class="badge">Test mode</div>' : ''}<div class="amt">${htmlEscape(formatINR(go.amountPaise))}</div><p>${htmlEscape(text)}</p><a class="btn" href="${htmlEscape(back)}">Back to NIVASA</a>`,
+    script: `setTimeout(function(){location.href=${JSON.stringify(back)};},600);`,
+  });
+}
+
+async function ownGatewayOrder(req) {
+  const orderId = String(req.params.orderId || '');
+  if (!GATEWAY_ORDER_ID.test(orderId)) throw notFound('Payment');
+  const go = await GatewayOrder.findOne({ orderId, user: req.user._id });
+  if (!go) throw notFound('Payment');
+  return go;
+}
+async function checkoutStatus(req, res) {
+  res.json(presentCheckout(await ownGatewayOrder(req)));
+}
+async function refreshCheckout(req, res) {
+  const go = await ownGatewayOrder(req);
+  res.json(presentCheckout((await syncGatewayOrder(go.orderId, 'app')) || go));
+}
+
+// ---------- pay endpoints ----------
+/** Member pays a confirmed facility booking's fee (money to the society like dues). */
+async function payFacilityBooking(req, res) {
+  const b = await FacilityBooking.findOne({ _id: req.valid.params.id, society: req.societyId, user: req.user._id }).populate('facility', 'name');
+  if (!b) throw notFound('Booking');
+  if (b.status !== 'confirmed') throw conflict('You can pay once the booking is confirmed.', 'INVALID_TRANSITION');
+  if (!(b.feePaise > 0)) throw badRequest('This booking has no fee to pay.');
+  if (b.payment?.status && b.payment.status !== 'unpaid') throw conflict('This booking fee is already paid.', 'ALREADY_PAID');
+  const society = await Society.findById(req.societyId).lean();
+  const availability = paymentAvailability(society);
+  if (!availability.available || !gatewayReady()) throw unavailable(availability.reason || 'Online payment is not available yet.', 'PAYMENTS_UNAVAILABLE');
+  const go = await startGatewayCheckout({ kind: 'facility', ref: b._id, society: society._id, user: req.user, amountPaise: b.feePaise, splits: societySplits(society, b.feePaise), note: `${b.facility?.name || 'Facility'} ${b.date}` });
+  await FacilityBooking.updateOne({ _id: b._id, 'payment.status': { $in: ['unpaid', null] } }, { 'payment.providerOrderId': go.orderId });
+  res.status(201).json(presentCheckout(go));
+}
+
+/** Vendor's Cashfree vendor id for a split, refreshing a "pending" account once. */
+async function vendorSplit(vendorUserId, amountPaise) {
+  let p = await VendorProfile.findOne({ user: vendorUserId }).select('payout kycStatus').lean();
+  if (p?.payout?.status === 'pending' || (p?.kycStatus === 'approved' && ['not_created', 'failed', undefined].includes(p?.payout?.status))) {
+    await ensureVendorPayout(vendorUserId).catch(() => null);
+    p = await VendorProfile.findOne({ user: vendorUserId }).select('payout').lean();
+  }
+  if (p?.payout?.status !== 'active' || !p.payout.cfVendorId) {
+    throw conflict("This seller can't accept online payments yet. Please choose cash / pay on delivery.", 'VENDOR_PAYOUT_NOT_READY');
+  }
+  return amountPaise > 0 ? [{ vendorId: p.payout.cfVendorId, amountPaise }] : [];
+}
+
+/** Member pays a completed service booking online (listed price only). */
+async function payServiceBooking(req, res) {
+  const b = await ServiceBooking.findOne({ _id: req.valid.params.id, customer: req.user._id }).lean();
+  if (!b) throw notFound('Booking');
+  if (b.payment?.status === 'paid') throw conflict('This booking is already paid.', 'ALREADY_PAID');
+  if (b.status !== 'completed') throw conflict('You can pay online once the vendor marks the job done.', 'INVALID_TRANSITION');
+  if (b.pricingVersion !== 2 || !(b.payablePaise >= 100)) throw conflict('This service has no fixed price — pay the vendor directly.', 'NO_FIXED_PRICE');
+  assertGatewayReady();
+  const s = serviceOnlineSettlement(b, b.payablePaise);
+  const splits = await vendorSplit(b.vendor, s.vendorEarningsPaise);
+  const go = await startGatewayCheckout({ kind: 'booking', ref: b._id, user: req.user, amountPaise: b.payablePaise, splits, note: b.offerTitle });
+  res.status(201).json(presentCheckout(go));
+}
+
+// ======================= Vendor payout account (Cashfree Easy Split vendor) =======================
+const payoutStatusOf = (s) => (s === 'ACTIVE' ? 'active' : ['BLOCKED', 'DELETED'].includes(s) ? 'blocked' : 'pending');
+const cfName = (s) => String(s || '').replace(/[^A-Za-z0-9 ./&-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+const presentPayout = (p) => ({
+  status: p?.payout?.status || 'not_created',
+  cfVendorId: p?.payout?.cfVendorId || null,
+  providerStatus: p?.payout?.providerStatus || null,
+  message: p?.payout?.message || null,
+  updatedAt: p?.payout?.updatedAt || null,
+  ready: p?.payout?.status === 'active',
+  available: gatewayReady(),
+});
+
+/** Create the vendor's Cashfree Easy Split account from the approved KYC (or refresh its status). */
+async function ensureVendorPayout(userId) {
+  assertGatewayReady();
+  const p = await VendorProfile.findOne({ user: userId }).select('+bankAccountEnc +panEnc');
+  if (!p || p.kycStatus !== 'approved') throw conflict("Approve the vendor's KYC first.", 'KYC_REQUIRED');
+  const user = await User.findById(userId).select('name email phone').lean();
+  const vendorId = p.payout?.cfVendorId || `nv${userId}`;
+  const save = (patch) => {
+    const $set = { 'payout.provider': 'cashfree', 'payout.cfVendorId': vendorId, 'payout.updatedAt': new Date() };
+    for (const [k, v] of Object.entries(patch)) $set[`payout.${k}`] = v;
+    return VendorProfile.updateOne({ _id: p._id }, { $set });
+  };
+  try {
+    let v = null;
+    if (p.payout?.cfVendorId) {
+      v = await provider.getVendor(vendorId).catch((err) => {
+        if (err.providerStatus === 404 || /not exist|not found/i.test(err.message)) return null;
+        throw err;
+      });
+    }
+    if (!v) {
+      const missing = !user?.email ? 'Add an email address to this vendor account — Cashfree needs it.' : !/^[6-9]\d{9}$/.test(user.phone || '') ? 'The vendor account has no valid mobile number.' : !p.bankAccountEnc || !p.bankIfsc || !p.panEnc ? 'KYC bank account / PAN details are missing.' : null;
+      if (missing) {
+        await save({ status: 'failed', providerStatus: null, message: missing });
+        return presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
+      }
+      const body = {
+        vendor_id: vendorId,
+        status: 'ACTIVE',
+        name: cfName(p.shopName || p.businessName || user.name) || 'NIVASA vendor',
+        email: user.email,
+        phone: user.phone,
+        verify_account: env.CASHFREE_ENV === 'production',
+        dashboard_access: false,
+        bank: { account_number: decryptKyc(p.bankAccountEnc), account_holder: cfName(p.bankAccountHolder || user.name) || 'Account holder', ifsc: p.bankIfsc },
+        kyc_details: { account_type: p.businessType === 'business' ? 'BUSINESS' : 'INDIVIDUAL', pan: decryptKyc(p.panEnc) },
+      };
+      try {
+        v = await provider.createVendor(body);
+      } catch (err) {
+        if (!/already exist/i.test(err.message)) throw err;
+        v = await provider.getVendor(vendorId);
+      }
+    }
+    const status = payoutStatusOf(v?.status);
+    await save({ status, providerStatus: v?.status || null, message: status === 'active' ? null : status === 'blocked' ? 'Cashfree blocked or deleted this vendor account.' : 'Cashfree is verifying the bank account. In test mode this takes about 10 minutes.' });
+  } catch (err) {
+    await save({ status: 'failed', providerStatus: null, message: String(err.message || 'Cashfree request failed').slice(0, 300) });
+  }
+  return presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
+}
+
+async function platformVendorPayout(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const payout = await ensureVendorPayout(user._id);
+  await audit(req, { action: 'platform.vendor_payout_sync', targetType: 'User', targetId: user._id, summary: `Cashfree payout account: ${payout.status}` });
+  res.json(payout);
+}
+
+async function vendorRefreshPayout(req, res) {
+  const p = await VendorProfile.findOne({ user: req.user._id }).select('payout kycStatus').lean();
+  if (!gatewayReady() || p?.kycStatus !== 'approved') return res.json(presentPayout(p));
+  // Vendors may only refresh an existing account; creation happens on KYC approval / by the Master Admin.
+  if (!p?.payout?.cfVendorId || p.payout.status === 'failed') return res.json(presentPayout(p));
+  res.json(await ensureVendorPayout(req.user._id));
+}
+
+// ======================= Products (skills/vendor-products) =======================
+
+
+function orderSettlement(o, amountPaise) {
+  const discountPaise = o.discountPaise || 0;
+  const commissionPaise = o.commissionPaise || 0;
+  const netToPlatformPaise = commissionPaise - discountPaise;
+  return { amountPaise, grossPaise: amountPaise + discountPaise, discountPaise, commissionBps: o.commissionBps || 0, commissionPaise, netToPlatformPaise, vendorEarningsPaise: amountPaise - netToPlatformPaise };
+}
+
+const productPopulate = [{ path: 'photos' }, { path: 'category', select: 'name icon' }];
+
+function presentProduct(p, viewerId, profile) {
+  const mine = String(p.vendor?._id || p.vendor) === String(viewerId);
+  const pr = offerPricing(p.pricePaise, 'fixed', profile);
+  const base = {
+    _id: p._id,
+    title: p.title,
+    description: p.description || '',
+    unit: p.unit || null,
+    category: p.category?.name ? { _id: p.category._id, name: p.category.name, icon: p.category.icon || null } : p.category,
+    photos: presentMedia(p.photos),
+    stock: p.stock,
+    inStock: p.stock > 0,
+    maxPerOrder: p.maxPerOrder,
+    delivery: p.delivery,
+    pickup: p.pickup,
+    deliveryChargePaise: p.deliveryChargePaise || 0,
+    city: p.city || null,
+    status: p.status,
+    shop: { name: profile?.shopName || profile?.businessName || null, logoUrl: mediaUrl(profile?.logo?.mimeType ? profile.logo : null) },
+    mine,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+  if (mine) {
+    return {
+      ...base,
+      pricePaise: p.pricePaise,
+      moderationStatus: p.moderationStatus,
+      moderationNote: p.moderationNote || null,
+      location: presentLocation(p),
+      pricing: { vendorPricePaise: pr.vendorPricePaise, commissionPercent: pr.commissionBps / 100, commissionPaise: pr.commissionPaise, memberPricePaise: pr.memberPricePaise, memberDiscountPercent: pr.discountBps / 100, discountPaise: pr.discountPaise },
+    };
+  }
+  return { ...base, pricePaise: pr.memberPricePaise, pricing: { memberPricePaise: pr.memberPricePaise, discountAvailable: pr.discountPaise > 0, discountPaise: pr.discountPaise, payableWithDiscountPaise: pr.memberPricePaise - pr.discountPaise } };
+}
+
+async function presentProducts(items, viewerId) {
+  const ids = [...new Set(items.map((p) => String(p.vendor?._id || p.vendor)))];
+  const rows = ids.length ? await VendorProfile.find({ user: { $in: ids } }).select('user shopName businessName logo commissionBps memberDiscountBps').populate('logo').lean() : [];
+  const map = new Map(rows.map((r) => [String(r.user), r]));
+  return items.map((p) => presentProduct(p, viewerId, map.get(String(p.vendor?._id || p.vendor))));
+}
+
+const productBase = {
+  title: text(140, 2),
+  description: optText(3000),
+  photos: z.array(objectId).max(6).optional(),
+  pricePaise: z.number().int('Price must be in whole paise').min(100, 'Price must be at least ₹1').max(1_00_00_000_00),
+  unit: optText(40),
+  stock: z.number().int().min(0).max(100000),
+  maxPerOrder: z.number().int().min(1).max(100),
+  delivery: z.boolean(),
+  pickup: z.boolean(),
+  deliveryChargePaise: z.number().int().min(0).max(1_00_000_00),
+  status: z.enum(['active', 'paused']),
+};
+const productCreate = z
+  .object({ categoryId: objectId, ...productBase, maxPerOrder: productBase.maxPerOrder.optional(), delivery: productBase.delivery.optional(), pickup: productBase.pickup.optional(), deliveryChargePaise: productBase.deliveryChargePaise.optional(), status: productBase.status.optional() })
+  .strict()
+  .refine((v) => v.delivery !== false || v.pickup === true, { message: 'Offer delivery, pickup or both', path: ['delivery'] });
+const productUpdate = z.object(Object.fromEntries(Object.entries({ categoryId: objectId, ...productBase }).map(([k, v]) => [k, v.optional()]))).strict();
+const productQuery = pageQuery
+  .extend({
+    categoryId: objectId.optional(),
+    q: z.string().trim().max(80).optional(),
+    city: z.string().trim().max(80).optional(),
+    inStock: z.enum(['true', 'false']).optional(),
+    lat: z.coerce.number().min(-90, 'Latitude must be between -90 and 90').max(90, 'Latitude must be between -90 and 90').optional(),
+    lng: z.coerce.number().min(-180, 'Longitude must be between -180 and 180').max(180, 'Longitude must be between -180 and 180').optional(),
+    radiusKm: z.coerce.number().min(1, 'Radius must be 1 to 100 km').max(100, 'Radius must be 1 to 100 km').optional(),
+  })
+  .superRefine((v, ctx) => {
+    if ((v.lat === undefined) !== (v.lng === undefined)) ctx.addIssue({ code: 'custom', path: ['lat'], message: 'Send both lat and lng' });
+  });
+const orderCreate = z
+  .object({
+    quantity: z.number().int().min(1).max(100),
+    fulfilment: z.enum(['delivery', 'pickup']),
+    address: optText(300),
+    note: optText(300),
+    applyDiscount: z.boolean().optional(),
+    paymentMethod: z.enum(['cod', 'online']),
+  })
+  .strict()
+  .refine((v) => v.fulfilment !== 'delivery' || (v.address && v.address.length >= 5), { message: 'Enter the delivery address', path: ['address'] });
+const orderListQuery = pageQuery.extend({ status: z.enum([...Object.keys(ORDER_TRANSITIONS), 'open']).optional() });
+const orderStatusBody = z.object({ status: z.enum(['confirmed', 'packed', 'shipped', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'cancelled']), note: optText(300) }).strict();
+const orderCancel = z.object({ reason: optText(300) }).strict();
+
+async function productCategory(categoryId) {
+  const c = await ServiceCategory.findOne({ _id: categoryId, kind: 'product', active: true, society: null }).lean();
+  if (!c) throw badRequest('Choose a valid product category');
+  return c;
+}
+
+async function productCategories(_req, res) {
+  res.json({ items: await categoriesFor('product', null) });
+}
+
+async function browseProducts(req, res) {
+  const q = req.valid.query;
+  const filter = { moderationStatus: 'approved', status: 'active' };
+  if (q.categoryId) filter.category = q.categoryId;
+  if (q.inStock === 'true') filter.stock = { $gt: 0 };
+  if (q.city) filter.city = new RegExp(`^${escapeRegex(q.city)}`, 'i');
+  if (q.q) {
+    const rx = new RegExp(escapeRegex(q.q), 'i');
+    filter.$or = [{ title: rx }, { description: rx }];
+  }
+  if (q.lat !== undefined) {
+    const radiusKm = q.radiusKm ?? 10;
+    filter.location = { $geoWithin: { $centerSphere: [[q.lng, q.lat], radiusKm / 6371] } };
+    const rows = await Product.find(filter).populate(productPopulate).limit(NEAR_ME_SCAN).lean();
+    const ranked = rows
+      .map((p) => ({ p, d: haversineKm(q.lat, q.lng, p.location.coordinates[1], p.location.coordinates[0]) }))
+      .filter((x) => x.d <= radiusKm)
+      .sort((a, b) => a.d - b.d || String(b.p._id).localeCompare(String(a.p._id)));
+    const pageNo = q.page || 1;
+    const limit = q.limit || 20;
+    const slice = ranked.slice((pageNo - 1) * limit, pageNo * limit);
+    const items = await presentProducts(slice.map((x) => x.p), req.user._id);
+    return res.json({ items: items.map((it, i) => ({ ...it, distanceKm: Math.round(slice[i].d * 10) / 10 })), page: pageNo, limit, total: ranked.length, pages: Math.ceil(ranked.length / limit), near: { lat: q.lat, lng: q.lng, radiusKm } });
+  }
+  const page = await pagedFind(Product, filter, q, { sortable: ['createdAt', 'pricePaise'], populate: productPopulate });
+  res.json({ ...page, items: await presentProducts(page.items, req.user._id) });
+}
+
+async function myProducts(req, res) {
+  const page = await pagedFind(Product, { vendor: req.user._id, moderationStatus: { $ne: 'removed' } }, req.valid.query, { populate: productPopulate });
+  res.json({ ...page, items: await presentProducts(page.items, req.user._id) });
+}
+
+async function getProduct(req, res) {
+  const p = await Product.findById(req.valid.params.id).populate(productPopulate).lean();
+  if (!p) throw notFound('Product');
+  const mine = String(p.vendor) === String(req.user._id);
+  if (mine ? p.moderationStatus === 'removed' : p.moderationStatus !== 'approved' || p.status !== 'active') throw notFound('Product');
+  res.json((await presentProducts([p], req.user._id))[0]);
+}
+
+async function createProduct(req, res) {
+  await assertListingVendor(req.user);
+  const { categoryId, photos, ...data } = req.valid.body;
+  const live = await Product.countDocuments({ vendor: req.user._id, moderationStatus: { $ne: 'removed' } });
+  if (live >= PRODUCT_LIMIT) throw new AppError(409, 'PRODUCT_LIMIT', `You can have up to ${PRODUCT_LIMIT} products. Delete one you no longer sell first.`);
+  const category = await productCategory(categoryId);
+  const photoIds = await claimMedia(photos, { owner: req.user._id, purpose: 'product', max: 6 });
+  const approval = await needsApproval(null);
+  const shop = await VendorProfile.findOne({ user: req.user._id }).select('location locationLabel city').lean();
+  const p = await Product.create({
+    ...data,
+    delivery: data.delivery ?? true,
+    pickup: data.pickup ?? false,
+    category: category._id,
+    photos: photoIds,
+    vendor: req.user._id,
+    city: shop?.city,
+    ...locationFields(presentLocation(shop)),
+    moderationStatus: approval ? 'pending' : 'approved',
+  });
+  if (approval) alertModerators(null, p.title);
+  const full = await Product.findById(p._id).populate(productPopulate).lean();
+  res.status(201).json((await presentProducts([full], req.user._id))[0]);
+}
+
+async function updateProduct(req, res) {
+  const p = await Product.findOne({ _id: req.valid.params.id, vendor: req.user._id, moderationStatus: { $ne: 'removed' } });
+  if (!p) throw notFound('Product');
+  const { categoryId, photos, ...data } = req.valid.body;
+  const prevCategory = String(p.category);
+  if (categoryId) p.category = (await productCategory(categoryId))._id;
+  const delivery = data.delivery ?? p.delivery;
+  const pickup = data.pickup ?? p.pickup;
+  if (!delivery && !pickup) throw badRequest('Offer delivery, pickup or both');
+  // Stock, status and price changes don't need a new review; text/photos/category do.
+  const reviewKeys = ['title', 'description', 'unit'];
+  const contentChanged =
+    reviewKeys.some((k) => k in data && (data[k] ?? '') !== (p[k] ?? '')) ||
+    (photos && photos.map(String).join() !== p.photos.map(String).join()) ||
+    (categoryId && String(categoryId) !== prevCategory);
+  Object.assign(p, data);
+  if (photos) p.photos = await claimMedia(photos, { owner: req.user._id, purpose: 'product', max: 6 });
+  if (contentChanged && (await needsApproval(null))) p.moderationStatus = 'pending';
+  await p.save();
+  const full = await Product.findById(p._id).populate(productPopulate).lean();
+  res.json((await presentProducts([full], req.user._id))[0]);
+}
+
+async function deleteProduct(req, res) {
+  const r = await Product.updateOne({ _id: req.valid.params.id, vendor: req.user._id, moderationStatus: { $ne: 'removed' } }, { moderationStatus: 'removed', status: 'paused', moderationNote: 'Deleted by vendor' });
+  if (!r.matchedCount) throw notFound('Product');
+  res.json({ ok: true });
+}
+
+// ---------- orders ----------
+const ORDER_STATUS_TEXT = {
+  placed: 'Order placed',
+  confirmed: 'Order confirmed by the shop',
+  packed: 'Order packed',
+  shipped: 'Order shipped',
+  out_for_delivery: 'Out for delivery',
+  ready_for_pickup: 'Ready for pickup',
+  delivered: 'Delivered',
+  cancelled: 'Order cancelled',
+};
+const orderPopulate = [{ path: 'photo' }];
+
+function nextOrderStatuses(o) {
+  return (ORDER_TRANSITIONS[o.status] || []).filter((s) => {
+    if (o.status === 'awaiting_payment') return false;
+    if (s === 'placed') return false;
+    if (['shipped', 'out_for_delivery'].includes(s)) return o.fulfilment === 'delivery';
+    if (s === 'ready_for_pickup') return o.fulfilment === 'pickup';
+    return true;
+  });
+}
+
+/** as: 'member' (never vendor price / rates), 'vendor' (own order + settlement), 'platform' (everything). */
+function presentOrder(o, as) {
+  const base = {
+    _id: o._id,
+    orderNumber: o.orderNumber,
+    product: { _id: o.product?._id || o.product, title: o.title, unit: o.unit || null, photoUrl: mediaUrl(o.photo?.mimeType ? o.photo : null) },
+    quantity: o.quantity,
+    fulfilment: o.fulfilment,
+    address: o.address || null,
+    note: o.note || null,
+    shopName: o.shopName || null,
+    pickupAddress: o.fulfilment === 'pickup' ? o.pickupAddress || null : null,
+    paymentMethod: o.paymentMethod,
+    status: o.status,
+    statusText: o.status === 'awaiting_payment' ? 'Waiting for payment' : ORDER_STATUS_TEXT[o.status],
+    timeline: (o.timeline || []).map((t) => ({ status: t.status, note: t.note || null, at: t.at })),
+    cancelledBy: o.cancelledBy || null,
+    cancelReason: o.cancelReason || null,
+    memberUnitPaise: o.memberUnitPaise,
+    memberTotalPaise: o.memberTotalPaise,
+    discountPaise: o.discountPaise || 0,
+    deliveryChargePaise: o.deliveryChargePaise || 0,
+    payablePaise: o.payablePaise,
+    payment: { status: o.payment?.status || 'unpaid', method: o.payment?.method || null, amountPaise: o.payment?.amountPaise ?? null, paidAt: o.payment?.paidAt || null, refundedAt: o.payment?.refundedAt || null },
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt,
+  };
+  if (as === 'member') {
+    return { ...base, actions: [...(MEMBER_CANCELLABLE.includes(o.status) ? ['cancel'] : []), ...(o.status === 'awaiting_payment' && o.payment?.status === 'unpaid' ? ['pay'] : [])] };
+  }
+  const settlement = o.payment?.status && o.payment.status !== 'unpaid' ? settlementOf(o.payment) : null;
+  const vendorView = {
+    ...base,
+    customer: { name: o.customerName || o.customer?.name || null, phone: o.customerPhone || null },
+    vendorUnitPaise: o.vendorUnitPaise,
+    vendorTotalPaise: o.vendorTotalPaise,
+    commissionPercent: (o.commissionBps || 0) / 100,
+    commissionPaise: o.commissionPaise,
+    yourEarningsPaise: o.vendorTotalPaise + (o.deliveryChargePaise || 0),
+    settlement,
+    nextStatuses: as === 'vendor' ? nextOrderStatuses(o) : [],
+  };
+  if (as === 'vendor') return vendorView;
+  // Master Admin sees masked customer phones, like everywhere else on the platform.
+  return { ...vendorView, customer: { ...vendorView.customer, phone: o.customerPhone ? maskPhone(o.customerPhone) : null }, address: o.address ? `${o.address.slice(0, 12)}…` : null, vendor: { _id: o.vendor?._id || o.vendor, name: o.vendor?.name || null } };
+}
+
+async function placeProductOrder(req, res) {
+  if (req.user.accountType === 'vendor') throw forbidden('Vendor accounts cannot place orders. Use a member account to buy.', 'MEMBER_ONLY');
+  const b = req.valid.body;
+  const product = await Product.findOne({ _id: req.valid.params.id, moderationStatus: 'approved', status: 'active' }).populate('photos').lean();
+  if (!product) throw notFound('Product');
+  if (String(product.vendor) === String(req.user._id)) throw badRequest('You cannot order your own product');
+  if (b.fulfilment === 'delivery' && !product.delivery) throw badRequest('This product is available for pickup only.');
+  if (b.fulfilment === 'pickup' && !product.pickup) throw badRequest('This product is available for delivery only.');
+  if (b.quantity > product.maxPerOrder) throw badRequest(`You can order up to ${product.maxPerOrder} at a time.`);
+  if (!/^[6-9]\d{9}$/.test(req.user.phone || '')) throw badRequest('Add your mobile number to your profile so the shop can reach you.', 'PHONE_REQUIRED');
+  const profile = await VendorProfile.findOne({ user: product.vendor }).select('shopName businessName commissionBps memberDiscountBps locationLabel address').lean();
+  const pr = offerPricing(product.pricePaise, 'fixed', profile);
+  if (b.applyDiscount && !(pr.discountPaise > 0)) throw conflict('This shop has no member discount right now.', 'NO_DISCOUNT');
+  const qty = b.quantity;
+  const deliveryChargePaise = b.fulfilment === 'delivery' ? product.deliveryChargePaise || 0 : 0;
+  const discountUnitPaise = b.applyDiscount ? pr.discountPaise : 0;
+  const snap = {
+    vendorUnitPaise: pr.vendorPricePaise,
+    commissionBps: pr.commissionBps,
+    commissionUnitPaise: pr.commissionPaise,
+    memberUnitPaise: pr.memberPricePaise,
+    discountBps: b.applyDiscount ? pr.discountBps : 0,
+    discountUnitPaise,
+    vendorTotalPaise: pr.vendorPricePaise * qty,
+    commissionPaise: pr.commissionPaise * qty,
+    memberTotalPaise: pr.memberPricePaise * qty,
+    discountPaise: discountUnitPaise * qty,
+    deliveryChargePaise,
+  };
+  snap.payablePaise = snap.memberTotalPaise - snap.discountPaise + deliveryChargePaise;
+  let splits = [];
+  if (b.paymentMethod === 'online') {
+    assertGatewayReady();
+    splits = await vendorSplit(product.vendor, orderSettlement(snap, snap.payablePaise).vendorEarningsPaise);
+  }
+  // Reserve stock atomically.
+  const reserved = await Product.findOneAndUpdate({ _id: product._id, stock: { $gte: qty }, status: 'active', moderationStatus: 'approved' }, { $inc: { stock: -qty } });
+  if (!reserved) {
+    const cur = await Product.findById(product._id).select('stock').lean();
+    throw conflict(cur?.stock > 0 ? `Only ${cur.stock} left in stock.` : 'This product is out of stock.', 'OUT_OF_STOCK');
+  }
+  let order;
+  try {
+    const seq = await nextSequence('product-order');
+    const now = new Date();
+    const status = b.paymentMethod === 'online' ? 'awaiting_payment' : 'placed';
+    order = await ProductOrder.create({
+      orderNumber: `NV${String(seq).padStart(7, '0')}`,
+      product: product._id,
+      vendor: product.vendor,
+      customer: req.user._id,
+      title: product.title,
+      unit: product.unit,
+      photo: product.photos?.[0]?._id,
+      quantity: qty,
+      ...snap,
+      fulfilment: b.fulfilment,
+      address: b.fulfilment === 'delivery' ? b.address : undefined,
+      customerName: req.user.name,
+      customerPhone: req.user.phone,
+      note: b.note,
+      shopName: profile?.shopName || profile?.businessName,
+      pickupAddress: profile?.address || profile?.locationLabel,
+      paymentMethod: b.paymentMethod,
+      status,
+      timeline: [{ status, note: status === 'placed' ? 'Pay on delivery' : 'Waiting for online payment', by: req.user._id, at: now }],
+    });
+  } catch (err) {
+    await Product.updateOne({ _id: product._id }, { $inc: { stock: qty } });
+    throw err;
+  }
+  let checkout = null;
+  if (b.paymentMethod === 'online') {
+    try {
+      const go = await startGatewayCheckout({ kind: 'order', ref: order._id, user: req.user, amountPaise: order.payablePaise, splits, note: `Order ${order.orderNumber}` });
+      await ProductOrder.updateOne({ _id: order._id }, { 'payment.providerOrderId': go.orderId });
+      checkout = presentCheckout(go);
+    } catch (err) {
+      await cancelOrderInternal(order._id, 'system', 'Online payment could not be started');
+      throw err;
+    }
+  } else {
+    notifyUsers([order.vendor], { type: 'order', title: 'New order', body: `${order.quantity} × ${order.title} · ${order.orderNumber} · pay on ${order.fulfilment}`, route: 'VendorOrders', id: String(order._id) }).catch(() => {});
+  }
+  const full = await ProductOrder.findById(order._id).populate(orderPopulate).lean();
+  res.status(201).json({ order: presentOrder(full, 'member'), checkout });
+}
+
+/** Cancel + restore stock once + refund an online payment. Returns the order or null if not cancellable. */
+async function cancelOrderInternal(orderId, by, reason, extraFilter = {}) {
+  const now = new Date();
+  const o = await ProductOrder.findOneAndUpdate(
+    { _id: orderId, status: { $nin: ['cancelled', 'delivered', 'shipped', 'out_for_delivery', 'ready_for_pickup'] }, ...extraFilter },
+    { $set: { status: 'cancelled', cancelledBy: by, cancelReason: reason }, $push: { timeline: { status: 'cancelled', note: reason, at: now } } },
+    { returnDocument: 'after' },
+  );
+  if (!o) return null;
+  const r = await ProductOrder.updateOne({ _id: o._id, stockRestored: { $ne: true } }, { stockRestored: true });
+  if (r.modifiedCount) await Product.updateOne({ _id: o.product }, { $inc: { stock: o.quantity } });
+  if (o.payment?.status === 'paid' && o.payment.method === 'online') {
+    await ProductOrder.updateOne({ _id: o._id }, { 'payment.status': 'refund_pending' });
+    const go = await GatewayOrder.findOne({ orderId: o.payment.providerOrderId });
+    await refundGatewayOrder(go, o.payment.amountPaise, `Order ${o.orderNumber} cancelled`, 'cancel').catch((err) => logger.error({ order: o.orderNumber, err: err.message }, 'Order refund failed — retry from Master Admin'));
+  }
+  return ProductOrder.findById(o._id).populate(orderPopulate).lean();
+}
+
+/** The scheduler cancels online orders that were not paid in time (asks Cashfree first). */
+async function expireOrderCheckout(orderRef) {
+  await cancelOrderInternal(orderRef, 'system', `Payment not completed within ${CHECKOUT_MINUTES} minutes`, { status: 'awaiting_payment' });
+}
+
+async function expireUnpaidOrders(now = new Date()) {
+  const stale = await ProductOrder.find({ status: 'awaiting_payment', createdAt: { $lt: new Date(now.getTime() - CHECKOUT_MINUTES * 60000) } }).select('_id payment').limit(50).lean();
+  for (const o of stale) {
+    if (o.payment?.providerOrderId && gatewayReady()) {
+      await syncGatewayOrder(o.payment.providerOrderId, 'job').catch((err) => logger.warn({ err: err.message }, 'Order payment sync failed'));
+    }
+    const cancelled = await cancelOrderInternal(o._id, 'system', `Payment not completed within ${CHECKOUT_MINUTES} minutes`, { status: 'awaiting_payment' });
+    if (cancelled) notifyUsers([cancelled.customer], { type: 'order', title: 'Order cancelled', body: `${cancelled.orderNumber}: the online payment was not completed.`, route: 'MyOrders', id: String(cancelled._id) }).catch(() => {});
+  }
+}
+
+async function myProductOrders(req, res) {
+  const filter = { customer: req.user._id };
+  const s = req.valid.query.status;
+  if (s === 'open') filter.status = { $nin: ['delivered', 'cancelled'] };
+  else if (s) filter.status = s;
+  const page = await pagedFind(ProductOrder, filter, req.valid.query, { populate: orderPopulate });
+  res.json({ ...page, items: page.items.map((o) => presentOrder(o, 'member')) });
+}
+
+async function getMyProductOrder(req, res) {
+  const o = await ProductOrder.findOne({ _id: req.valid.params.id, customer: req.user._id }).populate(orderPopulate).lean();
+  if (!o) throw notFound('Order');
+  res.json(presentOrder(o, 'member'));
+}
+
+async function cancelMyProductOrder(req, res) {
+  const cur = await ProductOrder.findOne({ _id: req.valid.params.id, customer: req.user._id }).select('status').lean();
+  if (!cur) throw notFound('Order');
+  if (!MEMBER_CANCELLABLE.includes(cur.status)) throw conflict('This order can no longer be cancelled — it is already packed or on its way.', 'INVALID_TRANSITION');
+  const reason = req.valid.body.reason || 'Cancelled by member';
+  const o = await cancelOrderInternal(cur._id, 'member', reason, { customer: req.user._id, status: { $in: MEMBER_CANCELLABLE } });
+  if (!o) throw conflict('This order changed — refresh and try again.', 'INVALID_TRANSITION');
+  notifyUsers([o.vendor], { type: 'order', title: 'Order cancelled by member', body: `${o.orderNumber}: ${reason}`, route: 'VendorOrders', id: String(o._id) }).catch(() => {});
+  res.json(presentOrder(o, 'member'));
+}
+
+async function payProductOrder(req, res) {
+  const o = await ProductOrder.findOne({ _id: req.valid.params.id, customer: req.user._id }).lean();
+  if (!o) throw notFound('Order');
+  if (o.paymentMethod !== 'online' || o.status !== 'awaiting_payment' || o.payment?.status !== 'unpaid') throw conflict('This order does not need an online payment.', 'INVALID_TRANSITION');
+  const splits = await vendorSplit(o.vendor, orderSettlement(o, o.payablePaise).vendorEarningsPaise);
+  const go = await startGatewayCheckout({ kind: 'order', ref: o._id, user: req.user, amountPaise: o.payablePaise, splits, note: `Order ${o.orderNumber}` });
+  await ProductOrder.updateOne({ _id: o._id, 'payment.status': 'unpaid' }, { 'payment.providerOrderId': go.orderId });
+  res.status(201).json(presentCheckout(go));
+}
+
+async function vendorOrders(req, res) {
+  const filter = { vendor: req.user._id, status: { $ne: 'awaiting_payment' } };
+  const s = req.valid.query.status;
+  if (s === 'open') filter.status = { $nin: ['delivered', 'cancelled', 'awaiting_payment'] };
+  else if (s) filter.status = s === 'awaiting_payment' ? '__none__' : s;
+  const [page, counts] = await Promise.all([
+    pagedFind(ProductOrder, filter, req.valid.query, { populate: orderPopulate }),
+    ProductOrder.aggregate([{ $match: { vendor: req.user._id, status: { $ne: 'awaiting_payment' } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+  ]);
+  res.json({ ...page, counts: Object.fromEntries(counts.map((c) => [c._id, c.n])), items: page.items.map((o) => presentOrder(o, 'vendor')) });
+}
+
+async function vendorOrder(req, res) {
+  const o = await ProductOrder.findOne({ _id: req.valid.params.id, vendor: req.user._id, status: { $ne: 'awaiting_payment' } }).populate(orderPopulate).lean();
+  if (!o) throw notFound('Order');
+  res.json(presentOrder(o, 'vendor'));
+}
+
+async function vendorOrderAction(req, res) {
+  const { status: to, note } = req.valid.body;
+  const cur = await ProductOrder.findOne({ _id: req.valid.params.id, vendor: req.user._id, status: { $ne: 'awaiting_payment' } }).lean();
+  if (!cur) throw notFound('Order');
+  if (!nextOrderStatuses(cur).includes(to)) throw conflict(`An order that is "${ORDER_STATUS_TEXT[cur.status] || cur.status}" can't move to "${ORDER_STATUS_TEXT[to]}".`, 'INVALID_TRANSITION');
+  if (to === 'cancelled') {
+    if (!note || note.length < 3) throw badRequest('Tell the member why you are cancelling.');
+    const o = await cancelOrderInternal(cur._id, 'vendor', note, { vendor: req.user._id, status: cur.status });
+    if (!o) throw conflict('This order changed — refresh and try again.', 'INVALID_TRANSITION');
+    await audit(req, { action: 'vendor.order_cancelled', targetType: 'ProductOrder', targetId: o._id, summary: `${o.orderNumber}: ${note}` });
+    notifyUsers([o.customer], { type: 'order', title: 'Order cancelled by the shop', body: `${o.orderNumber}: ${note}${o.payment?.status === 'refund_pending' ? ' · refund started' : ''}`, route: 'MyOrders', id: String(o._id) }).catch(() => {});
+    return res.json(presentOrder(o, 'vendor'));
+  }
+  const now = new Date();
+  const $set = { status: to };
+  if (to === 'delivered' && cur.paymentMethod === 'cod' && cur.payment?.status === 'unpaid') {
+    // Pay on delivery: the shop collected the payable amount in cash.
+    $set.payment = { status: 'paid', method: 'cash', paidAt: now, ...orderSettlement(cur, cur.payablePaise) };
+  }
+  const o = await ProductOrder.findOneAndUpdate({ _id: cur._id, vendor: req.user._id, status: cur.status }, { $set, $push: { timeline: { status: to, note, by: req.user._id, at: now } } }, { returnDocument: 'after' }).populate(orderPopulate);
+  if (!o) throw conflict('This order changed — refresh and try again.', 'INVALID_TRANSITION');
+  notifyUsers([o.customer], { type: 'order', title: ORDER_STATUS_TEXT[to], body: `${o.orderNumber} · ${o.title}${note ? ` — ${note}` : ''}`, route: 'MyOrders', id: String(o._id) }).catch(() => {});
+  res.json(presentOrder(o.toObject(), 'vendor'));
+}
+
+async function listProductOrdersPlatform(req, res) {
+  const filter = {};
+  if (isObjectId(req.query.vendorId)) filter.vendor = new mongoose.Types.ObjectId(req.query.vendorId);
+  if (Object.keys(ORDER_TRANSITIONS).includes(req.query.status)) filter.status = req.query.status;
+  if (['unpaid', 'paid', 'refund_pending', 'refunded'].includes(req.query.payment)) filter['payment.status'] = req.query.payment;
+  const [page, totals] = await Promise.all([
+    pagedFind(ProductOrder, filter, req.valid.query, { populate: [...orderPopulate, { path: 'vendor', select: 'name' }] }),
+    ProductOrder.aggregate([{ $match: { ...filter, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]),
+  ]);
+  res.json({ ...page, totals: presentSettlement(totals[0]), items: page.items.map((o) => presentOrder(o, 'platform')) });
+}
+
+/** Master Admin retries a refund that failed to start (e.g. gateway was down). */
+async function platformRetryOrderRefund(req, res) {
+  const o = await ProductOrder.findById(req.valid.params.id).lean();
+  if (!o) throw notFound('Order');
+  if (o.payment?.status !== 'refund_pending' || o.payment.method !== 'online') throw conflict('This order has no pending online refund.', 'INVALID_TRANSITION');
+  const go = await GatewayOrder.findOne({ orderId: o.payment.providerOrderId });
+  if (go?.refunds?.some((r) => r.purpose === 'cancel' && ['REQUESTED', 'PENDING'].includes(r.status))) {
+    for (const r of go.refunds) if (r.purpose === 'cancel' && r.status === 'PENDING') await refundStatusFromProvider(go, r.refundId);
+  } else {
+    await refundGatewayOrder(go, o.payment.amountPaise, `Order ${o.orderNumber} cancelled`, 'cancel');
+  }
+  await audit(req, { action: 'platform.order_refund_retry', targetType: 'ProductOrder', targetId: o._id, summary: o.orderNumber });
+  const fresh = await ProductOrder.findById(o._id).populate([...orderPopulate, { path: 'vendor', select: 'name' }]).lean();
+  res.json(presentOrder(fresh, 'platform'));
+}
+
+async function refundStatusFromProvider(go, refundId) {
+  const r = await cfCall('GET', `/orders/${encodeURIComponent(go.orderId)}/refunds/${encodeURIComponent(refundId)}`).catch(() => null);
+  if (r?.refund_status) await applyGatewayRefund(go.orderId, refundId, r.refund_status);
+}
+
+listingsRouter.use(['/products', '/product-orders', '/payments/checkout'], authenticate);
+listingsRouter.get('/products/categories', productCategories);
+listingsRouter.get('/products', validate({ query: productQuery }), browseProducts);
+listingsRouter.get('/products/mine', page$1, myProducts);
+listingsRouter.post('/products', validate({ body: productCreate }), createProduct);
+listingsRouter.get('/products/:id', id$1, getProduct);
+listingsRouter.patch('/products/:id', id$1, validate({ body: productUpdate }), updateProduct);
+listingsRouter.delete('/products/:id', id$1, deleteProduct);
+listingsRouter.post('/products/:id/report', id$1, validate({ body: reportCreate }), reportListing('product'));
+listingsRouter.post('/products/:id/orders', id$1, validate({ body: orderCreate }), placeProductOrder);
+listingsRouter.get('/product-orders', validate({ query: orderListQuery }), myProductOrders);
+listingsRouter.get('/product-orders/:id', id$1, getMyProductOrder);
+listingsRouter.post('/product-orders/:id/cancel', id$1, validate({ body: orderCancel }), cancelMyProductOrder);
+listingsRouter.post('/product-orders/:id/pay', id$1, payProductOrder);
+listingsRouter.post('/service-bookings/:id/pay', id$1, payServiceBooking);
+listingsRouter.get('/payments/checkout/:orderId', checkoutStatus);
+listingsRouter.post('/payments/checkout/:orderId/refresh', refreshCheckout);
+vendorRouter.get('/orders', validate({ query: orderListQuery }), vendorOrders);
+vendorRouter.get('/orders/:id', id$1, vendorOrder);
+vendorRouter.post('/orders/:id/status', id$1, validate({ body: orderStatusBody }), vendorOrderAction);
+vendorRouter.post('/payout/refresh', vendorRefreshPayout);
+residentRouter.post('/bookings/:id/pay', id$1, payFacilityBooking);
+
 const sid$1 = (req) => req.societyId;
 
 // ======================= Overview =======================
@@ -6785,6 +8057,11 @@ async function cancelBookingAdmin(req, res) {
   const b = await FacilityBooking.findOneAndUpdate({ _id: req.valid.params.id, society: sid$1(req), status: { $in: ['pending', 'confirmed'] } }, { status: 'cancelled', cancelledAt: new Date(), decisionReason: req.valid.body.reason, decidedBy: req.user._id }, { returnDocument: 'after' }).populate('facility', 'name');
   if (!b) throw notFound('Active booking');
   await audit(req, { action: 'booking.cancelled_by_staff', targetType: 'FacilityBooking', targetId: b._id, summary: req.valid.body.reason });
+  if (b.payment?.status === 'paid' && b.payment.providerOrderId) {
+    await FacilityBooking.updateOne({ _id: b._id, 'payment.status': 'paid' }, { 'payment.status': 'refund_pending' });
+    const go = await GatewayOrder.findOne({ orderId: b.payment.providerOrderId });
+    await refundGatewayOrder(go, b.payment.amountPaise, 'Booking cancelled by the society', 'cancel').catch((err) => logger.error({ err: err.message }, 'Facility refund failed'));
+  }
   notifyUsers([b.user], { society: sid$1(req), type: 'booking', title: `${b.facility?.name} booking cancelled`, body: req.valid.body.reason, route: 'Bookings' }).catch(() => {});
   res.json(b);
 }
@@ -6812,7 +8089,8 @@ async function updateServiceRequest(req, res) {
 
 // ======================= Listing moderation =======================
 async function listListingsAdmin(req, res) {
-  const kind = listingKind(req.query.kind);
+  // Products have no society: never list them in a society workspace.
+  const kind = req.query.kind === 'product' ? 'property' : listingKind(req.query.kind);
   const Model = LISTING_MODELS[kind];
   const filter = { society: sid$1(req), moderationStatus: req.valid.query.status || 'pending' };
   const populate = [{ path: LISTING_OWNER[kind], select: 'name phone' }, { path: 'photos' }];
@@ -7224,6 +8502,7 @@ async function updateSocietyPayments(req, res) {
   const { onlineEnabled, settlementMode, linkedAccountId } = req.valid.body;
   if (onlineEnabled && settlementMode === 'none') throw badRequest('Choose a verified settlement mode before enabling online collection');
   if (settlementMode === 'razorpay_route' && !linkedAccountId) throw badRequest('Razorpay Route requires the society linked account id (acc_...)');
+  if (settlementMode === 'cashfree_split' && !/^[A-Za-z0-9_]{3,50}$/.test(linkedAccountId || '')) throw badRequest("Cashfree Easy Split needs the society's Cashfree vendor id (letters, digits, _)");
   const s = await Society.findByIdAndUpdate(
     req.valid.params.id,
     { 'payments.onlineEnabled': onlineEnabled, 'payments.settlementMode': settlementMode, 'payments.linkedAccountId': linkedAccountId, 'payments.verifiedAt': new Date(), 'payments.verifiedBy': req.user._id },
@@ -7298,7 +8577,7 @@ async function listAllListings(req, res) {
   const filter = { moderationStatus: req.valid.query.status || 'pending' };
   if (req.query.scope === 'independent') filter.society = null;
   if (req.query.reported === 'true') filter.reportCount = { $gt: 0 };
-  const populate = [{ path: LISTING_OWNER[kind], select: 'name phone' }, { path: 'society', select: 'name' }, { path: 'photos' }];
+  const populate = [{ path: LISTING_OWNER[kind], select: 'name phone' }, ...(Model.schema.path('society') ? [{ path: 'society', select: 'name' }] : []), { path: 'photos' }];
   if (kind !== 'property') populate.push({ path: 'category', select: 'name icon' });
   const page = await pagedFind(Model, filter, req.valid.query, { sortable: ['createdAt', 'reportCount'], populate });
   res.json({ ...page, items: page.items.map((l) => ({ ...l, photos: presentMedia(l.photos) })) });
@@ -7311,7 +8590,7 @@ const moderateAnyListing = (kind) => async (req, res) => {
   if (!l) throw notFound('Listing');
   await ContentReport.updateMany({ targetType: kind, targetId: l._id, status: 'open' }, { status: decision === 'approved' ? 'dismissed' : 'actioned', resolvedBy: req.user._id, resolvedAt: new Date() });
   await audit(req, { action: `platform.listing_${decision}`, society: l.society, targetType: kind, targetId: l._id, summary: note });
-  notifyUsers([l[LISTING_OWNER[kind]]], { type: 'listing', title: `Your ${kind === 'service' ? 'service' : 'listing'} was ${decision}`, body: note || l.title, route: LISTING_ROUTE[kind] }).catch(() => {});
+  notifyUsers([l[LISTING_OWNER[kind]]], { type: 'listing', title: `Your ${kind === 'service' ? 'service' : kind === 'product' ? 'product' : 'listing'} was ${decision}`, body: note || l.title, route: LISTING_ROUTE[kind] }).catch(() => {});
   res.json({ _id: l._id, moderationStatus: l.moderationStatus });
 };
 
@@ -7322,7 +8601,7 @@ async function listAllReports(req, res) {
 // ======================= Categories =======================
 async function listCategories(req, res) {
   const filter = { society: null };
-  if (['complaint', 'service', 'marketplace'].includes(req.query.kind)) filter.kind = req.query.kind;
+  if (['complaint', 'service', 'marketplace', 'product'].includes(req.query.kind)) filter.kind = req.query.kind;
   res.json({ items: await ServiceCategory.find(filter).sort({ kind: 1, sortOrder: 1, name: 1 }).lean() });
 }
 
@@ -7345,7 +8624,7 @@ async function updateCategory(req, res) {
 
 /** How many listings / requests use a category (those keep it; it can only be hidden). */
 async function categoryUsage(id) {
-  const counts = await Promise.all([ServiceOffer, MarketplaceListing, Complaint, ServiceRequest].map((M) => M.countDocuments({ category: id })));
+  const counts = await Promise.all([ServiceOffer, MarketplaceListing, Complaint, ServiceRequest, Product].map((M) => M.countDocuments({ category: id })));
   return counts.reduce((a, b) => a + b, 0);
 }
 
@@ -7916,6 +9195,7 @@ platformRouter.get('/listings', requirePlatformPerm('listings.view'), page, list
 platformRouter.post('/listings/property/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('property'));
 platformRouter.post('/listings/marketplace/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('marketplace'));
 platformRouter.post('/listings/service/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('service'));
+platformRouter.post('/listings/product/:id/moderate', requirePlatformPerm('listings.manage'), id, validate({ body: listingModeration }), moderateAnyListing('product'));
 platformRouter.get('/content-reports', requirePlatformPerm('reports.view'), page, listAllReports);
 
 platformRouter.get('/categories', requirePlatformPerm('categories.view'), listCategories);
@@ -7942,6 +9222,9 @@ platformRouter.get('/ads/:id', requirePlatformPerm('ads.view'), id, getAdPlatfor
 platformRouter.post('/ads/:id/review', requirePlatformPerm('ads.manage'), id, validate({ body: adDecision }), decideAd);
 platformRouter.get('/service-bookings', requirePlatformPerm('service_bookings.view'), page, listServiceBookingsPlatform);
 platformRouter.get('/earnings', requirePlatformPerm('earnings.view'), page, platformEarnings);
+platformRouter.get('/product-orders', requirePlatformPerm('orders.view'), page, listProductOrdersPlatform);
+platformRouter.post('/product-orders/:id/refund-retry', requirePlatformPerm('vendors.manage'), id, platformRetryOrderRefund);
+platformRouter.post('/vendors/:id/payout', requirePlatformPerm('vendors.manage'), id, platformVendorPayout);
 
 // Sub-admins: owner only, never grantable.
 platformRouter.get('/subadmins', requireOwner, listSubAdmins);
@@ -7991,6 +9274,14 @@ function createApp() {
     const outcome = await handleWebhook(req.body, req.get('x-razorpay-signature'), req.get('x-razorpay-event-id'));
     res.json({ ok: true, outcome });
   });
+
+  app.post('/api/v1/payments/webhook/cashfree', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+    const outcome = await handleCashfreeWebhook(req.body, req.get('x-webhook-signature'), req.get('x-webhook-timestamp'));
+    res.json({ ok: true, outcome });
+  });
+  // Hosted checkout + return pages (HTML) for the app's in-app browser.
+  app.get('/api/v1/pay/checkout/:orderId', checkoutPage);
+  app.get('/api/v1/pay/return', checkoutReturnPage);
 
   app.use(express.json({ limit: '200kb' }));
   app.use(globalLimiter);
@@ -8088,7 +9379,7 @@ async function runDaily(now = new Date()) {
 
 async function tick() {
   const now = new Date();
-  for (const job of [runAutoBilling, runReminders, runDaily]) {
+  for (const job of [runAutoBilling, runReminders, runDaily, expireUnpaidOrders]) {
     try {
       await job(now);
     } catch (err) {
@@ -8115,6 +9406,8 @@ const DEFAULT_CATEGORIES = {
   complaint: ['Water Supply', 'Electricity', 'Lift Maintenance', 'Plumbing & Drainage', 'Security', 'Cleaning & Sanitation', 'Parking', 'Waste Management', 'Common Area Maintenance', 'Road Damage', 'Other'],
   service: ['Plumber', 'Electrician', 'Housekeeping', 'Appliance Repair', 'Carpenter', 'Painting', 'Pest Control', 'Gardening'],
   marketplace: ['Furniture', 'Electronics', 'Home Appliances', 'Books', 'Vehicles', 'Kids & Toys', 'Sports & Fitness', 'Household', 'Other'],
+  // Vendor products (skills/vendor-products); Master Admin can add / rename / hide them.
+  product: ['Groceries', 'Fruits & Vegetables', 'Dairy & Bakery', 'Home & Kitchen', 'Personal Care', 'Electronics', 'Stationery', 'Other'],
 };
 const ICONS = { 'Water Supply': 'water', Electricity: 'flash', 'Lift Maintenance': 'swap-vertical', Security: 'shield-checkmark', Parking: 'car', Plumber: 'build', Electrician: 'flash', Furniture: 'bed', Electronics: 'phone-portrait', Books: 'book', Vehicles: 'bicycle' };
 
@@ -8258,6 +9551,7 @@ function checkSecrets() {
     [/mongodb(\+srv)?:\/\/[^\s'"]+/i, 'MongoDB connection string'],
     [/JWT_(ACCESS|REFRESH)_SECRET/, 'JWT secret variable'],
     [/PAYMENT_(SECRET_KEY|WEBHOOK_SECRET)/, 'Payment secret variable'],
+    [/CASHFREE_(SECRET_KEY|APP_ID)/, 'Cashfree key variable'],
     [/OTP_PROVIDER_API_KEY|OTP_HASH_SECRET/, 'OTP secret variable'],
     [/KYC_ENCRYPTION_KEY/, 'KYC encryption key variable'],
     [/EXPO_PUBLIC_[A-Z_]*(SECRET|PASSWORD|MONGO)/, 'Secret exposed via EXPO_PUBLIC_'],

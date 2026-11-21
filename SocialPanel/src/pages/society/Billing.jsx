@@ -15,7 +15,8 @@ import { MetricCard } from '../../components/Charts.jsx';
 import { BillingSettingsForm } from '../../components/BillingSettings.jsx';
 import { useToast } from '../../components/Toast.jsx';
 
-import { PAYMENT_METHODS } from '../../lib/finance.js';
+import { PAYMENT_METHODS, paymentMethodLabel, providerName } from '../../lib/finance.js';
+import { GatewayLabel, usePaymentGateway } from '../../components/PaymentGateway.jsx';
 export { PAYMENT_METHODS };
 
 function GenerateModal({ open, onClose, buildings, onDone }) {
@@ -268,7 +269,7 @@ function InvoiceDrawer({ id, onClose, reason, onChanged }) {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
                         <p className="text-xs font-semibold text-gray-800">
-                          {formatINR(p.amountPaise)} <span className="font-normal text-gray-400">· {PAYMENT_METHODS[p.method] || humanize(p.method)}</span>
+                          {formatINR(p.amountPaise)} <span className="font-normal text-gray-400">· {paymentMethodLabel(p)}</span>
                         </p>
                         <p className="text-[11px] text-gray-400">
                           {formatDate(p.paidOn || p.createdAt)}
@@ -459,6 +460,7 @@ export default function Billing() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [remind, reminding] = useAction(() => api.post('/society/invoices/reminders'), { toast, success: (r) => (r.reminded ? `Reminders sent for ${r.reminded} open invoice${r.reminded === 1 ? '' : 's'}` : 'No open invoices — nothing to remind'), onDone: () => setModal(null) });
   const online = charges.data?.onlinePayments;
+  const gateway = usePaymentGateway();
   return (
     <div>
       <PageHeader
@@ -481,8 +483,8 @@ export default function Billing() {
         </Alert>
       )}
       {online?.available && (
-        <Alert tone="success" className="mb-5" icon="fa-solid fa-credit-card">
-          Online payments are enabled — residents can pay their bills from the adda app.
+        <Alert tone="success" className="mb-5" icon="fa-solid fa-credit-card" title={<span className="inline-flex flex-wrap items-center gap-2">Online payments are enabled <GatewayLabel gateway={gateway || { gatewayConfigured: true, provider: online.provider }} /></span>}>
+          Residents can pay their bills from the adda app through {providerName(online.provider) || 'the payment gateway'}.{gateway?.mode === 'sandbox' ? ' The gateway is in test mode — no real money moves.' : ''}
         </Alert>
       )}
       <Tabs

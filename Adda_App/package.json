@@ -11,7 +11,9 @@
     "vendor-check": "node scripts/vendor-check.mjs http://localhost:3013",
     "doctor": "npx expo-doctor",
     "ui-lint": "node scripts/ui-lint.mjs",
-    "ui-audit": "node scripts/ui-audit.mjs"
+    "ui-audit": "node scripts/ui-audit.mjs",
+    "products-check": "node scripts/products-check.mjs http://localhost:3013",
+    "payments-check": "node scripts/payments-check.mjs http://localhost:3013"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

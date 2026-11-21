@@ -6,6 +6,7 @@ import { Alert, Badge, Button, Card, PageHeader, PageSkeleton, QueryState } from
 import { Field, Input, Toggle } from '../../components/Form.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useAuth } from '../../lib/auth.jsx';
+import { providerName } from '../../lib/finance.js';
 
 const META = {
   'listings.requireApproval': { label: 'Independent listings need approval', description: 'Vendor property and service listings, and marketplace listings not linked to a society, wait for platform moderation before they are visible.' },
@@ -92,7 +93,7 @@ export default function Settings() {
                     ['Environment', c.environment],
                     ['SMS OTP sign-in', c.otp?.available ? (c.otp.testMode ? 'Test mode' : c.otp.provider || 'Available') : 'Unavailable'],
                     ['Resident password sign-in', c.passwordLogin?.available ? 'On' : 'Off'],
-                    ['Online payments', c.payments?.gatewayConfigured ? `Configured (${c.payments.provider})` : 'Not configured'],
+                    ['Online payments', c.payments?.gatewayConfigured ? `${providerName(c.payments.provider) || 'Configured'}${c.payments.mode === 'sandbox' ? ' · Test mode' : c.payments.mode === 'production' ? ' · Live' : ''}` : 'Not configured'],
                     ['Uploads', `${c.uploads?.maxMb} MB · ${c.uploads?.types?.map((t) => t.split('/')[1]).join(', ')}`],
                   ].map(([k, v]) => (
                     <li key={k} className="flex items-center justify-between gap-3">

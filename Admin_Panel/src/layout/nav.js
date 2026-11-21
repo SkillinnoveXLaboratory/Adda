@@ -60,6 +60,7 @@ export const PLATFORM_NAV = [
       { to: '/admin/vendors', area: 'vendors', label: 'Vendors', icon: 'fa-solid fa-id-card', badge: 'pendingKyc' },
       { to: '/admin/service-bookings', area: 'service_bookings', label: 'Service bookings', icon: 'fa-regular fa-calendar-check' },
       { to: '/admin/earnings', area: 'earnings', label: 'Earnings', icon: 'fa-solid fa-wallet' },
+      { to: '/admin/product-orders', area: 'orders', label: 'Product orders', icon: 'fa-solid fa-bag-shopping' },
     ],
   },
   {
