@@ -298,7 +298,7 @@ export default function ProductOrders() {
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 2xl:grid-cols-5" data-testid="order-totals">
         <MetricCard tone="green" label="Collected" value={formatINR(t.cashCollectedPaise || 0)} icon="fa-solid fa-money-bill-wave" footer={`${plural(t.paidBookings || 0, 'paid order')} · cash or online`} testId="orders-collected" />
-        <MetricCard tone="purple" label="Commission" value={formatINR(t.commissionPaise || 0)} icon="fa-solid fa-percent" footer="Added on top of the vendor’s price" testId="orders-commission" />
+        <MetricCard tone="purple" label="Commission" value={formatINR(t.commissionPaise || 0)} icon="fa-solid fa-percent" footer="Taken out of the vendor’s price" testId="orders-commission" />
         <MetricCard tone="orange" label="Member discounts" value={formatINR(t.memberDiscountsPaise || 0)} icon="fa-solid fa-tag" footer="Given back out of the commission" testId="orders-discounts" />
         <MetricCard tone="cyan" label="NIVASA net" value={<NetAmount paise={t.netToPlatformPaise ?? 0} className="!text-2xl !font-bold" />} icon="fa-solid fa-scale-balanced" footer={netCaption(t.netToPlatformPaise || 0, Boolean(vendorId))} testId="orders-net" />
         <MetricCard tone="green" label="Vendor earnings" value={formatINR(t.vendorEarningsPaise || 0)} icon="fa-solid fa-wallet" footer="Collected − NIVASA net (incl. delivery)" testId="orders-vendor" />

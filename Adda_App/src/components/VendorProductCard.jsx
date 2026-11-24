@@ -48,7 +48,7 @@ export function VendorProductCard({ item, onPress }) {
       <View style={styles.prices}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <T size={10.5} color={colors.muted}>
-            Your price
+            Price (members pay)
           </T>
           <T weight="extrabold" size={13} color={colors.navy}>
             {money(item.pricePaise)}
@@ -56,10 +56,10 @@ export function VendorProductCard({ item, onPress }) {
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <T size={10.5} color={colors.muted}>
-            Members see
+            You earn
           </T>
-          <T weight="extrabold" size={13} color={colors.navy}>
-            {pr.memberPricePaise != null ? money(pr.memberPricePaise) : '—'}
+          <T weight="extrabold" size={13} color={colors.green}>
+            {pr.vendorEarningsPaise != null ? money(pr.vendorEarningsPaise) : money(item.pricePaise - (pr.commissionPaise || 0))}
           </T>
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -134,17 +134,18 @@ export function ProductPricePreview({ pricePaise, deliveryChargePaise = 0, rates
       </View>
     );
   }
-  const member = pricePaise + fee;
+  // Members see and pay the vendor's price; NIVASA's fee comes out of it and is never shown to members.
+  const earn = pricePaise - fee;
   return (
     <View style={styles.box} testID="product-price-preview">
-      <Row label="Your price (per unit)" value={money(pricePaise)} />
-      {fee > 0 ? <Row label={`NIVASA fee (${commission}%), added for members`} value={`+ ${money(fee)}`} /> : null}
+      <Row label="Members see and pay (per unit)" value={money(pricePaise)} testID="product-members-see" />
+      {fee > 0 ? <Row label={`NIVASA fee (${commission}%)`} value={`− ${money(fee)}`} /> : null}
       <View style={styles.line} />
-      <Row label="Members see" value={money(member)} strong testID="product-members-see" />
+      <Row label="You earn (per unit)" value={money(earn)} strong tone={colors.green} testID="product-you-earn" />
       <T size={11} color={colors.muted} style={{ lineHeight: 16 }}>
-        {fee > 0 ? (off > 0 ? `Members can apply a ${money(off)} discount (${discount}% of the fee) and pay ${money(member - off)} per unit. ` : '') : 'Members pay your price. '}
-        {`You earn ${money(pricePaise)} per unit sold`}
-        {deliveryChargePaise > 0 ? ` plus the ${money(deliveryChargePaise)} delivery charge (no NIVASA fee on it).` : '.'}
+        {fee > 0 ? 'Members never see the fee. ' : 'Members pay your price. '}
+        {off > 0 ? `They can apply a ${money(off)} NIVASA discount (${discount}% of the fee) — NIVASA covers it, your earnings don't change.` : ''}
+        {deliveryChargePaise > 0 ? ` You also keep the ${money(deliveryChargePaise)} delivery charge (no fee on it).` : ''}
       </T>
     </View>
   );

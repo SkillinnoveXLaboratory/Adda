@@ -784,6 +784,9 @@ const vendorProfileSchema = new Schema$3(
     // discount is a share OF that commission given back when the member taps "Apply discount".
     commissionBps: { type: Number, min: 0, max: 10000, default: 0 },
     memberDiscountBps: { type: Number, min: 0, max: 10000, default: 0 },
+    // Set when a Master Admin / sub-admin created the vendor or typed in the KYC (skills/admin-vendor-onboarding).
+    createdBy: { type: ObjectId$3, ref: 'User' },
+    kycSubmittedBy: { type: ObjectId$3, ref: 'User' },
     // Cashfree Easy Split vendor account (created on KYC approval) — needed for online payments to this vendor.
     payout: {
       provider: { type: String, enum: ['cashfree'] },
@@ -836,9 +839,10 @@ const serviceBookingSchema = new Schema$3(
     status: { type: String, enum: Object.keys(BOOKING_TRANSITIONS), default: 'requested' },
     timeline: [{ status: String, note: String, by: { type: ObjectId$3, ref: 'User' }, at: { type: Date, default: Date.now } }],
     payment: {
-      status: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
+      status: { type: String, enum: ['unpaid', 'paid', 'refund_pending', 'refunded'], default: 'unpaid' },
       method: { type: String, enum: ['cash', 'online'] },
       providerOrderId: String,
+      refundedAt: Date,
       amountPaise: { type: Number, min: 0, validate: { validator: (v) => v === undefined || v === null || Number.isInteger(v), message: 'Amount must be whole paise' } },
       paidAt: Date,
       markedBy: { type: ObjectId$3, ref: 'User' },
@@ -4136,7 +4140,7 @@ const PLATFORM_PERMISSIONS = [
   { area: 'societies', label: 'Societies', view: 'See societies and open their workspace (read only)', manage: 'Suspend / reactivate, payments, add society admins, act inside a society' },
   { area: 'members', label: 'Members directory', view: 'See members and profiles (masked)', manage: 'Reveal details, set password, sign out, change mobile, move membership' },
   { area: 'accounts', label: 'Accounts', view: 'See all accounts', manage: 'Enable / disable accounts' },
-  { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors, KYC (masked) and their rates', manage: 'Approve / reject KYC, reveal KYC details, set commission and member discount' },
+  { area: 'vendors', label: 'Vendors & KYC', view: 'See vendors, KYC (masked) and their rates', manage: 'Add vendors, enter KYC + documents, approve / reject KYC, reveal KYC details, Cashfree payout account, set commission and member discount' },
   { area: 'service_bookings', label: 'Service bookings', viewOnly: true, view: 'See service bookings and settlement' },
   { area: 'orders', label: 'Product orders', viewOnly: true, view: 'See product orders, delivery status and settlement' },
   { area: 'earnings', label: 'Earnings', viewOnly: true, view: 'See NIVASA commission earnings and vendor earnings' },
@@ -4752,11 +4756,12 @@ const presentListing = (l, userId) => ({
 function offerPricing(pricePaise, priceType, rates) {
   const commissionBps = rates?.commissionBps || 0;
   const discountBps = rates?.memberDiscountBps || 0;
-  if (priceType === 'on_quote' || !(pricePaise > 0)) return { vendorPricePaise: null, commissionBps, commissionPaise: null, memberPricePaise: null, discountBps, discountPaise: 0 };
+  if (priceType === 'on_quote' || !(pricePaise > 0)) return { vendorPricePaise: null, commissionBps, commissionPaise: null, memberPricePaise: null, discountBps, discountPaise: 0, vendorEarningsPaise: null };
+  // Members see and pay the vendor's price. NIVASA's commission is taken OUT of it (vendor earns price − commission);
+  // the optional member discount is a share of that commission, paid by NIVASA (vendor earnings unchanged).
   const commissionPaise = Math.round((pricePaise * commissionBps) / 10_000);
-  const memberPricePaise = pricePaise + commissionPaise;
   const discountPaise = Math.round((commissionPaise * discountBps) / 10_000);
-  return { vendorPricePaise: pricePaise, commissionBps, commissionPaise, memberPricePaise, discountBps, discountPaise };
+  return { vendorPricePaise: pricePaise, commissionBps, commissionPaise, memberPricePaise: pricePaise, discountBps, discountPaise, vendorEarningsPaise: pricePaise - commissionPaise };
 }
 
 const presentRates = (p) => ({ commissionPercent: (p?.commissionBps || 0) / 100, memberDiscountPercent: (p?.memberDiscountBps || 0) / 100 });
@@ -4780,7 +4785,7 @@ function presentOffer(l, viewerId, profile) {
     return {
       ...base,
       shop,
-      pricing: { vendorPricePaise: p.vendorPricePaise, commissionPercent: p.commissionBps / 100, commissionPaise: p.commissionPaise, memberPricePaise: p.memberPricePaise, memberDiscountPercent: p.discountBps / 100, discountPaise: p.discountPaise, payableWithDiscountPaise },
+      pricing: { vendorPricePaise: p.vendorPricePaise, vendorEarningsPaise: p.vendorEarningsPaise, commissionPercent: p.commissionBps / 100, commissionPaise: p.commissionPaise, memberPricePaise: p.memberPricePaise, memberDiscountPercent: p.discountBps / 100, discountPaise: p.discountPaise, payableWithDiscountPaise },
     };
   }
   return {
@@ -5331,6 +5336,8 @@ function presentBooking(b, viewerId) {
         commissionPercent: (b.commissionBps || 0) / 100,
         commissionPaise: v2 ? (b.commissionPaise ?? null) : null,
         memberDiscountPercent: (b.discountBps || 0) / 100,
+        // What the vendor keeps when the member pays: payable − (commission − discount).
+        vendorEarningsPaise: memberPrice != null && v2 ? Math.max(0, memberPrice - discount) - ((b.commissionPaise || 0) - discount) : null,
       }),
     },
     payment: {
@@ -5350,7 +5357,7 @@ function presentBooking(b, viewerId) {
     role: asVendor ? 'vendor' : 'customer',
     actions: asVendor
       ? [...(BOOKING_TRANSITIONS[b.status] || []).map((s) => ({ requested: null, accepted: 'accept', declined: 'decline', completed: 'complete', cancelled: 'cancel' })[s]).filter(Boolean), ...(b.status === 'completed' && !paid ? ['mark-paid'] : [])]
-      : ['requested', 'accepted'].includes(b.status) ? ['cancel'] : [],
+      : [...(['requested', 'accepted'].includes(b.status) ? ['cancel'] : []), ...(['accepted', 'completed'].includes(b.status) && (b.payment?.status || 'unpaid') === 'unpaid' && v2 && b.payablePaise >= 100 ? ['pay'] : [])],
     createdAt: b.createdAt,
     updatedAt: b.updatedAt,
   };
@@ -5423,6 +5430,10 @@ async function cancelMyServiceBooking(req, res) {
     throw notFound('Booking');
   }
   notifyUsers([b.vendor], { type: 'booking', title: 'Booking cancelled', body: `${b.customerName || 'The customer'} cancelled "${b.offerTitle}".`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
+  if (b.payment?.status === 'paid' && b.payment.method === 'online') {
+    await refundServiceBooking(b._id, 'Cancelled by customer');
+    return res.json(presentBooking(await ServiceBooking.findById(b._id).populate(bookingPopulate).lean(), req.user._id));
+  }
   res.json(presentBooking(b.toObject(), req.user._id));
 }
 
@@ -5460,6 +5471,10 @@ async function vendorBookingAction(req, res) {
     throw conflict(`This booking is ${cur.status} and cannot be ${to}.`, 'INVALID_TRANSITION');
   }
   notifyUsers([b.customer], { type: 'booking', title: `Booking ${to}`, body: `${req.user.name || 'The vendor'} ${BOOKING_MESSAGES[to]} for "${b.offerTitle}".${note ? ` ${note}` : ''}`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
+  if (['cancelled', 'declined'].includes(to) && b.payment?.status === 'paid' && b.payment.method === 'online') {
+    await refundServiceBooking(b._id, `Booking ${to} by the vendor`);
+    return res.json(presentBooking(await ServiceBooking.findById(b._id).populate(bookingPopulate).lean(), req.user._id));
+  }
   res.json(presentBooking(b.toObject(), req.user._id));
 }
 
@@ -5766,7 +5781,7 @@ async function listVendors(req, res) {
     const users = await User.find({ accountType: 'vendor', $or: [{ name: rx }, { phone: new RegExp(escapeRegex(q.q)) }] }).select('_id').limit(200).lean();
     filter.$or = [{ businessName: rx }, { user: { $in: users.map((u) => u._id) } }];
   }
-  const page = await pagedFind(VendorProfile, filter, q, { sortable: ['createdAt', 'submittedAt', 'businessName'], defaultSort: '-submittedAt', populate: [{ path: 'user', select: 'name phone status createdAt' }, { path: 'logo' }] });
+  const page = await pagedFind(VendorProfile, filter, q, { sortable: ['createdAt', 'submittedAt', 'businessName'], defaultSort: '-submittedAt', populate: [{ path: 'createdBy', select: 'name platformRole' }, { path: 'user', select: 'name phone status createdAt' }, { path: 'logo' }] });
   res.json({
     ...page,
     items: page.items.map((p) => ({
@@ -5783,6 +5798,7 @@ async function listVendors(req, res) {
       submittedAt: p.submittedAt || null,
       reviewedAt: p.reviewedAt || null,
       pricing: presentRates(p),
+      addedBy: p.createdBy?._id ? { _id: p.createdBy._id, name: p.createdBy.name || null, role: p.createdBy.platformRole } : null,
       createdAt: p.user?.createdAt || p.createdAt,
     })),
   });
@@ -5793,6 +5809,166 @@ async function vendorUser(id) {
   if (!user) throw notFound('Vendor');
   return user;
 }
+
+// ======================= Master Admin: add vendors + KYC on their behalf (skills/admin-vendor-onboarding) =======================
+/** KYC fields shared by "Add vendor" and "Edit KYC details" (same rules as the vendor's own form, minus consent). */
+const adminKycFields = {
+  businessName: text(120, 2),
+  businessType: z.enum(['individual', 'business']).default('individual'),
+  city: text(80, 2),
+  address: optText(300),
+  pan: z.string().trim().toUpperCase().regex(PAN_RX, 'Enter a valid PAN, e.g. ABCDE1234F'),
+  aadhaar: z.string().transform(digitsOnly).refine((v) => /^[2-9]\d{11}$/.test(v) && verhoeffValid(v), 'Enter a valid 12-digit Aadhaar number'),
+  bankAccountHolder: text(120, 2),
+  bankAccountNumber: z.string().transform(digitsOnly).refine((v) => /^\d{9,18}$/.test(v), 'Enter a valid bank account number (9 to 18 digits)'),
+  bankIfsc: z.string().trim().toUpperCase().regex(IFSC_RX, 'Enter a valid IFSC, e.g. SBIN0001234'),
+  bankName: optText(120),
+  panPhoto: objectId,
+  aadhaarFront: objectId,
+  aadhaarBack: objectId,
+};
+const adminKycBody = z
+  .object({
+    ...adminKycFields,
+    // The admin confirms the vendor agreed to KYC verification (the vendor isn't the one tapping "I agree").
+    vendorConsent: z.boolean().refine((v) => v === true, 'Confirm that the vendor agreed to KYC verification'),
+    approve: z.boolean().default(false),
+  })
+  .strict();
+const adminVendorCreate = z
+  .object({
+    name: text(120, 2),
+    phone,
+    email,
+    password: z.string().min(10, 'Password must be at least 10 characters').max(200),
+    shopName: text(80, 2).optional(),
+    logoId: objectId.optional(),
+    location: geoInput.optional(),
+    commissionPercent: percent2.optional(),
+    memberDiscountPercent: percent2.optional(),
+    kyc: adminKycBody.optional(),
+  })
+  .strict();
+
+/** Applies (encrypted) KYC details to a profile. Documents must be uploads made by this admin (purpose kyc). */
+async function applyAdminKyc(req, profile, vendorUserId, k) {
+  if (!env.kycKey) throw unavailable('Vendor verification is not set up on this server yet (KYC_ENCRYPTION_KEY).', 'KYC_UNAVAILABLE');
+  const docs = KYC_DOCS.map((d) => k[d]);
+  if (new Set(docs.map(String)).size !== docs.length) throw badRequest('Upload a separate photo for PAN, Aadhaar front and Aadhaar back');
+  // Accept files the admin uploaded now, or the ones already on this vendor's profile.
+  const own = await UploadedMedia.find({ _id: { $in: docs }, purpose: 'kyc', owner: { $in: [req.user._id, vendorUserId] } }).select('_id').lean();
+  if (own.length !== docs.length) throw badRequest('One or more KYC documents are invalid — upload them again');
+  const now = new Date();
+  Object.assign(profile, {
+    businessName: k.businessName,
+    businessType: k.businessType,
+    city: k.city,
+    address: k.address,
+    panEnc: encryptKyc(k.pan),
+    panLast4: k.pan.slice(-4),
+    aadhaarEnc: encryptKyc(k.aadhaar),
+    aadhaarLast4: k.aadhaar.slice(-4),
+    bankAccountHolder: k.bankAccountHolder,
+    bankAccountEnc: encryptKyc(k.bankAccountNumber),
+    bankAccountLast4: k.bankAccountNumber.slice(-4),
+    bankIfsc: k.bankIfsc,
+    bankName: k.bankName,
+    panPhoto: k.panPhoto,
+    aadhaarFront: k.aadhaarFront,
+    aadhaarBack: k.aadhaarBack,
+    consentAt: now,
+    kycStatus: k.approve ? 'approved' : 'pending',
+    kycNote: k.approve ? undefined : 'Submitted by NIVASA admin',
+    submittedAt: now,
+    kycSubmittedBy: req.user._id,
+    reviewedBy: k.approve ? req.user._id : undefined,
+    reviewedAt: k.approve ? now : undefined,
+  });
+  return docs;
+}
+
+/** After the profile is saved: the documents now belong to the vendor (private, purpose kyc). */
+const handOverKycDocs = (docs, vendorUserId, profileId) => UploadedMedia.updateMany({ _id: { $in: docs } }, { owner: vendorUserId, attachedTo: `VendorProfile:${profileId}` });
+
+/** Master Admin (or a sub-admin with vendors.manage) creates a vendor account with shop, rates and optional KYC. */
+async function createVendorByAdmin(req, res) {
+  const b = req.valid.body;
+  validatePasswordStrength(b.password);
+  if (await User.exists({ phone: b.phone })) throw conflict('An account with this mobile number already exists.', 'ACCOUNT_EXISTS');
+  if (await User.exists({ email: b.email })) throw conflict('An account with this email already exists.', 'EMAIL_EXISTS');
+  if (b.logoId && !(await UploadedMedia.exists({ _id: b.logoId, owner: req.user._id, purpose: 'vendor_logo' }))) throw badRequest('Upload the shop logo again');
+  const user = await User.create({ phone: b.phone, email: b.email, name: b.name, accountType: 'vendor', passwordHash: await hashPassword(b.password), status: 'active' });
+  try {
+    const profile = new VendorProfile({
+      user: user._id,
+      businessName: b.kyc?.businessName || b.shopName || b.name,
+      ...(b.shopName ? { shopName: b.shopName } : {}),
+      ...(b.logoId ? { logo: b.logoId } : {}),
+      ...locationFields(b.location),
+      commissionBps: Math.round((b.commissionPercent || 0) * 100),
+      memberDiscountBps: Math.round((b.memberDiscountPercent || 0) * 100),
+      createdBy: req.user._id,
+    });
+    const kycDocs = b.kyc ? await applyAdminKyc(req, profile, user._id, b.kyc) : null;
+    await profile.save();
+    if (kycDocs) await handOverKycDocs(kycDocs, user._id, profile._id);
+    if (b.logoId) await UploadedMedia.updateOne({ _id: b.logoId }, { owner: user._id, attachedTo: `VendorProfile:${user._id}` });
+  } catch (err) {
+    // Never leave a half-created vendor behind.
+    await VendorProfile.deleteOne({ user: user._id });
+    await User.deleteOne({ _id: user._id });
+    throw err;
+  }
+  await audit(req, {
+    action: 'platform.vendor_created',
+    targetType: 'User',
+    targetId: user._id,
+    summary: `${b.shopName || b.name} · ${maskPhone(b.phone)}${b.kyc ? ` · KYC ${b.kyc.approve ? 'approved' : 'submitted'}` : ' · no KYC yet'}`,
+    changes: { commissionPercent: b.commissionPercent || 0, memberDiscountPercent: b.memberDiscountPercent || 0 },
+  });
+  let payout = null;
+  if (b.kyc?.approve && gatewayReady()) payout = await ensureVendorPayout(user._id).catch(() => null);
+  const profile = await loadVendorProfile(user._id);
+  res.status(201).json({ _id: user._id, name: user.name, phone: maskPhone(user.phone), email: user.email, profile: presentVendorProfile(profile, 900), pricing: presentRates(profile), payout: payout || presentPayout(profile), passwordLoginEnabled: env.RESIDENT_PASSWORD_LOGIN });
+}
+
+/** Admin fills in / replaces a vendor's KYC (not after approval — reject it first to change verified details). */
+async function setVendorKycByAdmin(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const p = (await VendorProfile.findOne({ user: user._id })) || new VendorProfile({ user: user._id });
+  if (p.kycStatus === 'approved') throw conflict('This vendor’s KYC is approved. Reject it first to change verified details.', 'KYC_APPROVED');
+  const kycDocs = await applyAdminKyc(req, p, user._id, req.valid.body);
+  await p.save();
+  await handOverKycDocs(kycDocs, user._id, p._id);
+  await audit(req, { action: req.valid.body.approve ? 'platform.vendor_kyc_entered_approved' : 'platform.vendor_kyc_entered', targetType: 'User', targetId: user._id, summary: p.businessName });
+  let payout = null;
+  if (req.valid.body.approve) {
+    notifyUsers([user._id], { type: 'vendor', title: 'KYC approved', body: 'You can now list properties, services and products.', route: 'VendorKyc' }).catch(() => {});
+    if (gatewayReady()) payout = await ensureVendorPayout(user._id).catch(() => null);
+  }
+  const profile = await loadVendorProfile(user._id);
+  res.json({ profile: presentVendorProfile(profile, 900), payout: payout || presentPayout(profile) });
+}
+
+/** KYC document / shop logo uploads by an admin, made before the vendor account exists (owner = the admin). */
+async function adminVendorUpload(req, res) {
+  if (!req.file) throw badRequest('Choose a file to upload');
+  if (!['kyc', 'vendor_logo'].includes(req.body?.purpose)) throw badRequest('purpose must be kyc or vendor_logo');
+  const media = await storeUpload(req.file, { owner: req.user._id, society: null, purpose: req.body.purpose });
+  res.status(201).json({ _id: media._id, url: req.body.purpose === 'kyc' ? mediaUrl(media, 600) : mediaUrl(media), mimeType: media.mimeType, size: media.size, purpose: media.purpose });
+}
+
+// ---------- sub-admin activity (owner only) ----------
+async function subAdminActivity(req, res) {
+  const u = await User.findOne({ _id: req.valid.params.id, platformRole: 'sub_admin' }).select('name email').lean();
+  if (!u) throw notFound('Sub-admin');
+  const filter = { actor: u._id };
+  if (req.query.action) filter.action = new RegExp(`^${escapeRegex(String(req.query.action))}`);
+  const page = await pagedFind(AuditLog, filter, req.valid.query, { select: '-hash', populate: [{ path: 'society', select: 'name' }] });
+  const [vendorsAdded, kycEntered] = await Promise.all([AuditLog.countDocuments({ actor: u._id, action: 'platform.vendor_created' }), AuditLog.countDocuments({ actor: u._id, action: /^platform\.vendor_kyc_entered/ })]);
+  res.json({ subAdmin: { _id: u._id, name: u.name, email: u.email }, counts: { vendorsAdded, kycEntered, total: page.total }, ...page });
+}
+
 
 async function getVendor(req, res) {
   const user = await vendorUser(req.valid.params.id);
@@ -5811,6 +5987,8 @@ async function getVendor(req, res) {
     pricing: presentRates(profile),
     counts: { properties, services, bookings, ads, products: await Product.countDocuments({ vendor: user._id, moderationStatus: { $ne: 'removed' } }), orders: await ProductOrder.countDocuments({ vendor: user._id, status: { $ne: 'awaiting_payment' } }) },
     payout: presentPayout(profile),
+    addedBy: profile?.createdBy ? await User.findById(profile.createdBy).select('name platformRole').lean().then((u) => (u ? { _id: u._id, name: u.name || null, role: u.platformRole } : null)) : null,
+    kycEnteredBy: profile?.kycSubmittedBy ? await User.findById(profile.kycSubmittedBy).select('name platformRole').lean().then((u) => (u ? { _id: u._id, name: u.name || null, role: u.platformRole } : null)) : null,
     kycAvailable: !!env.kycKey,
   });
 }
@@ -6624,8 +6802,21 @@ async function bookingPaidOnline(go, info) {
     { returnDocument: 'after' },
   );
   if (!b) return 'duplicate';
+  if (!['accepted', 'completed'].includes(b.status)) {
+    await refundServiceBooking(b._id, 'Booking no longer active', { force: true });
+    return 'applied';
+  }
   notifyUsers([b.vendor], { type: 'payment', title: 'Online payment received', body: `${formatINR(info.amountPaise)} paid online for "${b.offerTitle}". Your share is settled by Cashfree.`, route: 'VendorBookings', id: String(b._id) }).catch(() => {});
   return 'applied';
+}
+
+/** A service booking paid online and then cancelled / declined: full refund (vendor share pulled back). */
+async function refundServiceBooking(bookingId, note, { force = false } = {}) {
+  const b = await ServiceBooking.findOneAndUpdate({ _id: bookingId, 'payment.status': 'paid', 'payment.method': 'online' }, { 'payment.status': 'refund_pending' }, { returnDocument: 'after' });
+  if (!b) return null;
+  const go = await GatewayOrder.findOne({ orderId: b.payment.providerOrderId });
+  await refundGatewayOrder(go, b.payment.amountPaise, note, 'cancel', { force }).catch((err) => logger.error({ booking: String(b._id), err: err.message }, 'Booking refund failed'));
+  return b;
 }
 
 function serviceOnlineSettlement(b, amountPaise) {
@@ -6701,6 +6892,9 @@ async function applyGatewayRefund(orderId, refundId, providerStatus) {
       await postLedgerEntry({ society: b.society, direction: 'debit', amountPaise: rf.amountPaise, account: 'gateway', category: 'Facility booking refund', entryType: 'refund', sourceType: 'payment', sourceId: go._id, memo: `Refund ${refundId}`, eventKey: `refund:${refundId}` });
       notifyUsers([b.user], { society: b.society, type: 'payment', title: 'Refund done', body: `${formatINR(rf.amountPaise)} refunded for your ${b.date} booking.`, route: 'Bookings' }).catch(() => {});
     }
+  } else if (go.kind === 'booking') {
+    const b = await ServiceBooking.findOneAndUpdate({ _id: go.ref }, { 'payment.status': 'refunded', 'payment.refundedAt': now }, { returnDocument: 'after' });
+    if (b) notifyUsers([b.customer], { type: 'payment', title: 'Refund done', body: `${formatINR(rf.amountPaise)} refunded for "${b.offerTitle}".`, route: 'MyServiceBookings', id: String(b._id) }).catch(() => {});
   } else if (go.kind === 'order') {
     const o = await ProductOrder.findOneAndUpdate({ _id: go.ref }, { 'payment.status': 'refunded', 'payment.refundedAt': now }, { returnDocument: 'after' });
     if (o) notifyUsers([o.customer], { type: 'order', title: 'Refund done', body: `${formatINR(rf.amountPaise)} refunded for order ${o.orderNumber}.`, route: 'MyOrders', id: String(o._id) }).catch(() => {});
@@ -6842,8 +7036,8 @@ async function vendorSplit(vendorUserId, amountPaise) {
 async function payServiceBooking(req, res) {
   const b = await ServiceBooking.findOne({ _id: req.valid.params.id, customer: req.user._id }).lean();
   if (!b) throw notFound('Booking');
-  if (b.payment?.status === 'paid') throw conflict('This booking is already paid.', 'ALREADY_PAID');
-  if (b.status !== 'completed') throw conflict('You can pay online once the vendor marks the job done.', 'INVALID_TRANSITION');
+  if (b.payment?.status && b.payment.status !== 'unpaid') throw conflict('This booking is already paid.', 'ALREADY_PAID');
+  if (!['accepted', 'completed'].includes(b.status)) throw conflict('You can pay online once the vendor accepts the booking.', 'INVALID_TRANSITION');
   if (b.pricingVersion !== 2 || !(b.payablePaise >= 100)) throw conflict('This service has no fixed price — pay the vendor directly.', 'NO_FIXED_PRICE');
   assertGatewayReady();
   const s = serviceOnlineSettlement(b, b.payablePaise);
@@ -6974,7 +7168,7 @@ function presentProduct(p, viewerId, profile) {
       moderationStatus: p.moderationStatus,
       moderationNote: p.moderationNote || null,
       location: presentLocation(p),
-      pricing: { vendorPricePaise: pr.vendorPricePaise, commissionPercent: pr.commissionBps / 100, commissionPaise: pr.commissionPaise, memberPricePaise: pr.memberPricePaise, memberDiscountPercent: pr.discountBps / 100, discountPaise: pr.discountPaise },
+      pricing: { vendorPricePaise: pr.vendorPricePaise, vendorEarningsPaise: pr.vendorEarningsPaise, commissionPercent: pr.commissionBps / 100, commissionPaise: pr.commissionPaise, memberPricePaise: pr.memberPricePaise, memberDiscountPercent: pr.discountBps / 100, discountPaise: pr.discountPaise },
     };
   }
   return { ...base, pricePaise: pr.memberPricePaise, pricing: { memberPricePaise: pr.memberPricePaise, discountAvailable: pr.discountPaise > 0, discountPaise: pr.discountPaise, payableWithDiscountPaise: pr.memberPricePaise - pr.discountPaise } };
@@ -7199,7 +7393,8 @@ function presentOrder(o, as) {
     vendorTotalPaise: o.vendorTotalPaise,
     commissionPercent: (o.commissionBps || 0) / 100,
     commissionPaise: o.commissionPaise,
-    yourEarningsPaise: o.vendorTotalPaise + (o.deliveryChargePaise || 0),
+    // payable − (commission − discount): the vendor's share whatever the pricing model of the order.
+    yourEarningsPaise: o.payablePaise - ((o.commissionPaise || 0) - (o.discountPaise || 0)),
     settlement,
     nextStatuses: as === 'vendor' ? nextOrderStatuses(o) : [],
   };
@@ -8699,7 +8894,8 @@ async function listAudit(req, res) {
   const filter = {};
   if (req.query.societyId && mongoose.isValidObjectId(req.query.societyId)) filter.society = req.query.societyId;
   if (req.query.action) filter.action = new RegExp(`^${escapeRegex(String(req.query.action))}`);
-  res.json(await pagedFind(AuditLog, filter, req.valid.query, { select: '-hash', populate: [{ path: 'actor', select: 'name email' }, { path: 'society', select: 'name' }] }));
+  if (req.query.actorId && mongoose.isValidObjectId(req.query.actorId)) filter.actor = req.query.actorId;
+  res.json(await pagedFind(AuditLog, filter, req.valid.query, { select: '-hash', populate: [{ path: 'actor', select: 'name email platformRole' }, { path: 'society', select: 'name' }] }));
 }
 
 async function listPaymentsPlatform(req, res) {
@@ -9213,6 +9409,9 @@ platformRouter.get('/audit-logs', requirePlatformPerm('audit.view'), page, listA
 platformRouter.get('/payments', requirePlatformPerm('payments.view'), page, listPaymentsPlatform);
 
 platformRouter.get('/vendors', requirePlatformPerm('vendors.view'), page, listVendors);
+platformRouter.post('/vendors', requirePlatformPerm('vendors.manage'), validate({ body: adminVendorCreate }), createVendorByAdmin);
+platformRouter.post('/vendors/uploads', requirePlatformPerm('vendors.manage'), drainUnreadBody, uploadLimiter, uploadMiddleware, adminVendorUpload);
+platformRouter.put('/vendors/:id/kyc-details', requirePlatformPerm('vendors.manage'), id, validate({ body: adminKycBody }), setVendorKycByAdmin);
 platformRouter.get('/vendors/:id', requirePlatformPerm('vendors.view'), id, getVendor);
 platformRouter.post('/vendors/:id/kyc', requirePlatformPerm('vendors.manage'), id, validate({ body: kycDecision }), decideVendorKyc);
 platformRouter.post('/vendors/:id/reveal', requirePlatformPerm('vendors.manage'), id, reason, revealVendorKyc);
@@ -9232,6 +9431,7 @@ platformRouter.post('/subadmins', requireOwner, validate({ body: subAdminCreate 
 platformRouter.patch('/subadmins/:id', requireOwner, id, validate({ body: subAdminUpdate }), updateSubAdmin);
 platformRouter.post('/subadmins/:id/status', requireOwner, id, validate({ body: subAdminStatus }), setSubAdminStatus);
 platformRouter.post('/subadmins/:id/password', requireOwner, id, validate({ body: subAdminPassword }), setSubAdminPassword);
+platformRouter.get('/subadmins/:id/activity', requireOwner, id, page, subAdminActivity);
 
 function createApp() {
   const app = express();

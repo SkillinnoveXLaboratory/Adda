@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { api } from '../../lib/api.js';
-import { useAction, useQuery } from '../../lib/hooks.js';
+import { useAction, usePaged, useQuery } from '../../lib/hooks.js';
+import { ACTIVITY_FILTERS, activityLabel, activityLink } from '../../lib/vendorOnboarding.js';
 import { formatDate, formatDateTime, formatRelative, plural } from '../../lib/format.js';
 import { emailRule, maxLen, minLen, passwordProblems, req, runRules } from '../../lib/validation.js';
 import { allPermissions, orderedPermissions, togglePermission } from '../../lib/permissions.js';
 import { Alert, Avatar, Badge, Button, cx, EmptyState, Icon, PageHeader } from '../../components/ui.jsx';
-import { DataTable } from '../../components/DataTable.jsx';
+import { DataTable, Pagination } from '../../components/DataTable.jsx';
 import { Field, Input } from '../../components/Form.jsx';
-import { ConfirmDialog, Modal } from '../../components/Modal.jsx';
+import { ConfirmDialog, Drawer, Modal } from '../../components/Modal.jsx';
 import { useToast } from '../../components/Toast.jsx';
 
 const passwordError = (pw) => {
@@ -251,6 +253,98 @@ function SetPasswordModal({ item, onClose }) {
   );
 }
 
+function ActivityList({ list }) {
+  if (list.loading)
+    return (
+      <div className="space-y-3" aria-busy="true">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-16 animate-pulse rounded-xl bg-gray-50" />
+        ))}
+      </div>
+    );
+  if (list.error)
+    return (
+      <Alert tone="danger" title="Couldn’t load the activity" action={<Button size="xs" variant="secondary" onClick={list.reload}>Retry</Button>}>
+        {list.error.message}
+      </Alert>
+    );
+  const items = list.data?.items || [];
+  if (!items.length) return <EmptyState compact icon="fa-solid fa-clock-rotate-left" title="Nothing here yet" message="Actions this sub-admin takes appear here, newest first." />;
+  return (
+    <ol className={cx('space-y-2.5 transition-opacity', list.reloading && 'opacity-60')} data-testid="activity-list">
+      {items.map((a) => {
+        const link = activityLink(a);
+        return (
+          <li key={a._id} className="rounded-xl border border-gray-100 px-4 py-3" data-testid="activity-item">
+            <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+              <p className="text-xs font-semibold text-gray-800">{activityLabel(a.action)}</p>
+              <time className="whitespace-nowrap text-[11px] text-gray-400" dateTime={a.createdAt} title={formatDateTime(a.createdAt)}>
+                {formatDateTime(a.createdAt)}
+              </time>
+            </div>
+            {a.summary && <p className="mt-0.5 break-words text-[11px] text-gray-600">{a.summary}</p>}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+              {link && (
+                <Link to={link} className="link inline-flex items-center gap-1" data-testid="activity-target">
+                  Open vendor <Icon name="fa-solid fa-arrow-right" className="text-[9px]" />
+                </Link>
+              )}
+              {a.society?.name && (
+                <span className="inline-flex items-center gap-1 text-gray-500">
+                  <Icon name="fa-regular fa-building" className="text-[10px]" /> {a.society.name}
+                </span>
+              )}
+              <code className="rounded bg-gray-50 px-1.5 py-0.5 font-mono text-[10px] text-gray-400">{a.action}</code>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Everything one sub-admin did (owner only): GET /platform/subadmins/:id/activity, paged, newest first. */
+function ActivityDrawer({ item, onClose }) {
+  const [action, setAction] = useState('');
+  const list = usePaged((p) => api.get(`/platform/subadmins/${item._id}/activity`, { ...p, action: action || undefined }), { id: item._id, action }, 20);
+  const counts = list.data?.counts;
+  const stats = [
+    ['Vendors added', counts?.vendorsAdded],
+    ['KYC entered', counts?.kycEntered],
+    [action ? 'Matching' : 'All actions', counts?.total],
+  ];
+  return (
+    <Drawer open onClose={onClose} title={`Activity · ${item.name}`} subtitle={item.email} width="max-w-2xl">
+      <div data-testid="subadmin-activity">
+        <div className="mb-4 grid grid-cols-3 gap-2.5">
+          {stats.map(([k, v]) => (
+            <div key={k} className="min-w-0 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-gray-400">{k}</p>
+              <p className="mt-1 text-lg font-bold text-gray-800">{v ?? '—'}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Filter activity">
+          {ACTIVITY_FILTERS.map(([value, label]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => setAction(value)}
+              aria-pressed={action === value}
+              className={cx('rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors', action === value ? 'border-brand bg-brand text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-brand hover:text-brand')}
+              data-testid={`activity-filter-${value || 'all'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <ActivityList list={list} />
+        {list.data && <div className="mt-3"><Pagination page={list.page} pages={list.data.pages} total={list.data.total} limit={list.limit} onPage={list.setPage} /></div>}
+      </div>
+    </Drawer>
+  );
+}
+
 /** Sub-admins (platform owner only): GET/POST/PATCH /platform/subadmins, status and password. */
 export default function SubAdmins() {
   const toast = useToast();
@@ -258,6 +352,7 @@ export default function SubAdmins() {
   const [modal, setModal] = useState(null); // { item? }
   const [pwFor, setPwFor] = useState(null);
   const [statusFor, setStatusFor] = useState(null);
+  const [activityFor, setActivityFor] = useState(null);
   const catalogue = q.data?.catalogue || [];
   const [setStatus, settingStatus] = useAction((u) => api.post(`/platform/subadmins/${u._id}/status`, { status: u.status === 'disabled' ? 'active' : 'disabled' }), {
     toast,
@@ -297,6 +392,9 @@ export default function SubAdmins() {
       align: 'right',
       render: (u) => (
         <div className="flex justify-end gap-1.5">
+          <Button size="xs" variant="secondary" icon="fa-solid fa-clock-rotate-left" onClick={() => setActivityFor(u)} aria-label={`Activity of ${u.name}`} data-testid="subadmin-activity-open">
+            Activity
+          </Button>
           <Button size="xs" variant="secondary" icon="fa-regular fa-pen-to-square" onClick={() => setModal({ item: u })} aria-label={`Edit ${u.name}`} data-testid="subadmin-edit">
             Edit
           </Button>
@@ -346,6 +444,7 @@ export default function SubAdmins() {
       </p>
       <SubAdminModal open={Boolean(modal)} item={modal?.item} catalogue={catalogue} onClose={() => setModal(null)} onSaved={q.reload} />
       <SetPasswordModal item={pwFor} onClose={() => setPwFor(null)} />
+      {activityFor && <ActivityDrawer item={activityFor} onClose={() => setActivityFor(null)} />}
       <ConfirmDialog
         open={Boolean(statusFor)}
         onClose={() => setStatusFor(null)}

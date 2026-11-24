@@ -11,6 +11,7 @@ Before changing anything in this repository:
 | Vendor products, product categories, product orders / delivery tracking, stock | **`vendor-products`** (`npm run products-check`) |
 | Online payments: Cashfree checkout, webhooks, refunds, Easy Split vendor payout accounts, dues / facility / booking / order payments | **`cashfree-payments`** (`npm run payments-check`, fake gateway) |
 | Master Admin pages/buttons, any `/platform/*` route, sub-admin accounts | **`platform-subadmins`** (permission per route + `npm run subadmin-check`) |
+| Master Admin "Add vendor", admin-entered KYC + documents, sub-admin Activity | **`admin-vendor-onboarding`** (SMART CHECK + `node scripts/vendor-onboarding-check.mjs`) |
 | Gate security (gatemen, guests, notes) — app + SocialPanel | **`gate-security`** (+ `skills/gate-security/DRY_CHECK.md`) |
 | Latitude/longitude, address search, maps, near-me | **`location-maps`** |
 | Society logo/name in SocialPanel | **`society-branding`** |

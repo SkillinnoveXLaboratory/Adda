@@ -14,7 +14,8 @@
     "api-check": "node scripts/api-check.mjs",
     "e2e": "playwright test",
     "lint": "eslint src scripts tests",
-    "subadmin-check": "node scripts/subadmin-check.mjs"
+    "subadmin-check": "node scripts/subadmin-check.mjs",
+    "vendor-onboarding-check": "node scripts/vendor-onboarding-check.mjs"
   },
   "dependencies": {
     "@fontsource/public-sans": "^5.2.5",

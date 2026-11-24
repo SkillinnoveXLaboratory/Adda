@@ -101,3 +101,19 @@ export function parsePercent(input, { max = 50 } = {}) {
   if (hundredths > max * 100) return null;
   return hundredths / 100;
 }
+
+// ---------- KYC numbers (mirror of Backend/server.js PAN_RX / IFSC_RX / verhoeffValid) ----------
+const VERHOEFF_D = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]];
+const VERHOEFF_P = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]];
+
+/** Removes spaces and dashes (how the server reads Aadhaar / account numbers). */
+export const kycDigits = (v) => String(v ?? '').replace(/[\s-]/g, '');
+/** Verhoeff checksum: every genuine Aadhaar number passes it. */
+export const verhoeffValid = (num) => /^\d+$/.test(num) && num.split('').reverse().reduce((c, d, i) => VERHOEFF_D[c][VERHOEFF_P[i % 8][Number(d)]], 0) === 0;
+export const isPan = (v) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(v ?? '').trim().toUpperCase());
+export const isIfsc = (v) => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(v ?? '').trim().toUpperCase());
+export const isAadhaar = (v) => {
+  const d = kycDigits(v);
+  return /^[2-9]\d{11}$/.test(d) && verhoeffValid(d);
+};
+export const isBankAccount = (v) => /^\d{9,18}$/.test(kycDigits(v));

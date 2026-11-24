@@ -20,6 +20,7 @@ const PMemberProfile = page(() => import('./pages/platform/MemberProfile.jsx'));
 const PUsers = page(() => import('./pages/platform/Users.jsx'));
 const PListings = page(() => import('./pages/platform/Listings.jsx'));
 const PVendors = page(() => import('./pages/platform/Vendors.jsx'));
+const PVendorNew = page(() => import('./pages/platform/VendorNew.jsx'));
 const PVendorDetail = page(() => import('./pages/platform/VendorDetail.jsx'));
 const PAds = page(() => import('./pages/platform/Ads.jsx'));
 const PServiceBookings = page(() => import('./pages/platform/ServiceBookings.jsx'));
@@ -69,7 +70,10 @@ const L = (El) => (
   </Suspense>
 );
 
-/** [path, page, permission area needed to open it] — 'owner' = platform owner only, 'self' = every platform admin. */
+/**
+ * [path, page, permission area needed to open it, level] — 'owner' = platform owner only, 'self' = every platform
+ * admin; level 'manage' = the page needs area.manage (default: area.view).
+ */
 const platformRoutes = [
   ['applications', PApplications, 'applications'],
   ['societies', PSocieties, 'societies'],
@@ -78,6 +82,7 @@ const platformRoutes = [
   ['members/:id', PMemberProfile, 'members'],
   ['users', PUsers, 'accounts'],
   ['vendors', PVendors, 'vendors'],
+  ['vendors/new', PVendorNew, 'vendors', 'manage'],
   ['vendors/:id', PVendorDetail, 'vendors'],
   ['listings', PListings, 'listings'],
   ['ads', PAds, 'ads'],
@@ -139,8 +144,8 @@ export default function App() {
               }
             >
               <Route index element={L(PDashboard)} />
-              {platformRoutes.map(([path, El, area]) => (
-                <Route key={path} path={path} element={<RequireArea area={area}>{L(El)}</RequireArea>} />
+              {platformRoutes.map(([path, El, area, level]) => (
+                <Route key={path} path={path} element={<RequireArea area={area} manage={level === 'manage'}>{L(El)}</RequireArea>} />
               ))}
               <Route path="*" element={<NotFound />} />
             </Route>

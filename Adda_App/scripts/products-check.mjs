@@ -102,14 +102,14 @@ const photo = (await upload(V.token, 'product')).body?._id;
 check('vendor uploads a product photo', !!photo);
 const p1 = await call('POST', '/products', { token: V.token, body: { ...body, photos: [photo] } });
 check('vendor adds a product → 201 pending review', p1.status === 201 && p1.body?.moderationStatus === 'pending' && p1.body.mine === true, p1.body);
-check('vendor sees own pricing: ₹1,000 → member ₹1,200, discount ₹100', p1.body?.pricing?.vendorPricePaise === 100000 && p1.body.pricing.memberPricePaise === 120000 && p1.body.pricing.discountPaise === 10000 && p1.body.pricing.commissionPercent === 20, p1.body?.pricing);
+check('vendor sees own pricing: ₹1,000 → members pay ₹1,000, commission ₹200, vendor earns ₹800, discount ₹100', p1.body?.pricing?.vendorPricePaise === 100000 && p1.body.pricing.memberPricePaise === 100000 && p1.body.pricing.vendorEarningsPaise === 80000 && p1.body.pricing.discountPaise === 10000 && p1.body.pricing.commissionPercent === 20, p1.body?.pricing);
 const pid = p1.body?._id;
 check('pending product hidden from members → 404', (await call('GET', `/products/${pid}`, { token: M })).status === 404);
 const queue = await call('GET', '/platform/listings?kind=product&status=pending', { token: T });
 check('Master Admin sees it in Listings → Products (pending)', queue.body?.items?.some((l) => l._id === pid), queue.body?.items?.length);
 check('Master Admin approves the product', (await call('POST', `/platform/listings/product/${pid}/moderate`, { token: T, body: { decision: 'approved' } })).body?.moderationStatus === 'approved');
 const mv = await call('GET', `/products/${pid}`, { token: M });
-check('member sees member price ₹1,200 + discount offer ₹100', mv.status === 200 && mv.body.pricePaise === 120000 && mv.body.pricing.discountAvailable === true && mv.body.pricing.payableWithDiscountPaise === 110000, mv.body?.pricing);
+check('member sees the vendor price ₹1,000 + discount offer ₹100', mv.status === 200 && mv.body.pricePaise === 100000 && mv.body.pricing.discountAvailable === true && mv.body.pricing.payableWithDiscountPaise === 90000, mv.body?.pricing);
 const mvTxt = JSON.stringify(mv.body);
 check('member never sees vendor price / rates', !mvTxt.includes('vendorPricePaise') && !mvTxt.includes('commissionPercent') && !mvTxt.includes('memberDiscountPercent') && !mvTxt.includes('"commissionPaise"'));
 check('product shows the shop name', !!mv.body?.shop?.name, mv.body?.shop);
@@ -136,12 +136,12 @@ check('pickup on a delivery-only product → 400', (await order(M, { quantity: 1
 const o1 = await order(M, { quantity: 2, fulfilment: 'delivery', address: 'Flat 12, Lake View, Pune', applyDiscount: true, paymentMethod: 'cod', note: 'Ring the bell' });
 check('member orders 2 with discount, delivery ₹40 → 201 placed', o1.status === 201 && o1.body?.order?.status === 'placed' && o1.body.checkout === null, o1.body);
 const O = o1.body?.order;
-check('order math: 2 × ₹1,200 − ₹200 + ₹40 = payable ₹2,240', O?.memberTotalPaise === 240000 && O.discountPaise === 20000 && O.deliveryChargePaise === 4000 && O.payablePaise === 224000, O);
+check('order math: 2 × ₹1,000 − ₹200 + ₹40 = payable ₹1,840', O?.memberTotalPaise === 200000 && O.discountPaise === 20000 && O.deliveryChargePaise === 4000 && O.payablePaise === 184000, O);
 check('member order view has no vendor price / commission', !JSON.stringify(O).includes('vendorUnitPaise') && !JSON.stringify(O).includes('commission'));
 check('stock reserved: 5 → 3', (await call('GET', `/products/${pid}`, { token: V.token })).body?.stock === 3);
 const vo = await call('GET', '/vendor/orders', { token: V.token });
 const VO = vo.body?.items?.find((x) => x._id === O?._id);
-check('vendor sees the order with customer + earnings ₹2,040', VO && VO.customer?.phone === phoneFor(3) && VO.vendorTotalPaise === 200000 && VO.yourEarningsPaise === 204000 && VO.commissionPaise === 40000, VO);
+check('vendor sees the order with customer + earnings ₹1,640 (₹2,000 − ₹400 + ₹40)', VO && VO.customer?.phone === phoneFor(3) && VO.vendorTotalPaise === 200000 && VO.yourEarningsPaise === 164000 && VO.commissionPaise === 40000, VO);
 check('vendor next steps: confirmed / cancelled', JSON.stringify(VO?.nextStatuses) === JSON.stringify(['confirmed', 'cancelled']), VO?.nextStatuses);
 check('another vendor cannot see it → 404', (await call('GET', `/vendor/orders/${O?._id}`, { token: V2.token })).status === 404);
 check('another member cannot see it → 404', (await call('GET', `/product-orders/${O?._id}`, { token: M2 })).status === 404);
@@ -154,8 +154,8 @@ check('ready_for_pickup on a delivery order → 409', (await st('ready_for_picku
 check('vendor ships', (await st('shipped', 'Courier: Delhivery')).body?.status === 'shipped');
 check('out for delivery', (await st('out_for_delivery')).body?.status === 'out_for_delivery');
 const del = await st('delivered');
-check('delivered → COD recorded as cash ₹2,240', del.body?.status === 'delivered' && del.body.payment?.status === 'paid' && del.body.payment.method === 'cash' && del.body.payment.amountPaise === 224000, del.body?.payment);
-check('settlement: commission ₹400, discount ₹200, NIVASA ₹200, vendor ₹2,040', del.body?.settlement?.commissionPaise === 40000 && del.body.settlement.discountPaise === 20000 && del.body.settlement.netToPlatformPaise === 20000 && del.body.settlement.vendorEarningsPaise === 204000, del.body?.settlement);
+check('delivered → COD recorded as cash ₹1,840', del.body?.status === 'delivered' && del.body.payment?.status === 'paid' && del.body.payment.method === 'cash' && del.body.payment.amountPaise === 184000, del.body?.payment);
+check('settlement: commission ₹400, discount ₹200, NIVASA ₹200, vendor ₹1,640', del.body?.settlement?.commissionPaise === 40000 && del.body.settlement.discountPaise === 20000 && del.body.settlement.netToPlatformPaise === 20000 && del.body.settlement.vendorEarningsPaise === 164000, del.body?.settlement);
 check('no steps after delivered', (await st('cancelled', 'late')).status === 409);
 const track = await call('GET', `/product-orders/${O?._id}`, { token: M });
 check('member tracking timeline: placed → confirmed → packed → shipped → out → delivered', JSON.stringify(track.body?.timeline?.map((t) => t.status)) === JSON.stringify(['placed', 'confirmed', 'packed', 'shipped', 'out_for_delivery', 'delivered']), track.body?.timeline);
@@ -183,7 +183,7 @@ check('no discount when shop has none → 409 NO_DISCOUNT', code(await (async ()
 
 // ---------------------------------------------------------------- earnings + platform
 const ve = await call('GET', '/vendor/earnings', { token: V.token });
-check('vendor earnings include the product order (₹2,040)', ve.body?.breakdown?.products?.vendorEarningsPaise === 204000 && ve.body.totals.vendorEarningsPaise >= 204000, ve.body?.breakdown);
+check('vendor earnings include the product order (₹1,640)', ve.body?.breakdown?.products?.vendorEarningsPaise === 164000 && ve.body.totals.vendorEarningsPaise >= 164000, ve.body?.breakdown);
 const pe = await call('GET', `/platform/earnings?vendorId=${V.id}`, { token: T });
 check('platform earnings: products NIVASA net ₹200', pe.body?.breakdown?.products?.platformNetPaise === 20000 && pe.body.totals.commissionPaise >= 40000, pe.body?.breakdown);
 const po = await call('GET', `/platform/product-orders?vendorId=${V.id}`, { token: T });

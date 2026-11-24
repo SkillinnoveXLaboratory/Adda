@@ -2,11 +2,12 @@ import { parsePercent } from './validation.js';
 
 /**
  * Per-vendor pricing (mirror of offerPricing in Backend/server.js — the server always recomputes; this is a preview):
- * NIVASA's commission is ADDED ON TOP of the vendor's price, and the member discount is a share OF that commission.
- *   commission = round(vendorPrice × commissionBps / 10000)
- *   memberPrice = vendorPrice + commission
- *   discount   = round(commission × discountBps / 10000)
- * ₹1,000 at 20% → ₹1,200; 50% discount → ₹100 off → ₹1,100; NIVASA keeps ₹100; the vendor gets ₹1,000.
+ * Members see and pay the vendor's price; NIVASA's commission is taken OUT of it (members never see it). The optional
+ * member discount is a share OF the commission, paid by NIVASA.
+ *   commission  = round(vendorPrice × commissionBps / 10000)
+ *   memberPrice = vendorPrice
+ *   discount    = round(commission × discountBps / 10000)
+ * ₹1,000 at 20% → members pay ₹1,000 (₹900 with a 50% discount); the vendor gets ₹800; NIVASA keeps ₹200 (₹100 after the discount).
  */
 
 /** Example vendor price used on the vendor's Pricing card (₹1,000). */
@@ -23,7 +24,7 @@ export const toBps = (percent) => Math.round(Number(percent || 0) * 100);
 /** Every figure for a vendor price at the given rates (integer paise). */
 export function pricingExample(vendorPricePaise, commissionPercent, memberDiscountPercent) {
   const commissionPaise = Math.round((vendorPricePaise * toBps(commissionPercent)) / 10_000);
-  const memberPricePaise = vendorPricePaise + commissionPaise;
+  const memberPricePaise = vendorPricePaise;
   const discountPaise = Math.round((commissionPaise * toBps(memberDiscountPercent)) / 10_000);
   return {
     vendorPricePaise,
@@ -32,7 +33,7 @@ export function pricingExample(vendorPricePaise, commissionPercent, memberDiscou
     discountPaise,
     payableWithDiscountPaise: memberPricePaise - discountPaise,
     nivasaKeepsPaise: commissionPaise - discountPaise,
-    vendorGetsPaise: vendorPricePaise,
+    vendorGetsPaise: vendorPricePaise - commissionPaise,
   };
 }
 

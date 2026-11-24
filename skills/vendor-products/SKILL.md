@@ -39,7 +39,7 @@ Contract: `docs/backend/API.md` → "Products & orders". Pricing rules are the s
 ## Checks
 ```
 cd Adda_App && npm run products-check    # categories, CRUD + KYC gate, moderation, member never sees vendor price,
-                                         # order math (₹1,000 @20%, discount 50%, qty 2, delivery ₹40 → payable ₹2,240),
+                                         # order math (₹1,000 @20%, discount 50%, qty 2, delivery ₹40 → payable ₹1,840),
                                          # stock reserve/restore, every transition + illegal ones, COD settlement,
                                          # earnings include products, isolation (other vendor/member → 404)
 ```

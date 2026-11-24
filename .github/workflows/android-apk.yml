@@ -1,12 +1,13 @@
-# Builds the NIVASA resident app (Adda_App/) as a release APK signed with the upload keystore, then publishes it
-# as a workflow artifact and as a GitHub Release asset.
+# Builds the NIVASA resident app (Adda_App/) as a release APK (install directly) and an Android App Bundle (.aab,
+# upload to Google Play), both signed with the upload keystore, then publishes them as workflow artifacts and as
+# GitHub Release assets.
 #
 # Required repository secrets (Settings -> Secrets and variables -> Actions):
 #   ANDROID_KEYSTORE_BASE64    base64 of the .jks file
 #   ANDROID_KEYSTORE_PASSWORD  keystore password
 #   ANDROID_KEY_ALIAS          key alias (e.g. nivasa); if it doesn't match, a keystore with one key uses that key
 #   ANDROID_KEY_PASSWORD       optional; ignored for PKCS12 keystores, which use the keystore password for the key
-name: Android APK (NIVASA)
+name: Android APK + AAB (NIVASA)
 
 on:
   push:
@@ -21,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write # create the GitHub Release that carries the APK
+  contents: write # create the GitHub Release that carries the APK and AAB
 
 jobs:
   apk:
@@ -120,9 +121,10 @@ jobs:
       - name: Generate native Android project
         run: npx expo prebuild -p android --clean --no-install
 
-      - name: Build release APK
+      - name: Build release APK + AAB
         working-directory: Adda_App/android
-        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+        # One Gradle run builds both: the APK for direct installs, the App Bundle for Google Play.
+        run: ./gradlew assembleRelease bundleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
 
       - name: Verify package and signature
         id: verify
@@ -142,6 +144,18 @@ jobs:
           NAME="NIVASA-v${VERSION}-build${GITHUB_RUN_NUMBER}.apk"
           mkdir -p dist-apk && cp "$APK" "dist-apk/$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          # App Bundle: must be signed with the same upload key (Google Play rejects debug-signed bundles).
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          [ -f "$AAB" ] || { echo "::error::AAB was not built"; exit 1; }
+          jarsigner -verify -certs "$AAB" > aab-sig.txt 2>&1 || { tail -5 aab-sig.txt; echo "::error::AAB signature does not verify"; exit 1; }
+          if grep -q "CN=Android Debug" aab-sig.txt; then echo "::error::AAB is signed with the debug key"; exit 1; fi
+          AAB_SHA=$(keytool -printcert -jarfile "$AAB" | grep -m1 "SHA256:" | sed 's/.*SHA256: //; s/://g' | tr 'A-F' 'a-f')
+          echo "aab cert $AAB_SHA"
+          [ "$AAB_SHA" = "$EXPECTED" ] || { echo "::error::AAB certificate does not match the release keystore"; exit 1; }
+          AAB_NAME="NIVASA-v${VERSION}-build${GITHUB_RUN_NUMBER}.aab"
+          cp "$AAB" "dist-apk/$AAB_NAME"
+          echo "aab=$AAB_NAME" >> "$GITHUB_OUTPUT"
+          rm -f aab-sig.txt
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -150,15 +164,21 @@ jobs:
           path: Adda_App/dist-apk/${{ steps.verify.outputs.name }}
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.verify.outputs.aab }}
+          path: Adda_App/dist-apk/${{ steps.verify.outputs.aab }}
+          if-no-files-found: error
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="nivasa-v${{ steps.verify.outputs.version }}-build${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" "dist-apk/${{ steps.verify.outputs.name }}" \
+          gh release create "$TAG" "dist-apk/${{ steps.verify.outputs.name }}" "dist-apk/${{ steps.verify.outputs.aab }}" \
             --target "$GITHUB_SHA" \
             --title "NIVASA ${{ steps.verify.outputs.version }} (build ${GITHUB_RUN_NUMBER})" \
-            --notes "Signed release APK for com.nivasa.app, built from ${GITHUB_SHA::7}. API: ${EXPO_PUBLIC_API_URL}."
+            --notes "Signed release APK (install directly) and AAB (upload to Google Play) for com.nivasa.app, built from ${GITHUB_SHA::7}. API: ${EXPO_PUBLIC_API_URL}."
 
       - name: Remove keystore
         if: always()

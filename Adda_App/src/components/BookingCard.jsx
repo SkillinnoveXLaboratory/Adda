@@ -46,9 +46,11 @@ export function BookingCard({ booking: b, onChanged }) {
   const paid = pay.status === 'paid';
   const priced = pr.memberPricePaise > 0 || pr.listPricePaise > 0;
   const memberPrice = pr.memberPricePaise ?? pr.listPricePaise;
-  // Members can pay a completed fixed-price job online (POST /service-bookings/:id/pay) or in cash as before.
+  // Members can pay a priced job online once the vendor accepts it (POST /service-bookings/:id/pay) or in cash as before.
+  // A paid booking that is cancelled is refunded automatically. The server's `actions` decides.
   const checkout = useCheckout({ onResult: onChanged, onClose: onChanged });
-  const canPayOnline = !vendorView && b.status === 'completed' && !paid && priced && (payable || 0) >= 100;
+  const canPayOnline =
+    !vendorView && (pay.status || 'unpaid') === 'unpaid' && priced && (payable || 0) >= 100 && (b.actions ? b.actions.includes('pay') : ['accepted', 'completed'].includes(b.status));
 
   const run = async (action) => {
     if (['decline', 'cancel'].includes(action)) {
@@ -116,7 +118,15 @@ export function BookingCard({ booking: b, onChanged }) {
           </T>
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
             <Badge status={b.status} label={STATUS_LABEL[b.status] || titleCase(b.status)} />
-            {paid ? <Badge tone="success" label={`Paid ${money(pay.amountPaise)} · ${pay.method === 'online' ? 'online' : 'cash'}`} /> : vendorView && b.status === 'completed' ? <Badge tone="warning" label="Payment not recorded" /> : null}
+            {paid ? (
+              <Badge tone="success" label={`Paid ${money(pay.amountPaise)} · ${pay.method === 'online' ? 'online' : 'cash'}`} />
+            ) : pay.status === 'refund_pending' ? (
+              <Badge tone="warning" label="Refund in progress" />
+            ) : pay.status === 'refunded' ? (
+              <Badge tone="info" label={`Refunded ${money(pay.amountPaise)}`} />
+            ) : vendorView && b.status === 'completed' ? (
+              <Badge tone="warning" label="Payment not recorded" />
+            ) : null}
           </View>
         </View>
       </View>
@@ -138,11 +148,12 @@ export function BookingCard({ booking: b, onChanged }) {
 
       {priced ? (
         <View style={styles.price} testID="booking-pricing">
-          {vendorView && pr.vendorPricePaise != null ? <Line label="Your price" value={money(pr.vendorPricePaise)} /> : null}
-          {vendorView && pr.commissionPaise ? <Line label={`NIVASA fee${pr.commissionPercent ? ` (${pr.commissionPercent}%)` : ''}`} value={`+ ${money(pr.commissionPaise)}`} /> : null}
-          <Line label={vendorView ? 'Member price' : 'Service price'} value={money(memberPrice)} />
+          <Line label="Service price" value={money(memberPrice)} />
           {pr.discountApplied && pr.discountPaise ? <Line label="NIVASA discount applied" value={`− ${money(pr.discountPaise)}`} tone={colors.green} /> : null}
-          <Line label={vendorView ? 'Customer pays you' : 'You pay the vendor'} value={money(pr.payablePaise ?? memberPrice)} strong testID="booking-payable-line" />
+          <Line label={vendorView ? 'Customer pays' : 'You pay'} value={money(pr.payablePaise ?? memberPrice)} strong testID="booking-payable-line" />
+          {/* The NIVASA fee is the vendor's business only: members never see it. */}
+          {vendorView && pr.commissionPaise ? <Line label={`NIVASA fee${pr.commissionPercent ? ` (${pr.commissionPercent}%)` : ''}${pr.discountApplied && pr.discountPaise ? ', less the discount NIVASA covers' : ''}`} value={`− ${money(pr.commissionPaise - (pr.discountApplied ? pr.discountPaise || 0 : 0))}`} /> : null}
+          {vendorView && pr.vendorEarningsPaise != null ? <Line label="You earn" value={money(pr.vendorEarningsPaise)} strong tone={colors.green} testID="booking-you-earn" /> : null}
         </View>
       ) : (
         <View style={styles.row}>

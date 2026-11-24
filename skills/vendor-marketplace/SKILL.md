@@ -21,22 +21,27 @@ There are **no coupons** any more and **no platform-wide commission setting**.
    (`shop:{name, logoUrl}`) and inherit the shop location (stored on each service as GeoJSON for search; updated
    when the shop moves).
 5. **Pricing (per vendor, set by Master Admin on the vendor's page).**
-   - `commissionPercent` 0–100 (≤2 decimals, stored as basis points) — NIVASA's fee **added on top** of the vendor's
-     price. Member price = vendor price + `round(vendorPrice × bps / 10000)`. ₹1,000 at 20% → members see **₹1,200**.
+   - **Members see and pay the vendor's own price** (member price = vendor price). `commissionPercent` 0–100 (≤2
+     decimals, basis points) is NIVASA's fee **taken out of** that price: commission = `round(price × bps / 10000)`,
+     vendor earns price − commission. ₹1,000 at 20% → members pay **₹1,000**, vendor earns **₹800**. The commission is
+     shown **only to the vendor** (and Master Admin), never to members.
    - `memberDiscountPercent` 0–100 — the share **of the commission** a member gets back when they tap **"Apply
-     discount"** on the booking form. 50% of ₹200 → ₹100 off → member pays **₹1,100**. NIVASA then keeps ₹100.
+     discount"**. 50% of ₹200 → ₹100 off → member pays **₹900**. NIVASA pays the discount (keeps ₹100); the vendor
+     still earns ₹800.
    - Applies at once to all of that vendor's services (live price); a booking snapshots everything when it is made.
-   - The vendor sees their own price, the member price and the rates on their services and bookings. Members see only
-     the member price and, when available, the discount offer — never the vendor price or the rates.
+   - The vendor sees the price, NIVASA's fee and "you earn" (`vendorEarningsPaise`) on services, products, bookings
+     and orders. Members see only the price and, when available, the discount offer — never the fee or the rates.
    - "Price on request" services: no commission/discount shown; the vendor records the amount at mark-paid and
      commission is `round(cash × bps/10000)` taken from it (see 7).
 6. **Bookings.** Members book approved services (date today…+90 days, address, one open booking per service).
    `applyDiscount: true` uses the vendor's discount (409 `NO_DISCOUNT` when none). Snapshot: `vendorPricePaise`,
    `commissionBps`, `commissionPaise`, `memberPricePaise`, `discountBps`, `discountPaise` (0 if not applied),
-   `payablePaise = memberPrice − discount`. requested → accepted|declined|cancelled → completed.
+   `payablePaise = memberPrice − discount`. requested → accepted|declined|cancelled → completed. Members may pay online
+   once the booking is `accepted` (or `completed`) — see skills/cashfree-payments; a paid booking that is then
+   cancelled/declined is refunded in full automatically.
 7. **Mark paid (cash).** Vendor records the cash received once after `completed` (prefilled with `payablePaise`).
    Settlement fixed then: `cashPaise`, `commissionPaise`, `discountPaise`, `netToPlatformPaise = commission − discount`,
-   `vendorEarningsPaise = cash − netToPlatform`. (₹1,100 cash → vendor ₹1,000, NIVASA ₹100, member saved ₹100.)
+   `vendorEarningsPaise = cash − netToPlatform`. (₹900 cash → vendor ₹800, NIVASA ₹100, member saved ₹100.)
    For "price on request": commission = round(cash × bps/10000) and comes out of the cash (no discount).
 8. **Earnings.** Vendor: `GET /vendor/earnings` (app screen). Master Admin: `GET /platform/earnings` — commission,
    member discounts given, **NIVASA net earnings** (commission − discounts), vendor earnings, by month, top vendors.
@@ -56,8 +61,9 @@ cd Adda_App && npm run vendor-check     # accounts, KYC, shop, pricing math, dis
 cd Adda_App && node scripts/api-check.mjs http://localhost:3013 admin@addaapp.local DevAdmin12345
 cd Admin_Panel && node scripts/api-check.mjs && npm run subadmin-check
 ```
-Exact numbers to assert: ₹1,000 @20% → member ₹1,200; discount 50% → ₹100 off → payable ₹1,100; mark-paid ₹1,100 →
-commission ₹200, discount ₹100, net to NIVASA ₹100, vendor ₹1,000. Rounding: ₹333.33 @ 12.5% → commission ₹41.67.
+Exact numbers to assert: ₹1,000 @20% → member pays ₹1,000, vendor earns ₹800; discount 50% → ₹100 off → payable ₹900;
+mark-paid ₹900 → commission ₹200, discount ₹100, net to NIVASA ₹100, vendor ₹800. Rounding: ₹333.33 @ 12.5% →
+commission ₹41.67, vendor ₹291.66.
 
 ## Review checklist
 - Any member-facing response containing `vendorPricePaise`, `commissionBps`, `commissionPaise` or settlement fields.

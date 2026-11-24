@@ -176,7 +176,7 @@ try {
   const ck = o.body?.checkout;
   check('online order → awaiting_payment + checkout (sandbox)', o.status === 201 && o.body.order.status === 'awaiting_payment' && ck?.orderId?.startsWith('ord_') && ck.mode === 'sandbox' && ck.checkoutUrl?.includes(`/api/v1/pay/checkout/${ck.orderId}?t=`), o.body);
   const gwo = gw.orders.get(ck?.orderId);
-  check('Cashfree order: ₹2,240 with split ₹2,040 to the vendor', gwo?.order_amount === 2240 && gwo.order_splits?.[0]?.vendor_id === `nv${vId}` && gwo.order_splits[0].amount === 2040, { amount: gwo?.order_amount, splits: gwo?.order_splits });
+  check('Cashfree order: ₹1,840 with split ₹1,640 to the vendor', gwo?.order_amount === 1840 && gwo.order_splits?.[0]?.vendor_id === `nv${vId}` && gwo.order_splits[0].amount === 1640, { amount: gwo?.order_amount, splits: gwo?.order_splits });
   check('return/notify URLs point at the API', gwo?.order_meta?.return_url?.includes(`/api/v1/pay/return?order_id=${ck.orderId}`) && gwo.order_meta.notify_url?.endsWith('/api/v1/payments/webhook/cashfree'));
   check('customer details sent (id + phone)', gwo?.customer_details?.customer_phone === phoneFor(2) && /^u[a-f0-9]{24}$/.test(gwo.customer_details.customer_id));
   check('vendor does not see unpaid online orders', !(await call('GET', '/vendor/orders', { token: V })).body?.items?.some((x) => x._id === o.body.order._id));
@@ -196,23 +196,23 @@ try {
   gatewayPays(ck.orderId);
   const bad = await signedWebhook({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: ck.orderId }, payment: { payment_status: 'SUCCESS' } } }, { badSig: true });
   check('webhook with a bad signature → 400, nothing applied', bad.status === 400 && (await call('GET', `/product-orders/${o.body.order._id}`, { token: M })).body?.status === 'awaiting_payment', bad.status);
-  const wh = await signedWebhook({ type: 'PAYMENT_SUCCESS_WEBHOOK', event_time: new Date().toISOString(), data: { order: { order_id: ck.orderId, order_amount: 2240 }, payment: { cf_payment_id: paySeq, payment_status: 'SUCCESS', payment_amount: 2240 } } });
+  const wh = await signedWebhook({ type: 'PAYMENT_SUCCESS_WEBHOOK', event_time: new Date().toISOString(), data: { order: { order_id: ck.orderId, order_amount: 1840 }, payment: { cf_payment_id: paySeq, payment_status: 'SUCCESS', payment_amount: 1840 } } });
   check('signed webhook → paid', wh.status === 200 && wh.body?.outcome === 'paid', wh.body);
   const again = await signedWebhook({ type: 'PAYMENT_SUCCESS_WEBHOOK', event_time: 'same', data: { order: { order_id: ck.orderId } } });
   const again2 = await fetch(`${API}/payments/webhook/cashfree`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   check('webhook without signature headers → 400', again2.status === 400);
   check('repeat webhook is harmless', again.status === 200);
   const mo = await call('GET', `/product-orders/${o.body.order._id}`, { token: M });
-  check('order placed + paid online ₹2,240', mo.body?.status === 'placed' && mo.body.payment.status === 'paid' && mo.body.payment.method === 'online' && mo.body.payment.amountPaise === 224000, mo.body?.payment);
+  check('order placed + paid online ₹1,840', mo.body?.status === 'placed' && mo.body.payment.status === 'paid' && mo.body.payment.method === 'online' && mo.body.payment.amountPaise === 184000, mo.body?.payment);
   const vo = await call('GET', `/vendor/orders/${o.body.order._id}`, { token: V });
-  check('vendor settlement: NIVASA ₹200, vendor ₹2,040 (= Cashfree split)', vo.body?.settlement?.netToPlatformPaise === 20000 && vo.body.settlement.vendorEarningsPaise === 204000, vo.body?.settlement);
+  check('vendor settlement: NIVASA ₹200, vendor ₹1,640 (= Cashfree split)', vo.body?.settlement?.netToPlatformPaise === 20000 && vo.body.settlement.vendorEarningsPaise === 164000, vo.body?.settlement);
   const ret = await fetch(`${API}/pay/return?order_id=${ck.orderId}`);
   const retHtml = await ret.text();
   check('return page says successful and links back to the app', ret.status === 200 && retHtml.includes('Payment successful') && retHtml.includes(`addaapp://payment-result?order_id=${ck.orderId}&amp;status=paid`));
   // member cancels → refund with refund_splits
   const cancel = await call('POST', `/product-orders/${o.body.order._id}/cancel`, { token: M, body: { reason: 'Changed my mind' } });
   const refund = gw.refunds.find((r) => r.orderId === ck.orderId);
-  check('cancel paid order → Cashfree refund ₹2,240 pulling ₹2,040 back from the vendor', refund?.refund_amount === 2240 && refund.refund_splits?.[0]?.vendor_id === `nv${vId}` && refund.refund_splits[0].amount === 2040, refund);
+  check('cancel paid order → Cashfree refund ₹1,840 pulling ₹1,640 back from the vendor', refund?.refund_amount === 1840 && refund.refund_splits?.[0]?.vendor_id === `nv${vId}` && refund.refund_splits[0].amount === 1640, refund);
   check('…order refunded, stock restored', cancel.body?.payment?.status === 'refunded' && (await call('GET', `/products/${prod.body._id}`, { token: V })).body?.stock === 10, cancel.body?.payment);
 
   // amount mismatch
@@ -238,18 +238,31 @@ try {
   await call('POST', `/platform/listings/service/${offer.body?._id}/moderate`, { token: T, body: { decision: 'approved' } });
   const day = new Date(Date.now() + 330 * 60000 + 86400000).toISOString().slice(0, 10);
   const bk = await call('POST', `/service-offers/${offer.body._id}/bookings`, { token: M, body: { preferredDate: day, address: 'Flat 7, Civil Lines', applyDiscount: true } });
-  check('booking made (payable ₹1,100)', bk.status === 201 && (bk.body?.pricing?.payablePaise ?? bk.body?.payablePaise) === 110000, bk.body);
-  check('pay before the job is done → 409', (await call('POST', `/service-bookings/${bk.body._id}/pay`, { token: M })).status === 409);
+  check('booking made: member pays the listed ₹1,000 − ₹100 discount = ₹900', bk.status === 201 && bk.body?.pricing?.memberPricePaise === 100000 && bk.body.pricing.payablePaise === 90000, bk.body?.pricing);
+  check('member booking shows no commission', !JSON.stringify(bk.body).includes('commission'));
+  check('pay before the vendor accepts → 409', (await call('POST', `/service-bookings/${bk.body._id}/pay`, { token: M })).status === 409);
   await call('POST', `/vendor/bookings/${bk.body._id}/accept`, { token: V, body: {} });
-  await call('POST', `/vendor/bookings/${bk.body._id}/complete`, { token: V, body: {} });
+  const acc = (await call('GET', '/service-bookings', { token: M })).body?.items?.find((x) => x._id === bk.body._id);
+  check('accepted booking offers "pay" to the member', acc?.actions?.includes('pay'), acc?.actions);
   const bp = await call('POST', `/service-bookings/${bk.body._id}/pay`, { token: M });
   const bgo = gw.orders.get(bp.body?.orderId);
-  check('booking checkout ₹1,100 with ₹1,000 split to the vendor', bp.status === 201 && bgo?.order_amount === 1100 && bgo.order_splits?.[0]?.amount === 1000, { status: bp.status, body: bp.body, splits: bgo?.order_splits });
+  check('pay once accepted: checkout ₹900 with ₹800 split to the vendor', bp.status === 201 && bgo?.order_amount === 900 && bgo.order_splits?.[0]?.amount === 800, { status: bp.status, body: bp.body, splits: bgo?.order_splits });
   gatewayPays(bp.body.orderId);
   const bpr = await call('POST', `/payments/checkout/${bp.body.orderId}/refresh`, { token: M });
+  await call('POST', `/vendor/bookings/${bk.body._id}/complete`, { token: V, body: {} });
   const vb = await call('GET', `/vendor/bookings/${bk.body._id}`, { token: V });
-  check('booking paid online: same settlement as cash (NIVASA ₹100, vendor ₹1,000)', bpr.body?.status === 'paid' && vb.body?.payment?.status === 'paid' && vb.body.payment.method === 'online' && vb.body.payment.netToPlatformPaise === 10000 && vb.body.payment.vendorEarningsPaise === 100000, vb.body?.payment || vb.body);
-  check('cash mark-paid after online payment → 409', (await call('POST', `/vendor/bookings/${bk.body._id}/mark-paid`, { token: V, body: { amountPaise: 110000 } })).status === 409);
+  check('booking paid online: commission ₹200 − discount ₹100 = NIVASA ₹100, vendor ₹800', bpr.body?.status === 'paid' && vb.body?.payment?.status === 'paid' && vb.body.payment.method === 'online' && vb.body.payment.netToPlatformPaise === 10000 && vb.body.payment.vendorEarningsPaise === 80000, vb.body?.payment || vb.body);
+  check('cash mark-paid after online payment → 409', (await call('POST', `/vendor/bookings/${bk.body._id}/mark-paid`, { token: V, body: { amountPaise: 90000 } })).status === 409);
+  // Paid in advance, then cancelled → full refund.
+  const M3 = (await register(5, `Advance payer ${RUN}`)).body.accessToken;
+  const bk2 = await call('POST', `/service-offers/${offer.body._id}/bookings`, { token: M3, body: { preferredDate: day, address: 'Flat 9, Civil Lines' } });
+  await call('POST', `/vendor/bookings/${bk2.body?._id}/accept`, { token: V, body: {} });
+  const bp2 = await call('POST', `/service-bookings/${bk2.body?._id}/pay`, { token: M3 });
+  gatewayPays(bp2.body?.orderId);
+  await call('POST', `/payments/checkout/${bp2.body?.orderId}/refresh`, { token: M3 });
+  const cx = await call('POST', `/service-bookings/${bk2.body?._id}/cancel`, { token: M3, body: {} });
+  const rf2 = gw.refunds.find((r) => r.orderId === bp2.body?.orderId);
+  check('paid in advance then cancelled → refund ₹1,000 (₹800 back from the vendor), booking refunded', cx.body?.status === 'cancelled' && cx.body.payment?.status === 'refunded' && rf2?.refund_amount === 1000 && rf2.refund_splits?.[0]?.amount === 800, { p: cx.body?.payment, rf2 });
 
   // ---------------------------------------------------------------- society: maintenance invoice + facility fee
   const repEmail = `pay.sec.${RUN}@example.com`;

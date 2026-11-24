@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useParams } from 'react-router';
 import { api, mediaHref } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.jsx';
 import { useAction, useQuery } from '../../lib/hooks.js';
@@ -14,6 +14,9 @@ import { LocationInfo } from '../../components/LocationInfo.jsx';
 import { ShopLogo } from '../../components/ShopLogo.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
+import { KycDetailsForm } from '../../components/KycDetailsForm.jsx';
+import { adminLabel, emptyKyc, kycErrors, kycPayload, serverErrors } from '../../lib/vendorOnboarding.js';
+import { focusFirstError } from '../../lib/validation.js';
 
 const DOCS = [
   ['panPhoto', 'PAN card'],
@@ -78,6 +81,89 @@ function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, className
         </p>
       </div>
     </Card>
+  );
+}
+
+/** Existing document → upload-tile value (the vendor's own files may be reused; the server accepts them). */
+const docValue = (d, label) => (d?._id ? { _id: d._id, name: `Current ${label.toLowerCase()}`, mimeType: d.mimeType, preview: d.mimeType === 'application/pdf' ? null : mediaHref(d.url) } : null);
+
+/**
+ * Admin enters / replaces a vendor's KYC on their behalf: PUT /platform/vendors/:id/kyc-details (vendors.manage).
+ * Mounted only while open, so typed PAN / Aadhaar / account numbers are dropped when it closes.
+ */
+function KycEditModal({ vendorId, profile, onClose, onSaved }) {
+  const toast = useToast();
+  const [k, setK] = useState(() => ({
+    ...emptyKyc(),
+    businessName: profile?.businessName || '',
+    businessType: profile?.businessType || 'individual',
+    city: profile?.city || '',
+    address: profile?.address || '',
+    bankAccountHolder: profile?.bankAccountHolder || '',
+    bankIfsc: profile?.bankIfsc || '',
+    bankName: profile?.bankName || '',
+    ...Object.fromEntries(DOCS.map(([key, label]) => [key, docValue(profile?.documents?.[key], label)])),
+  }));
+  const [errors, setErrors] = useState({});
+  const [general, setGeneral] = useState(null);
+  const [uploading, setUploading] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const had = Boolean(profile?.pan || profile?.aadhaar || profile?.bankAccount);
+  const set = (key, val) => {
+    setK((x) => ({ ...x, [key]: val }));
+    setErrors((e) => (e[key] || (e.documents && DOCS.some(([d]) => d === key)) ? { ...e, [key]: undefined, documents: DOCS.some(([d]) => d === key) ? undefined : e.documents } : e));
+  };
+  const save = async () => {
+    if (busy || uploading) return;
+    setGeneral(null);
+    const errs = kycErrors(k);
+    setErrors(errs);
+    if (Object.keys(errs).length) return setTimeout(() => focusFirstError(errs), 0);
+    setBusy(true);
+    try {
+      const r = await api.put(`/platform/vendors/${vendorId}/kyc-details`, kycPayload(k));
+      toast.success(r?.profile?.kycStatus === 'approved' ? 'KYC saved and approved' : 'KYC saved — waiting for review');
+      onSaved();
+    } catch (err) {
+      const { fields, general: msg } = serverErrors(err);
+      setErrors(fields);
+      setGeneral(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      busy={busy}
+      size="xl"
+      icon="fa-solid fa-id-card"
+      title="Enter KYC details"
+      subtitle="Typed on the vendor’s behalf. Saved encrypted; your name is recorded as the person who entered it."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button icon="fa-regular fa-floppy-disk" loading={busy} disabledReason={uploading ? 'Wait for the upload to finish' : null} onClick={save} data-testid="kyc-details-save">
+            {k.approve ? 'Save & approve KYC' : 'Save KYC'}
+          </Button>
+        </>
+      }
+    >
+      {general && (
+        <Alert tone="danger" className="mb-4" title="Not saved">
+          {general}
+        </Alert>
+      )}
+      {had && (
+        <Alert tone="info" className="mb-4">
+          For safety the saved PAN, Aadhaar and account numbers aren’t filled in — type them again. The current document photos are kept unless you replace them.
+        </Alert>
+      )}
+      <KycDetailsForm value={k} onChange={set} errors={errors} onBusyChange={(b) => setUploading((n) => Math.max(0, n + (b ? 1 : -1)))} />
+    </Modal>
   );
 }
 
@@ -152,9 +238,11 @@ export default function VendorDetail() {
   const toast = useToast();
   const { refreshCounts } = useCounts();
   const { canManage, canView } = useAuth();
+  const location = useLocation();
+  const justCreated = location.state?.created ? location.state : null;
   const manage = canManage('vendors'); // KYC approve / reject and reveal
   const q = useQuery(() => api.get(`/platform/vendors/${id}`), [id]);
-  const [modal, setModal] = useState(null); // 'approve' | 'reject' | 'reveal'
+  const [modal, setModal] = useState(null); // 'approve' | 'reject' | 'reveal' | 'kyc-details'
   const [revealed, setRevealed] = useState(null);
   useEffect(() => setRevealed(null), [id]);
   const done = () => (setModal(null), q.reload(), refreshCounts());
@@ -168,11 +256,12 @@ export default function VendorDetail() {
 
   return (
     <QueryState query={q} skeleton={<PageSkeleton cards={4} rows={6} />}>
-      {({ user: u, profile: p, counts, kycAvailable, settlement, pricing, payout }) => {
+      {({ user: u, profile: p, counts, kycAvailable, settlement, pricing, payout, addedBy, kycEnteredBy }) => {
         const status = p?.kycStatus || 'not_submitted';
         const canApprove = ['pending', 'rejected'].includes(status);
         const canReject = ['pending', 'approved'].includes(status);
         const hasNumbers = Boolean(p?.pan || p?.aadhaar || p?.bankAccount);
+        const canEnterKyc = manage && status !== 'approved';
         const revealBlocked = !kycAvailable ? 'Vendor verification isn’t set up on this server' : !hasNumbers ? 'No KYC details submitted yet' : null;
         return (
           <div data-testid="vendor-detail">
@@ -187,6 +276,11 @@ export default function VendorDetail() {
               actions={
                 manage && (
                 <>
+                  {canEnterKyc && (
+                    <Button variant="outline" icon="fa-solid fa-id-card" disabledReason={!kycAvailable ? 'Vendor verification isn’t set up on this server' : null} onClick={() => setModal('kyc-details')} data-testid="kyc-details-open">
+                      {status === 'not_submitted' ? 'Enter KYC details' : 'Edit KYC details'}
+                    </Button>
+                  )}
                   <Button variant="outline" icon="fa-solid fa-eye" disabledReason={revealBlocked} onClick={() => setModal('reveal')} data-testid="kyc-reveal">
                     Reveal full details
                   </Button>
@@ -205,6 +299,16 @@ export default function VendorDetail() {
               }
             />
 
+            {justCreated && (
+              <Alert tone="success" className="mb-5" title="Vendor added">
+                They can sign in to the NIVASA app with their mobile number and the password you set, choosing “Vendor”.
+              </Alert>
+            )}
+            {justCreated && justCreated.passwordLoginEnabled === false && (
+              <Alert tone="warning" className="mb-5" title="App password sign-in is off on the server" >
+                The account was created, but password sign-in in the app is turned off on this server, so the vendor can’t sign in with the password until the server administrator turns it on.
+              </Alert>
+            )}
             {!kycAvailable && (
               <Alert tone="warning" className="mb-5" title="Vendor verification is not available on this server">
                 The server has no KYC encryption key, so vendors can’t submit KYC and full details can’t be revealed. Ask the server administrator to add the KYC encryption key to the server settings.
@@ -226,7 +330,7 @@ export default function VendorDetail() {
               </Alert>
             )}
 
-            <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6 xl:grid-cols-6">
+            <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-6 2xl:grid-cols-6">
               <MetricCard tone="purple" label="Properties" value={counts.properties} icon="fa-solid fa-house" />
               <MetricCard tone="cyan" label="Services" value={counts.services} icon="fa-solid fa-screwdriver-wrench" />
               <MetricCard tone="green" label="Bookings" value={counts.bookings} icon="fa-regular fa-calendar-check" />
@@ -342,6 +446,7 @@ export default function VendorDetail() {
                     ['Mobile', <span key="m" className="font-mono">{u.phone || '—'}</span>],
                     ['Joined', formatDate(u.createdAt)],
                     ['Last sign-in', u.lastLoginAt ? formatRelative(u.lastLoginAt) : 'Never'],
+                    ['Added by', addedBy ? <span key="ab" data-testid="vendor-added-by">{adminLabel(addedBy)}</span> : 'Self sign-up in the app'],
                   ]}
                 />
                 {canView('members') && (
@@ -358,6 +463,7 @@ export default function VendorDetail() {
                     ['City', p?.city],
                     ['Address', p?.address],
                     ['KYC submitted', p?.submittedAt ? formatDateTime(p.submittedAt) : 'Not yet'],
+                    ['KYC entered by', kycEnteredBy ? <span key="kb" data-testid="vendor-kyc-entered-by">{adminLabel(kycEnteredBy)}</span> : p?.submittedAt ? 'The vendor (in the app)' : '—'],
                     ['Reviewed', p?.reviewedAt ? formatDateTime(p.reviewedAt) : '—'],
                     ['Consent given', p?.consentAt ? formatDateTime(p.consentAt) : '—'],
                     ['Review note', p?.kycNote],
@@ -404,6 +510,7 @@ export default function VendorDetail() {
             <ReasonDialog open={modal === 'reject'} onClose={() => setModal(null)} onSubmit={(n) => decide('rejected', n)} busy={deciding} label="What needs to change (sent to the vendor)" placeholder="e.g. Aadhaar back photo is blurred — please upload a clear photo" title="Reject KYC" confirmLabel="Reject KYC" message={status === 'approved' ? 'The vendor loses verified status and can’t post new listings or ads until KYC is approved again.' : 'The vendor can correct the details and submit again.'} />
             <ReasonDialog open={modal === 'reveal'} onClose={() => setModal(null)} onSubmit={(r) => reveal(r)} busy={revealing} tone="primary" title="Reveal full KYC details" confirmLabel="Reveal" placeholder="e.g. Matching PAN number against the uploaded card" message="PAN, Aadhaar, bank account and mobile are shown once and not saved. Your reason is written to the audit log." />
             <RevealedModal data={revealed} onClose={() => setRevealed(null)} />
+            {modal === 'kyc-details' && <KycEditModal vendorId={u._id} profile={p} onClose={() => setModal(null)} onSaved={done} />}
           </div>
         );
       }}

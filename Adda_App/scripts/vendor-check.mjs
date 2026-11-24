@@ -451,15 +451,15 @@ const kId = await approveSvc(await call('POST', '/service-offers', { token: V, b
 const VENDOR_ONLY_KEYS = ['vendorPricePaise', 'commissionBps', 'commissionPercent', 'commissionPaise', 'memberDiscountPercent', 'discountBps', 'netToPlatformPaise', 'vendorEarningsPaise'];
 const leaks = (obj) => VENDOR_ONLY_KEYS.filter((k) => JSON.stringify(obj ?? {}).includes(`"${k}"`));
 const mSvc = await call('GET', `/service-offers/${kId}`, { token: M });
-check('₹1,000 at 20% → member price ₹1,200', mSvc.body?.pricePaise === 120000 && mSvc.body?.pricing?.memberPricePaise === 120000, JSON.stringify(mSvc.body?.pricing));
-check('member sees the discount offer: ₹100 off → ₹1,100', mSvc.body?.pricing?.discountAvailable === true && mSvc.body.pricing.discountPaise === 10000 && mSvc.body.pricing.payableWithDiscountPaise === 110000);
-check('member JSON has no vendor price or rates', leaks(mSvc.body).length === 0 && !hasNumber(mSvc.body, 100000), leaks(mSvc.body).join(','));
+check('₹1,000 at 20% → members see and pay ₹1,000 (no commission added)', mSvc.body?.pricePaise === 100000 && mSvc.body?.pricing?.memberPricePaise === 100000, JSON.stringify(mSvc.body?.pricing));
+check('member sees the discount offer: ₹100 off → ₹900', mSvc.body?.pricing?.discountAvailable === true && mSvc.body.pricing.discountPaise === 10000 && mSvc.body.pricing.payableWithDiscountPaise === 90000);
+check('member JSON has no commission, rates or vendor earnings', leaks(mSvc.body).length === 0 && !hasNumber(mSvc.body, 20000) && !hasNumber(mSvc.body, 80000), leaks(mSvc.body).join(','));
 check('service shows the shop name + logo', mSvc.body?.shop?.name === SHOP_NAME && !!mSvc.body?.shop?.logoUrl, JSON.stringify(mSvc.body?.shop));
 const mBrowse = await call('GET', `/service-offers?city=${CITY}&limit=50`, { token: M });
 const mRow = mBrowse.body?.items?.find((x) => x._id === kId);
-check('browse list: member price, shop, no vendor fields', mRow?.pricePaise === 120000 && mRow?.shop?.name === SHOP_NAME && leaks(mBrowse.body).length === 0, leaks(mBrowse.body).join(','));
+check('browse list: member price, shop, no vendor fields', mRow?.pricePaise === 100000 && mRow?.shop?.name === SHOP_NAME && leaks(mBrowse.body).length === 0, leaks(mBrowse.body).join(','));
 const vSvc = await call('GET', `/service-offers/${kId}`, { token: V });
-check('vendor sees own price ₹1,000, member price ₹1,200 and the rates', vSvc.body?.pricePaise === 100000 && vSvc.body?.pricing?.vendorPricePaise === 100000 && vSvc.body.pricing.memberPricePaise === 120000 && vSvc.body.pricing.commissionPercent === 20 && vSvc.body.pricing.memberDiscountPercent === 50 && vSvc.body.pricing.commissionPaise === 20000, JSON.stringify(vSvc.body?.pricing));
+check('vendor sees price ₹1,000 (= member price), commission ₹200, earns ₹800, and the rates', vSvc.body?.pricePaise === 100000 && vSvc.body?.pricing?.vendorPricePaise === 100000 && vSvc.body.pricing.memberPricePaise === 100000 && vSvc.body.pricing.vendorEarningsPaise === 80000 && vSvc.body.pricing.commissionPercent === 20 && vSvc.body.pricing.memberDiscountPercent === 50 && vSvc.body.pricing.commissionPaise === 20000, JSON.stringify(vSvc.body?.pricing));
 const mine2 = await call('GET', '/service-offers/mine', { token: V });
 check('vendor "my services" carries the pricing', mine2.body?.items?.find((x) => x._id === kId)?.pricing?.vendorPricePaise === 100000);
 const vdash0 = await call('GET', '/vendor/dashboard', { token: V });
@@ -469,10 +469,10 @@ check('vendor dashboard: own rates, no global commission', vdash0.body?.pricing?
 const MA = (await register(10, `Pricing member A ${RUN}`)).body.accessToken;
 const MB = (await register(11, `Pricing member B ${RUN}`)).body.accessToken;
 const bA = await call('POST', `/service-offers/${kId}/bookings`, { token: MA, body: { ...bookBody, applyDiscount: true } });
-check('booking with "Apply discount": ₹1,200 − ₹100 = ₹1,100', bA.status === 201 && bA.body?.pricing?.memberPricePaise === 120000 && bA.body.pricing.discountPaise === 10000 && bA.body.pricing.payablePaise === 110000 && bA.body.pricing.discountApplied === true, JSON.stringify(bA.body?.pricing || bA.body));
-check('member booking JSON has no vendor price or rates', leaks(bA.body).length === 0 && !hasNumber(bA.body, 100000), leaks(bA.body).join(','));
+check('booking with "Apply discount": ₹1,000 − ₹100 = ₹900', bA.status === 201 && bA.body?.pricing?.memberPricePaise === 100000 && bA.body.pricing.discountPaise === 10000 && bA.body.pricing.payablePaise === 90000 && bA.body.pricing.discountApplied === true, JSON.stringify(bA.body?.pricing || bA.body));
+check('member booking JSON has no commission, rates or vendor earnings', leaks(bA.body).length === 0 && !hasNumber(bA.body, 20000) && !hasNumber(bA.body, 80000), leaks(bA.body).join(','));
 const bB = await call('POST', `/service-offers/${kId}/bookings`, { token: MB, body: bookBody });
-check('booking without the discount pays ₹1,200', bB.status === 201 && bB.body?.pricing?.payablePaise === 120000 && bB.body.pricing.discountPaise === 0, JSON.stringify(bB.body?.pricing));
+check('booking without the discount pays ₹1,000', bB.status === 201 && bB.body?.pricing?.payablePaise === 100000 && bB.body.pricing.discountPaise === 0, JSON.stringify(bB.body?.pricing));
 const qId = await approveSvc(await call('POST', '/service-offers', { token: V, body: { ...offerBody, title: `Quote job ${RUN}`, priceType: 'on_quote' } }));
 const mq = await call('GET', `/service-offers/${qId}`, { token: M });
 check('"price on request": no price, no discount shown', mq.body?.pricing?.memberPricePaise === null && mq.body.pricing.discountAvailable === false && leaks(mq.body).length === 0, JSON.stringify(mq.body?.pricing));
@@ -482,11 +482,11 @@ const v3Svc = await approveSvc(await call('POST', '/service-offers', { token: V3
 const nd2 = await call('POST', `/service-offers/${v3Svc}/bookings`, { token: MA, body: { ...bookBody, applyDiscount: true } });
 check('discount on a vendor with 0% discount → 409 NO_DISCOUNT', nd2.status === 409 && code(nd2) === 'NO_DISCOUNT', `${nd2.status} ${code(nd2)}`);
 const vbA = await call('GET', `/vendor/bookings/${bA.body?._id}`, { token: V });
-check('vendor sees the booking snapshot: own price ₹1,000, commission ₹200, 20% / 50%', vbA.body?.pricing?.vendorPricePaise === 100000 && vbA.body.pricing.commissionPaise === 20000 && vbA.body.pricing.commissionPercent === 20 && vbA.body.pricing.memberDiscountPercent === 50 && vbA.body.pricing.payablePaise === 110000, JSON.stringify(vbA.body?.pricing));
+check('vendor sees the booking snapshot: price ₹1,000, commission ₹200, earns ₹800, 20% / 50%', vbA.body?.pricing?.vendorPricePaise === 100000 && vbA.body.pricing.commissionPaise === 20000 && vbA.body.pricing.vendorEarningsPaise === 80000 && vbA.body.pricing.commissionPercent === 20 && vbA.body.pricing.memberDiscountPercent === 50 && vbA.body.pricing.payablePaise === 90000, JSON.stringify(vbA.body?.pricing));
 // Rates are live for services, fixed for bookings.
 await call('PATCH', PR(), { token: T, body: { commissionPercent: 10, memberDiscountPercent: 0 } });
-check('rate change applies at once to the service (₹1,100, no discount)', await (async () => { const s = (await call('GET', `/service-offers/${kId}`, { token: M })).body; return s?.pricePaise === 110000 && s.pricing.discountAvailable === false; })());
-check('…but the booking keeps its snapshot (₹1,100 payable, ₹200 commission)', await (async () => { const b = (await call('GET', `/vendor/bookings/${bA.body?._id}`, { token: V })).body; return b?.pricing?.payablePaise === 110000 && b.pricing.commissionPaise === 20000; })());
+check('rate change applies at once (member still ₹1,000, no discount, vendor now earns ₹900)', await (async () => { const s = (await call('GET', `/service-offers/${kId}`, { token: M })).body; const v = (await call('GET', `/service-offers/${kId}`, { token: V })).body; return s?.pricePaise === 100000 && s.pricing.discountAvailable === false && v?.pricing?.vendorEarningsPaise === 90000; })());
+check('…but the booking keeps its snapshot (₹900 payable, ₹200 commission)', await (async () => { const b = (await call('GET', `/vendor/bookings/${bA.body?._id}`, { token: V })).body; return b?.pricing?.payablePaise === 90000 && b.pricing.commissionPaise === 20000; })());
 await call('PATCH', PR(), { token: T, body: { commissionPercent: 20, memberDiscountPercent: 50 } });
 
 // ---------------------------------------------------------------- mark paid → settlement → earnings
@@ -494,17 +494,17 @@ const earnBefore = (await call('GET', '/vendor/earnings', { token: V })).body?.t
 const platBefore = (await call('GET', `/platform/earnings?vendorId=${vId}`, { token: T })).body?.totals;
 await call('POST', `/vendor/bookings/${bA.body?._id}/accept`, { token: V, body: {} });
 await call('POST', `/vendor/bookings/${bA.body?._id}/complete`, { token: V, body: {} });
-const paidA = await call('POST', `/vendor/bookings/${bA.body?._id}/mark-paid`, { token: V, body: { amountPaise: 110000 } });
+const paidA = await call('POST', `/vendor/bookings/${bA.body?._id}/mark-paid`, { token: V, body: { amountPaise: 90000 } });
 const pA = paidA.body?.payment || {};
-check('mark-paid ₹1,100 → commission ₹200, discount ₹100, NIVASA net ₹100, vendor ₹1,000', paidA.status === 200 && pA.cashPaise === 110000 && pA.commissionPaise === 20000 && pA.discountPaise === 10000 && pA.netToPlatformPaise === 10000 && pA.vendorEarningsPaise === 100000, JSON.stringify(pA));
+check('mark-paid ₹900 → commission ₹200, discount ₹100, NIVASA net ₹100, vendor ₹800', paidA.status === 200 && pA.cashPaise === 90000 && pA.commissionPaise === 20000 && pA.discountPaise === 10000 && pA.netToPlatformPaise === 10000 && pA.vendorEarningsPaise === 80000, JSON.stringify(pA));
 const memberView = (await call('GET', '/service-bookings', { token: MA })).body?.items?.find((x) => x._id === bA.body?._id);
-check('member sees paid ₹1,100 but never the settlement', memberView?.payment?.status === 'paid' && memberView.payment.amountPaise === 110000 && leaks(memberView).length === 0, leaks(memberView).join(','));
+check('member sees paid ₹900 but never the settlement', memberView?.payment?.status === 'paid' && memberView.payment.amountPaise === 90000 && leaks(memberView).length === 0, leaks(memberView).join(','));
 const ve = await call('GET', '/vendor/earnings', { token: V });
 const dv = (k) => (ve.body?.totals?.[k] ?? NaN) - (earnBefore?.[k] ?? NaN);
 check('vendor earnings → 200 with totals, months, items', ve.status === 200 && Array.isArray(ve.body?.months) && Array.isArray(ve.body?.items), ve.status);
-check('vendor earnings grew by one job: cash ₹1,100, commission ₹200, discounts ₹100, NIVASA ₹100, vendor ₹1,000', dv('paidJobs') === 1 && dv('cashCollectedPaise') === 110000 && dv('commissionPaise') === 20000 && dv('memberDiscountsPaise') === 10000 && dv('platformNetPaise') === 10000 && dv('vendorEarningsPaise') === 100000, JSON.stringify({ before: earnBefore, after: ve.body?.totals }));
+check('vendor earnings grew by one job: cash ₹900, commission ₹200, discounts ₹100, NIVASA ₹100, vendor ₹800', dv('paidJobs') === 1 && dv('cashCollectedPaise') === 90000 && dv('commissionPaise') === 20000 && dv('memberDiscountsPaise') === 10000 && dv('platformNetPaise') === 10000 && dv('vendorEarningsPaise') === 80000, JSON.stringify({ before: earnBefore, after: ve.body?.totals }));
 check('earnings totals use the new names (no couponCostPaise)', 'memberDiscountsPaise' in (ve.body?.totals || {}) && !('couponCostPaise' in (ve.body?.totals || {})));
-check('latest paid job first, with its own numbers', ve.body?.items?.[0]?._id === bA.body?._id && ve.body.items[0].vendorEarningsPaise === 100000 && ve.body.items[0].commissionPercent === 20 && ve.body.items[0].vendorPricePaise === 100000 && ve.body.items[0].memberPricePaise === 120000, JSON.stringify(ve.body?.items?.[0]));
+check('latest paid job first, with its own numbers', ve.body?.items?.[0]?._id === bA.body?._id && ve.body.items[0].vendorEarningsPaise === 80000 && ve.body.items[0].commissionPercent === 20 && ve.body.items[0].vendorPricePaise === 100000 && ve.body.items[0].memberPricePaise === 100000, JSON.stringify(ve.body?.items?.[0]));
 check('this month appears in the monthly list', ve.body?.months?.[0]?.month === today.slice(0, 7) && ve.body.months[0].paidJobs >= 1, JSON.stringify(ve.body?.months?.[0]));
 const tomorrow = inDays(1);
 check('date filter from tomorrow → nothing', (await call('GET', `/vendor/earnings?from=${tomorrow}`, { token: V })).body?.totals?.paidJobs === 0);
@@ -514,15 +514,15 @@ check('member cannot read vendor earnings → 403', (await call('GET', '/vendor/
 check('vendor sees no other vendors (no vendor fields, no top list)', !ve.body?.items?.some((x) => x.vendor) && !ve.body?.topVendors);
 const pe = await call('GET', `/platform/earnings?vendorId=${vId}`, { token: T });
 const dp = (k) => (pe.body?.totals?.[k] ?? NaN) - (platBefore?.[k] ?? NaN);
-check('platform earnings for this vendor grew the same: commission ₹200, discounts ₹100, NIVASA net ₹100, vendor ₹1,000', pe.status === 200 && dp('commissionPaise') === 20000 && dp('memberDiscountsPaise') === 10000 && dp('platformNetPaise') === 10000 && dp('vendorEarningsPaise') === 100000, JSON.stringify(pe.body?.totals));
+check('platform earnings for this vendor grew the same: commission ₹200, discounts ₹100, NIVASA net ₹100, vendor ₹800', pe.status === 200 && dp('commissionPaise') === 20000 && dp('memberDiscountsPaise') === 10000 && dp('platformNetPaise') === 10000 && dp('vendorEarningsPaise') === 80000, JSON.stringify(pe.body?.totals));
 const pall = await call('GET', '/platform/earnings', { token: T });
 check('platform earnings (all vendors) lists top vendors with names', pall.status === 200 && pall.body?.topVendors?.some((x) => String(x.vendor?._id) === vId && x.vendor?.name), JSON.stringify(pall.body?.topVendors?.slice(0, 2)));
 check('vendor cannot read platform earnings → 403', (await call('GET', '/platform/earnings', { token: V })).status === 403);
 const vdash = await call('GET', '/vendor/dashboard', { token: V });
-check('vendor dashboard settlement: member discounts + vendor earnings', vdash.body?.settlement?.memberDiscountsPaise >= 10000 && vdash.body.settlement.vendorEarningsPaise >= 100000 && !('couponCreditsPaise' in vdash.body.settlement), JSON.stringify(vdash.body?.settlement));
+check('vendor dashboard settlement: member discounts + vendor earnings', vdash.body?.settlement?.memberDiscountsPaise >= 10000 && vdash.body.settlement.vendorEarningsPaise >= 80000 && !('couponCreditsPaise' in vdash.body.settlement), JSON.stringify(vdash.body?.settlement));
 const pb = await call('GET', `/platform/service-bookings?vendorId=${vId}&paid=true`, { token: T });
 const pbRow = pb.body?.items?.find((x) => x._id === bA.body?._id);
-check('owner sees the booking: prices, discount, settlement', pbRow?.vendorPricePaise === 100000 && pbRow.memberPricePaise === 120000 && pbRow.discountPaise === 10000 && pbRow.payment?.vendorEarningsPaise === 100000 && pbRow.payment.netToPlatformPaise === 10000 && typeof pb.body?.totals?.vendorEarningsPaise === 'number', JSON.stringify(pbRow));
+check('owner sees the booking: prices, discount, settlement', pbRow?.vendorPricePaise === 100000 && pbRow.memberPricePaise === 100000 && pbRow.discountPaise === 10000 && pbRow.payment?.vendorEarningsPaise === 80000 && pbRow.payment.netToPlatformPaise === 10000 && typeof pb.body?.totals?.vendorEarningsPaise === 'number', JSON.stringify(pbRow));
 
 // "Price on request": commission comes out of the recorded cash, no discount.
 const bq = await call('POST', `/service-offers/${qId}/bookings`, { token: MB, body: bookBody });
@@ -537,7 +537,7 @@ const oddId = await approveSvc(await call('POST', '/service-offers', { token: V,
 const MC = (await register(12, `Pricing member C ${RUN}`)).body.accessToken;
 const bo = await call('POST', `/service-offers/${oddId}/bookings`, { token: MC, body: bookBody });
 const vbo = await call('GET', `/vendor/bookings/${bo.body?._id}`, { token: V });
-check('rounding: ₹333.33 at 12.5% → commission ₹41.67, member price ₹375.00', vbo.body?.pricing?.commissionPaise === 4167 && bo.body?.pricing?.memberPricePaise === 37500, JSON.stringify(vbo.body?.pricing));
+check('rounding: ₹333.33 at 12.5% → commission ₹41.67, member pays ₹333.33, vendor earns ₹291.66', vbo.body?.pricing?.commissionPaise === 4167 && bo.body?.pricing?.memberPricePaise === 33333 && vbo.body.pricing.vendorEarningsPaise === 29166, JSON.stringify(vbo.body?.pricing));
 await call('PATCH', PR(), { token: T, body: { commissionPercent: 20 } });
 
 // ---------------------------------------------------------------- near me

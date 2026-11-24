@@ -173,7 +173,7 @@ export function ListingsModeration({ platform = false, onChanged, readOnly = fal
             <div className="flex flex-wrap items-center gap-2">
               <Badge status={v.moderationStatus} />
               <span className="text-lg font-bold text-gray-800">{priceText(v, kind, false)}</span>
-              {kind === 'product' && <span className="text-[11px] text-gray-400">vendor price{v.unit ? ` per ${v.unit}` : ''} · members pay this + commission</span>}
+              {kind === 'product' && <span className="text-[11px] text-gray-400">vendor price{v.unit ? ` per ${v.unit}` : ''} · members pay this; commission comes out of it</span>}
               {v.negotiable && <Badge tone="info">Negotiable</Badge>}
             </div>
             {v.description && <p className="whitespace-pre-wrap text-xs leading-relaxed text-gray-600">{v.description}</p>}

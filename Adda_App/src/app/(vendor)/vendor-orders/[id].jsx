@@ -177,13 +177,13 @@ function OrderBody({ o, onChanged }) {
 
       <SectionTitle title="Money" />
       <Card style={{ gap: 6 }}>
-        <Money label={`Your price ${money(o.vendorUnitPaise)} × ${o.quantity}`} value={money(o.vendorTotalPaise)} />
-        {o.deliveryChargePaise ? <Money label="Delivery charge (yours)" value={`+ ${money(o.deliveryChargePaise)}`} /> : null}
-        <Money label="Your earnings" value={money(o.yourEarningsPaise)} strong tone={colors.green} />
-        <View style={styles.line} />
-        <Money label={`NIVASA fee${o.commissionPercent ? ` (${o.commissionPercent}%)` : ''}, added for the member`} value={money(o.commissionPaise)} />
+        <Money label={`Price ${money(o.memberUnitPaise ?? o.vendorUnitPaise)} × ${o.quantity}`} value={money(o.memberTotalPaise ?? o.vendorTotalPaise)} />
         {o.discountPaise ? <Money label="Member discount (paid by NIVASA)" value={`− ${money(o.discountPaise)}`} tone={colors.green} /> : null}
+        {o.deliveryChargePaise ? <Money label="Delivery charge (yours)" value={`+ ${money(o.deliveryChargePaise)}`} /> : null}
         <Money label="Customer pays" value={money(o.payablePaise)} strong />
+        <View style={styles.line} />
+        <Money label={`NIVASA fee${o.commissionPercent ? ` (${o.commissionPercent}%)` : ''}${o.discountPaise ? ', less the discount NIVASA covers' : ''}`} value={`− ${money((o.commissionPaise || 0) - (o.discountPaise || 0))}`} />
+        <Money label="Your earnings" value={money(o.yourEarningsPaise)} strong tone={colors.green} />
         <View style={styles.line} />
         <KeyValue label="Payment" value={orderPaymentLabel(o)} />
         <KeyValue label="Payment status" value={`${PAYMENT_STATUS[pay.status] || pay.status}${pay.paidAt ? ` · ${formatDateTime(pay.paidAt)}` : ''}`} />

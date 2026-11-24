@@ -31,7 +31,7 @@ const decimal = (v) => v.replace(/[^\d.]/g, '');
 
 /**
  * Add or edit a product (?id= to edit). KYC-approved vendors only (server: 403 KYC_REQUIRED).
- * The price typed is the VENDOR's per-unit price in ₹ (sent as integer paise); NIVASA's fee is added on top for members.
+ * The price typed is what members see and pay per unit, in ₹ (sent as integer paise); NIVASA's fee comes out of it.
  * Products take the shop location (Shop settings) for members' "Near me".
  */
 export default function ProductForm() {

@@ -298,12 +298,12 @@ async function pricingAndSettlement(T, { MT }) {
   const plog = await expect('', 200, 'GET', '/platform/audit-logs?action=vendor.pricing_updated&limit=5', { token: T });
   const pentry = plog.items?.find((a) => a.targetId === vId);
   ok('audited with before / after', pentry?.changes?.before?.commissionPercent === 0 && pentry.changes.after?.commissionPercent === 12.5, pentry);
-  // ₹999 at 12.5% → commission round(12487.5) = ₹124.88 → member ₹1,123.88; discount 40% of it = round(4995.2) = ₹49.95 → ₹1,073.93.
+  // ₹999 at 12.5% → members pay ₹999; commission round(12487.5) = ₹124.88 comes out of it (vendor ₹874.12); discount 40% of it = round(4995.2) = ₹49.95 → ₹949.05.
   const mView = await expect('member reads the service', 200, 'GET', `/service-offers/${svc._id}`, { token: MT });
-  ok('member price ₹1,123.88, discount ₹49.95 → ₹1,073.93', mView?.pricePaise === 112388 && mView.pricing?.memberPricePaise === 112388 && mView.pricing.discountPaise === 4995 && mView.pricing.payableWithDiscountPaise === 107393 && mView.pricing.discountAvailable === true, mView?.pricing);
+  ok('member price = vendor price ₹999, discount ₹49.95 → ₹949.05', mView?.pricePaise === 99900 && mView.pricing?.memberPricePaise === 99900 && mView.pricing.discountPaise === 4995 && mView.pricing.payableWithDiscountPaise === 94905 && mView.pricing.discountAvailable === true, mView?.pricing);
   ok('member never sees the vendor price or rates', mView && !['vendorPricePaise', 'commissionPercent', 'commissionPaise', 'memberDiscountPercent', 'commissionBps'].some((k) => JSON.stringify(mView).includes(`"${k}"`)), mView?.pricing);
   const vView = await expect('vendor reads own service', 200, 'GET', `/service-offers/${svc._id}`, { token: V });
-  ok('vendor sees own price, member price and the rates', vView?.pricing?.vendorPricePaise === 99900 && vView.pricing.memberPricePaise === 112388 && vView.pricing.commissionPaise === 12488 && vView.pricing.commissionPercent === 12.5 && vView.pricing.memberDiscountPercent === 40, vView?.pricing);
+  ok('vendor sees price (= member price), commission, earnings and the rates', vView?.pricing?.vendorPricePaise === 99900 && vView.pricing.memberPricePaise === 99900 && vView.pricing.commissionPaise === 12488 && vView.pricing.commissionPercent === 12.5 && vView.pricing.memberDiscountPercent === 40 && vView.pricing.vendorEarningsPaise === 87412, vView?.pricing);
 
   head('Bookings with and without the member discount');
   const regM = async (name) => (await expect(`register ${name}`, 201, 'POST', '/auth/resident/register', { body: { phone: randPhone(), name, password: PASSWORD } })).accessToken;
@@ -312,9 +312,9 @@ async function pricingAndSettlement(T, { MT }) {
   const MC = await regM(`Third Member ${RUN}`);
   const book = { preferredDate: istInDays(2), preferredTime: '10:30', address: 'Flat 202, Block A, Kolkata' };
   const bA = await expect('member A books with "Apply discount"', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MA, body: { ...book, applyDiscount: true } });
-  ok('booking: ₹1,123.88 − ₹49.95 = ₹1,073.93', bA?.pricing?.memberPricePaise === 112388 && bA.pricing.discountPaise === 4995 && bA.pricing.payablePaise === 107393 && bA.pricing.discountApplied === true && bA.pricing.vendorPricePaise === undefined, bA?.pricing);
+  ok('booking: ₹999 − ₹49.95 = ₹949.05', bA?.pricing?.memberPricePaise === 99900 && bA.pricing.discountPaise === 4995 && bA.pricing.payablePaise === 94905 && bA.pricing.discountApplied === true && bA.pricing.vendorPricePaise === undefined, bA?.pricing);
   const bB = await expect('member B books without the discount', 201, 'POST', `/service-offers/${svc._id}/bookings`, { token: MB, body: book });
-  ok('booking without discount: pays ₹1,123.88', bB?.pricing?.payablePaise === 112388 && bB.pricing.discountPaise === 0, bB?.pricing);
+  ok('booking without discount: pays ₹999', bB?.pricing?.payablePaise === 99900 && bB.pricing.discountPaise === 0, bB?.pricing);
   const nd = await call('POST', `/service-offers/${svc3._id}/bookings`, { token: MA, body: { ...book, applyDiscount: true } });
   ok('discount on "price on request" → 409 NO_DISCOUNT', nd.status === 409 && errCode(nd) === 'NO_DISCOUNT', nd);
   const couponTry = await call('POST', `/service-offers/${svc2._id}/bookings`, { token: MC, body: { ...book, couponCode: 'SAVE10' } });
@@ -322,32 +322,32 @@ async function pricingAndSettlement(T, { MT }) {
   await expect('member B cancels', 200, 'POST', `/service-bookings/${bB._id}/cancel`, { token: MB, body: {} });
 
   head('Settlement: vendor completes + marks paid');
-  await expect('mark paid before completion', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 107393 } });
+  await expect('mark paid before completion', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 94905 } });
   await expect('accept', 200, 'POST', `/vendor/bookings/${bA._id}/accept`, { token: V, body: {} });
   await expect('complete', 200, 'POST', `/vendor/bookings/${bA._id}/complete`, { token: V, body: {} });
   const unpaid = await expect('platform: unpaid filter', 200, 'GET', `/platform/service-bookings?vendorId=${vId}&paid=false`, { token: T });
   ok('completed but unpaid shows as unpaid, totals zero', unpaid.items?.some((b) => b._id === bA._id && b.payment.status === 'unpaid') && unpaid.totals?.paidBookings === 0 && unpaid.totals.cashCollectedPaise === 0, unpaid);
-  await expect('cash must be whole paise', 400, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 1073.5 } });
-  const paid = await expect('vendor records ₹1,073.93 cash', 200, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 107393 } });
+  await expect('cash must be whole paise', 400, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 949.5 } });
+  const paid = await expect('vendor records ₹949.05 cash', 200, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 94905 } });
   const p = paid?.payment || {};
-  ok('settlement exact: commission ₹124.88, discount ₹49.95, NIVASA net ₹74.93, vendor ₹999', p.cashPaise === 107393 && p.amountPaise === 107393 && p.commissionPaise === 12488 && p.discountPaise === 4995 && p.netToPlatformPaise === 7493 && p.vendorEarningsPaise === 99900, p);
+  ok('settlement exact: commission ₹124.88, discount ₹49.95, NIVASA net ₹74.93, vendor ₹874.12', p.cashPaise === 94905 && p.amountPaise === 94905 && p.commissionPaise === 12488 && p.discountPaise === 4995 && p.netToPlatformPaise === 7493 && p.vendorEarningsPaise === 87412, p);
   await expect('mark paid twice', 409, 'POST', `/vendor/bookings/${bA._id}/mark-paid`, { token: V, body: { amountPaise: 1 } });
-  // ₹200 at 12.5% → member ₹225; no discount; cash ₹225 → commission ₹25, net ₹25, vendor ₹200.
+  // ₹200 at 12.5% → member pays ₹200; no discount; cash ₹200 → commission ₹25, net ₹25, vendor ₹175.
   const bC = await expect('member C books the ₹200 service (no discount)', 201, 'POST', `/service-offers/${svc2._id}/bookings`, { token: MC, body: book });
-  ok('member C pays ₹225', bC?.pricing?.payablePaise === 22500, bC?.pricing);
+  ok('member C pays ₹200', bC?.pricing?.payablePaise === 20000, bC?.pricing);
   await expect('accept', 200, 'POST', `/vendor/bookings/${bC._id}/accept`, { token: V, body: {} });
   await expect('complete', 200, 'POST', `/vendor/bookings/${bC._id}/complete`, { token: V, body: {} });
-  const paidC = await expect('vendor records ₹225 cash', 200, 'POST', `/vendor/bookings/${bC._id}/mark-paid`, { token: V, body: { amountPaise: 22500 } });
-  ok('no-discount settlement: commission ₹25, net ₹25, vendor ₹200', paidC?.payment?.commissionPaise === 2500 && paidC.payment.netToPlatformPaise === 2500 && paidC.payment.discountPaise === 0 && paidC.payment.vendorEarningsPaise === 20000, paidC?.payment);
+  const paidC = await expect('vendor records ₹200 cash', 200, 'POST', `/vendor/bookings/${bC._id}/mark-paid`, { token: V, body: { amountPaise: 20000 } });
+  ok('no-discount settlement: commission ₹25, net ₹25, vendor ₹175', paidC?.payment?.commissionPaise === 2500 && paidC.payment.netToPlatformPaise === 2500 && paidC.payment.discountPaise === 0 && paidC.payment.vendorEarningsPaise === 17500, paidC?.payment);
 
   head('Platform: service bookings & vendor settlement');
   const SB = '/platform/service-bookings';
   const all = await expect('by vendor', 200, 'GET', `${SB}?vendorId=${vId}&limit=50`, { token: T });
   ok('paged with totals; 3 bookings for the vendor', isPaged(all) && all.total === 3 && all.totals, all.total);
   const row = all.items?.find((b) => b._id === bA._id);
-  ok('row: vendor / member price, discount, payable, rate, commission, settlement, names', row && row.offerTitle === svcBody.title && row.vendorPricePaise === 99900 && row.memberPricePaise === 112388 && row.listPricePaise === 112388 && row.discountPaise === 4995 && row.payablePaise === 107393 && row.commissionPercent === 12.5 && row.commissionPaise === 12488 && row.payment.status === 'paid' && row.payment.amountPaise === 107393 && row.payment.commissionPaise === 12488 && row.payment.netToPlatformPaise === 7493 && row.payment.vendorEarningsPaise === 99900 && row.payment.paidAt && row.vendor?._id === vId && row.vendor.name === vName && row.customer?.name === `Discount Member ${RUN}` && row.status === 'completed' && row.couponCode === undefined, row);
-  const want = { paidBookings: 2, cashCollectedPaise: 129893, memberDiscountsPaise: 4995, commissionPaise: 14988, netToPlatformPaise: 9993, vendorEarningsPaise: 119900 };
-  ok('vendor totals: 2 paid, cash ₹1,298.93, discounts ₹49.95, commission ₹149.88, net ₹99.93, vendor ₹1,199', JSON.stringify(all.totals) === JSON.stringify(want), all.totals);
+  ok('row: vendor / member price, discount, payable, rate, commission, settlement, names', row && row.offerTitle === svcBody.title && row.vendorPricePaise === 99900 && row.memberPricePaise === 99900 && row.listPricePaise === 99900 && row.discountPaise === 4995 && row.payablePaise === 94905 && row.commissionPercent === 12.5 && row.commissionPaise === 12488 && row.payment.status === 'paid' && row.payment.amountPaise === 94905 && row.payment.commissionPaise === 12488 && row.payment.netToPlatformPaise === 7493 && row.payment.vendorEarningsPaise === 87412 && row.payment.paidAt && row.vendor?._id === vId && row.vendor.name === vName && row.customer?.name === `Discount Member ${RUN}` && row.status === 'completed' && row.couponCode === undefined, row);
+  const want = { paidBookings: 2, cashCollectedPaise: 114905, memberDiscountsPaise: 4995, commissionPaise: 14988, netToPlatformPaise: 9993, vendorEarningsPaise: 104912 };
+  ok('vendor totals: 2 paid, cash ₹1,149.05, discounts ₹49.95, commission ₹149.88, net ₹99.93, vendor ₹1,049.12', JSON.stringify(all.totals) === JSON.stringify(want), all.totals);
   const paidOnly = await expect('paid=true', 200, 'GET', `${SB}?vendorId=${vId}&paid=true`, { token: T });
   ok('paid filter: 2 bookings, same totals', paidOnly.total === 2 && paidOnly.items.every((b) => b.payment.status === 'paid') && JSON.stringify(paidOnly.totals) === JSON.stringify(want), paidOnly.total);
   const cancelled = await expect('status=cancelled', 200, 'GET', `${SB}?vendorId=${vId}&status=cancelled`, { token: T });
@@ -364,9 +364,9 @@ async function pricingAndSettlement(T, { MT }) {
 
   head('Earnings (platform)');
   const pe = await expect('earnings for this vendor', 200, 'GET', `/platform/earnings?vendorId=${vId}`, { token: T });
-  ok('totals: cash ₹1,298.93, commission ₹149.88, discounts ₹49.95, NIVASA net ₹99.93, vendor ₹1,199', pe?.totals?.paidJobs === 2 && pe.totals.cashCollectedPaise === 129893 && pe.totals.commissionPaise === 14988 && pe.totals.memberDiscountsPaise === 4995 && pe.totals.platformNetPaise === 9993 && pe.totals.vendorEarningsPaise === 119900, pe?.totals);
+  ok('totals: cash ₹1,149.05, commission ₹149.88, discounts ₹49.95, NIVASA net ₹99.93, vendor ₹1,049.12', pe?.totals?.paidJobs === 2 && pe.totals.cashCollectedPaise === 114905 && pe.totals.commissionPaise === 14988 && pe.totals.memberDiscountsPaise === 4995 && pe.totals.platformNetPaise === 9993 && pe.totals.vendorEarningsPaise === 104912, pe?.totals);
   ok('vendorEarnings = cash − net', pe?.totals?.vendorEarningsPaise === pe?.totals?.cashCollectedPaise - pe?.totals?.platformNetPaise);
-  ok('items carry vendor / member price and settlement', pe?.items?.some((x) => x._id === bA._id && x.vendorPricePaise === 99900 && x.memberPricePaise === 112388 && x.discountPaise === 4995 && x.vendorEarningsPaise === 99900 && x.vendor?.name === vName), pe?.items?.[0]);
+  ok('items carry vendor / member price and settlement', pe?.items?.some((x) => x._id === bA._id && x.vendorPricePaise === 99900 && x.memberPricePaise === 99900 && x.discountPaise === 4995 && x.vendorEarningsPaise === 87412 && x.vendor?.name === vName), pe?.items?.[0]);
   const pall = await expect('earnings (all vendors)', 200, 'GET', '/platform/earnings', { token: T });
   ok('all-vendor earnings has a top-vendors list (≤10, by commission)', Array.isArray(pall?.topVendors) && pall.topVendors.length <= 10 && pall.topVendors.every((x, i, a) => i === 0 || a[i - 1].commissionPaise >= x.commissionPaise), pall?.topVendors?.slice(0, 2));
   // Shared dev DBs hold other runs' vendors, so check this vendor through the vendor filter, not its rank.
@@ -375,9 +375,9 @@ async function pricingAndSettlement(T, { MT }) {
   head('Rates are live for services, fixed for bookings');
   await expect('set 10% / 0%', 200, 'PATCH', PR, { token: T, body: { commissionPercent: 10, memberDiscountPercent: 0 } });
   const mNow = await expect('', 200, 'GET', `/service-offers/${svc._id}`, { token: MT });
-  ok('service now ₹1,098.90 and no discount', mNow?.pricePaise === 109890 && mNow.pricing.discountAvailable === false, mNow?.pricing);
+  ok('service still ₹999 for members, no discount', mNow?.pricePaise === 99900 && mNow.pricing.discountAvailable === false, mNow?.pricing);
   const still = await expect('', 200, 'GET', `${SB}?vendorId=${vId}&paid=true`, { token: T });
-  ok('the paid booking keeps its snapshot', still.items?.find((b) => b._id === bA._id)?.memberPricePaise === 112388);
+  ok('the paid booking keeps its snapshot (12.5% commission ₹124.88)', still.items?.find((b) => b._id === bA._id)?.commissionPaise === 12488);
   const log = await expect('', 200, 'GET', '/platform/audit-logs?limit=100', { token: T });
   ok('pricing changes and cash payments audited', ['vendor.pricing_updated', 'vendor.booking_paid_cash'].every((a) => log.items?.some((x) => x.action === a)), [...new Set(log.items?.map((a) => a.action))].slice(0, 15));
   await expect('reset rates to 0 / 0', 200, 'PATCH', PR, { token: T, body: { commissionPercent: 0, memberDiscountPercent: 0 } });

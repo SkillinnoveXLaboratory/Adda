@@ -22,13 +22,13 @@ export function PricingExample({ commissionPercent, memberDiscountPercent }) {
   }
   const x = pricingExample(EXAMPLE_PRICE_PAISE, commissionPercent, memberDiscountPercent);
   const steps = [
-    ['Vendor price', rupees(x.vendorPricePaise), 'text-gray-800'],
-    ['Members see', rupees(x.memberPricePaise), 'text-gray-800'],
+    ['Service price', rupees(x.vendorPricePaise), 'text-gray-800'],
+    ['Members pay', rupees(x.memberPricePaise), 'text-gray-800'],
     x.discountPaise > 0 ? ['With discount', `−${rupees(x.discountPaise)} → ${rupees(x.payableWithDiscountPaise)}`, 'text-rose-500'] : ['With discount', 'No discount offered', 'text-gray-400'],
     ['NIVASA keeps', rupees(x.nivasaKeepsPaise), 'text-emerald-600'],
     ['Vendor gets', rupees(x.vendorGetsPaise), 'text-gray-800'],
   ];
-  const sentence = `Vendor price ${rupees(x.vendorPricePaise)} → members see ${rupees(x.memberPricePaise)} · ${x.discountPaise > 0 ? `with discount −${rupees(x.discountPaise)} → ${rupees(x.payableWithDiscountPaise)}` : 'no discount offered'} · NIVASA keeps ${rupees(x.nivasaKeepsPaise)} · vendor gets ${rupees(x.vendorGetsPaise)}`;
+  const sentence = `Service price ${rupees(x.vendorPricePaise)} → members pay ${rupees(x.memberPricePaise)} · ${x.discountPaise > 0 ? `with discount −${rupees(x.discountPaise)} → ${rupees(x.payableWithDiscountPaise)}` : 'no discount offered'} · NIVASA keeps ${rupees(x.nivasaKeepsPaise)} · vendor gets ${rupees(x.vendorGetsPaise)}`;
   return (
     <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4" data-testid="pricing-example">
       <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-gray-400">Example · a {rupees(EXAMPLE_PRICE_PAISE)} service{x.discountPaise > 0 ? ', member applies the discount' : ''}</p>
@@ -48,8 +48,8 @@ export function PricingExample({ commissionPercent, memberDiscountPercent }) {
 }
 
 /**
- * This vendor's NIVASA rates (PATCH /platform/vendors/:id/pricing, perm vendors.manage). Commission is ADDED ON TOP of
- * the vendor's prices; the member discount is a share OF the commission. View-only users see the rates and example.
+ * This vendor's NIVASA rates (PATCH /platform/vendors/:id/pricing, perm vendors.manage). Commission is taken OUT of the
+ * vendor's price (members pay the listed price and never see it); the member discount is a share OF the commission.
  */
 export function VendorPricingCard({ vendorId, pricing, canEdit, onSaved, className = '' }) {
   const toast = useToast();
@@ -82,10 +82,10 @@ export function VendorPricingCard({ vendorId, pricing, canEdit, onSaved, classNa
     <Card className={className} title="Pricing" actions={!canEdit && <span className="text-[11px] text-brand-muted">View only</span>}>
       <form onSubmit={submit} noValidate className="space-y-4" data-testid="vendor-pricing">
         <p className="text-xs leading-relaxed text-gray-600">
-          NIVASA’s commission is <b>added on top</b> of this vendor’s prices, so the vendor always gets their own price. Members can tap <b>Apply discount</b> when booking to get a share of the commission back. Changes apply at once to all of this vendor’s services; existing bookings keep their prices.
+          Members see and pay this vendor’s own prices. NIVASA’s commission is <b>taken out of the vendor’s share</b> and is shown only to the vendor, never to members. Members can tap <b>Apply discount</b> to get a share of the commission back (NIVASA pays it; the vendor’s earnings don’t change). Changes apply at once to all of this vendor’s services; existing bookings keep their prices.
         </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="NIVASA commission (%)" htmlFor={ids.c} error={errors.commissionPercent} hint="0 to 100, up to 2 decimals — e.g. 20 adds ₹200 to a ₹1,000 service">
+          <Field label="NIVASA commission (%)" htmlFor={ids.c} error={errors.commissionPercent} hint="0 to 100, up to 2 decimals — e.g. 20 takes ₹200 from a ₹1,000 service; the vendor gets ₹800">
             <Input id={ids.c} name="commissionPercent" value={v.commissionPercent} onChange={set('commissionPercent')} readOnly={!canEdit} invalid={Boolean(errors.commissionPercent)} inputMode="decimal" maxLength={6} placeholder="20" suffix="%" data-testid="pricing-commission" />
           </Field>
           <Field label="Member discount (% of commission)" htmlFor={ids.d} error={errors.memberDiscountPercent} hint="0 to 100 — e.g. 50 gives members half the commission back; 0 = no discount">

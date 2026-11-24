@@ -92,7 +92,7 @@ export default function Earnings() {
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 xl:grid-cols-3">
             <MetricCard tone="green" label="NIVASA net earnings" value={<NetAmount paise={t.platformNetPaise} className="!text-2xl !font-bold" />} icon="fa-solid fa-sack-dollar" footer="Commission − member discounts" testId="earn-net" />
-            <MetricCard tone="purple" label="NIVASA commission" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Added on top of vendors’ prices" testId="earn-commission" />
+            <MetricCard tone="purple" label="NIVASA commission" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Taken out of vendors’ prices" testId="earn-commission" />
             <MetricCard tone="orange" label="Member discounts" value={formatINR(t.memberDiscountsPaise)} icon="fa-solid fa-tag" footer="Given back to members out of the commission" testId="earn-discounts" />
             <MetricCard tone="cyan" label="Vendor earnings" value={formatINR(t.vendorEarningsPaise)} icon="fa-solid fa-wallet" footer="Cash − NIVASA net" testId="earn-vendors" />
             <MetricCard tone="purple" label="Member prices" value={formatINR(t.grossPaise)} icon="fa-solid fa-indian-rupee-sign" footer={`${formatINR(t.cashCollectedPaise)} cash + ${formatINR(t.memberDiscountsPaise)} member discounts`} testId="earn-gross" />

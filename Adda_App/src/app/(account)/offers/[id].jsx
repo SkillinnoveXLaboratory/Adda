@@ -93,7 +93,9 @@ function OfferDetail({ item, onChanged }) {
         </T>
         {item.mine && pr.memberPricePaise ? (
           <T size={12.5} color={colors.goldText} weight="semibold">
-            {pr.commissionPercent > 0 ? `Members see ${money(pr.memberPricePaise)} (your price + NIVASA’s ${pr.commissionPercent}% fee)` : `Members see ${money(pr.memberPricePaise)}`}
+            {pr.commissionPercent > 0
+              ? `Members pay ${money(pr.memberPricePaise)} · NIVASA fee ${pr.commissionPercent}% (${money(pr.commissionPaise || 0)}) · you earn ${money(pr.vendorEarningsPaise ?? pr.memberPricePaise - (pr.commissionPaise || 0))}`
+              : `Members pay ${money(pr.memberPricePaise)}`}
           </T>
         ) : null}
         <ShopBadge shop={item.shop} />

@@ -5,7 +5,7 @@ import { apiCall, expectToast, ownerLogin, ownerToken, PASSWORD, randPhone, RUN,
  * Per-vendor pricing, service-booking settlement and earnings, against the LOCAL backend:
  * seed (API): an approved vendor with a shop (name, logo, location) and a ₹1,000 service →
  * owner sets the vendor's rates on the vendor page (validation, live worked example, saved via PATCH …/pricing) →
- * the vendors list shows the shop and rates → (API) a member books with "Apply discount" (₹1,200 − ₹100 = ₹1,100),
+ * the vendors list shows the shop and rates → (API) a member books with "Apply discount" (₹1,000 − ₹100 = ₹900),
  * the vendor completes it and records ₹1,100 cash → vendor page, Service bookings and Earnings show
  * commission ₹200, member discount ₹100, NIVASA net ₹100 and vendor earnings ₹1,000.
  */
@@ -16,7 +16,7 @@ let T;
 const seed = {};
 const istInDays = (d) => new Date(Date.now() + 330 * 60000 + d * 86_400_000).toISOString().slice(0, 10);
 const SHOP = { name: `Settle Cleaners Shop ${RUN}`, logo: true, location: { lat: 22.5726, lng: 88.3639, label: 'Park Street, Kolkata' } };
-const EXAMPLE = 'Vendor price ₹1,000 → members see ₹1,200 · with discount −₹100 → ₹1,100 · NIVASA keeps ₹100 · vendor gets ₹1,000';
+const EXAMPLE = 'Service price ₹1,000 → members pay ₹1,000 · with discount −₹100 → ₹900 · NIVASA keeps ₹100 · vendor gets ₹800';
 
 test.beforeAll(async () => {
   T = await ownerToken();
@@ -75,9 +75,9 @@ test('owner sets the vendor’s rates: validation, live example, saved', async (
   await expect(page.getByTestId('pricing-save')).toBeDisabled();
   const v = await apiCall('GET', `/platform/vendors/${seed.v.id}`, { token: T });
   expect(v.pricing).toEqual({ commissionPercent: 20, memberDiscountPercent: 50 });
-  // The live service now shows members ₹1,200.
+  // The live service shows members the vendor price ₹1,000.
   const svc = await apiCall('GET', `/service-offers/${seed.svcId}`, { token: seed.v.token });
-  expect(svc.pricing).toMatchObject({ vendorPricePaise: 100000, memberPricePaise: 120000, discountPaise: 10000, payableWithDiscountPaise: 110000 });
+  expect(svc.pricing).toMatchObject({ vendorPricePaise: 100000, memberPricePaise: 100000, discountPaise: 10000, payableWithDiscountPaise: 90000 });
 });
 
 test('vendors list shows the shop name, logo and rates', async () => {
@@ -94,11 +94,11 @@ test('vendors list shows the shop name, logo and rates', async () => {
 test('a member books with the discount and the vendor records ₹1,100 cash (API)', async () => {
   const m = await apiCall('POST', '/auth/resident/register', { body: { phone: randPhone(), name: `Booking Member ${RUN}`, password: PASSWORD } });
   const b = await apiCall('POST', `/service-offers/${seed.svcId}/bookings`, { token: m.accessToken, body: { preferredDate: istInDays(2), preferredTime: '10:00', address: 'Flat 5, Lake Town, Kolkata', applyDiscount: true } });
-  expect(b.pricing).toMatchObject({ memberPricePaise: 120000, discountPaise: 10000, payablePaise: 110000 });
+  expect(b.pricing).toMatchObject({ memberPricePaise: 100000, discountPaise: 10000, payablePaise: 90000 });
   await apiCall('POST', `/vendor/bookings/${b._id}/accept`, { token: seed.v.token, body: {} });
   await apiCall('POST', `/vendor/bookings/${b._id}/complete`, { token: seed.v.token, body: {} });
-  const paid = await apiCall('POST', `/vendor/bookings/${b._id}/mark-paid`, { token: seed.v.token, body: { amountPaise: 110000 } });
-  expect(paid.payment).toMatchObject({ cashPaise: 110000, commissionPaise: 20000, discountPaise: 10000, netToPlatformPaise: 10000, vendorEarningsPaise: 100000 });
+  const paid = await apiCall('POST', `/vendor/bookings/${b._id}/mark-paid`, { token: seed.v.token, body: { amountPaise: 90000 } });
+  expect(paid.payment).toMatchObject({ cashPaise: 90000, commissionPaise: 20000, discountPaise: 10000, netToPlatformPaise: 10000, vendorEarningsPaise: 80000 });
 });
 
 test('vendor page → Service bookings: prices, discount, commission and settlement', async () => {
@@ -122,7 +122,7 @@ test('vendor page → Service bookings: prices, discount, commission and settlem
   await expect(cells.nth(2)).toHaveText('₹1,000.00');
   await expect(cells.nth(3)).toContainText('₹200.00');
   await expect(cells.nth(3)).toContainText('20%');
-  await expect(cells.nth(4)).toHaveText('₹1,200.00');
+  await expect(cells.nth(4)).toHaveText('₹1,000.00');
   await expect(cells.nth(5)).toHaveText('−₹100.00');
   await expect(cells.nth(6)).toHaveText('₹1,100.00');
   await expect(cells.nth(7)).toContainText('₹1,100.00');
@@ -144,12 +144,12 @@ test('vendor page → Earnings: NIVASA net, commission, member discounts and ven
   await expect(page.getByTestId('earn-commission-value')).toHaveText('₹200.00');
   await expect(page.getByTestId('earn-discounts-value')).toHaveText('₹100.00');
   await expect(page.getByTestId('earn-vendors-value')).toHaveText('₹1,000.00');
-  await expect(page.getByTestId('earn-gross-value')).toHaveText('₹1,200.00');
+  await expect(page.getByTestId('earn-gross-value')).toHaveText('₹1,000.00');
   await expect(page.getByTestId('earn-jobs-value')).toHaveText('1');
   await expect(page.getByText('Coupon', { exact: false })).toHaveCount(0);
   await expect(page.getByTestId('earnings-months')).toContainText('₹1,000.00');
   const row = page.getByTestId('earnings-jobs').locator('tr', { hasText: seed.title });
-  for (const t of ['₹1,000.00', '₹1,200.00', '₹1,100.00', '₹200.00', '20%', '−₹100.00', '+₹100.00']) await expect(row).toContainText(t);
+  for (const t of ['₹1,000.00', '₹900.00', '₹800.00', '₹200.00', '20%', '−₹100.00', '+₹100.00']) await expect(row).toContainText(t);
   const api = await apiCall('GET', `/platform/earnings?vendorId=${seed.v.id}`, { token: T });
   expect(api.totals).toEqual({ paidJobs: 1, grossPaise: 120000, cashCollectedPaise: 110000, commissionPaise: 20000, memberDiscountsPaise: 10000, vendorEarningsPaise: 100000, platformNetPaise: 10000 });
 });

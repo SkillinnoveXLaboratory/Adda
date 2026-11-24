@@ -8,30 +8,30 @@ describe('per-vendor pricing example (mirrors the server)', () => {
     expect(EXAMPLE_PRICE_PAISE).toBe(100000);
     expect(pricingExample(100000, 20, 50)).toEqual({
       vendorPricePaise: 100000,
-      commissionPaise: 20000, // ₹200 added on top
-      memberPricePaise: 120000, // members see ₹1,200
-      discountPaise: 10000, // ₹100 off
-      payableWithDiscountPaise: 110000, // ₹1,100
+      commissionPaise: 20000, // ₹200 taken from the vendor's price
+      memberPricePaise: 100000, // members see and pay ₹1,000
+      discountPaise: 10000, // ₹100 off (paid by NIVASA)
+      payableWithDiscountPaise: 90000, // ₹900
       nivasaKeepsPaise: 10000, // ₹100
-      vendorGetsPaise: 100000, // ₹1,000
+      vendorGetsPaise: 80000, // ₹800
     });
   });
 
   it('rounds like the server (Math.round on integer paise)', () => {
     // ₹333.33 at 12.5% → ₹41.67 (4166.625 → 4167)
-    expect(pricingExample(33333, 12.5, 0)).toMatchObject({ commissionPaise: 4167, memberPricePaise: 37500, discountPaise: 0, payableWithDiscountPaise: 37500, nivasaKeepsPaise: 4167 });
+    expect(pricingExample(33333, 12.5, 0)).toMatchObject({ commissionPaise: 4167, memberPricePaise: 33333, discountPaise: 0, payableWithDiscountPaise: 33333, nivasaKeepsPaise: 4167, vendorGetsPaise: 29166 });
     // discount on the commission: 4167 × 33.33% = 1388.86… → 1389
     expect(pricingExample(33333, 12.5, 33.33).discountPaise).toBe(1389);
     // ₹1,000 at 12.25% → ₹122.50; 10% of it → ₹12.25
-    expect(pricingExample(100000, 12.25, 10)).toMatchObject({ commissionPaise: 12250, memberPricePaise: 112250, discountPaise: 1225, payableWithDiscountPaise: 111025, nivasaKeepsPaise: 11025 });
+    expect(pricingExample(100000, 12.25, 10)).toMatchObject({ commissionPaise: 12250, memberPricePaise: 100000, discountPaise: 1225, payableWithDiscountPaise: 98775, nivasaKeepsPaise: 11025, vendorGetsPaise: 87750 });
   });
 
-  it('0% commission → member price = vendor price, nothing to discount', () => {
-    expect(pricingExample(100000, 0, 50)).toMatchObject({ commissionPaise: 0, memberPricePaise: 100000, discountPaise: 0, nivasaKeepsPaise: 0 });
+  it('0% commission → member price = vendor price, nothing to discount, vendor keeps it all', () => {
+    expect(pricingExample(100000, 0, 50)).toMatchObject({ commissionPaise: 0, memberPricePaise: 100000, discountPaise: 0, nivasaKeepsPaise: 0, vendorGetsPaise: 100000 });
   });
 
-  it('100% discount → NIVASA keeps nothing, vendor still gets their price', () => {
-    expect(pricingExample(100000, 20, 100)).toMatchObject({ discountPaise: 20000, payableWithDiscountPaise: 100000, nivasaKeepsPaise: 0, vendorGetsPaise: 100000 });
+  it('100% discount → NIVASA keeps nothing, vendor earnings unchanged (price − commission)', () => {
+    expect(pricingExample(100000, 20, 100)).toMatchObject({ discountPaise: 20000, payableWithDiscountPaise: 80000, nivasaKeepsPaise: 0, vendorGetsPaise: 80000 });
   });
 
   it('percent → basis points without float drift', () => {

@@ -92,7 +92,7 @@ export default function VendorDashboard() {
             </View>
             <T size={11.5} color={colors.muted}>
               {d.pricing?.commissionPercent > 0
-                ? `NIVASA adds ${d.pricing.commissionPercent}% on top of your prices for members${d.pricing.memberDiscountPercent > 0 ? ` · members can get ${d.pricing.memberDiscountPercent}% of it back as a discount` : ''}`
+                ? `Members pay your prices. NIVASA's ${d.pricing.commissionPercent}% fee comes out of each paid job (members never see it)${d.pricing.memberDiscountPercent > 0 ? ` · NIVASA gives members ${d.pricing.memberDiscountPercent}% of its fee as a discount, at no cost to you` : ''}`
                 : 'Members pay your own prices (no NIVASA fee set).'}
             </T>
             <SettleRow label="Cash collected" value={money(d.settlement?.cashCollectedPaise || 0)} />

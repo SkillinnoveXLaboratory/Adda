@@ -25,7 +25,7 @@ export function SettlementCards({ totals, vendorScope = false }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 2xl:grid-cols-5">
       <MetricCard tone="green" label="Cash collected" value={formatINR(t.cashCollectedPaise)} icon="fa-solid fa-money-bill-wave" footer={`${plural(t.paidBookings, 'paid booking')} · received by ${vendorScope ? 'the vendor' : 'vendors'}`} testId="settle-cash" />
-      <MetricCard tone="purple" label="Commission" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Added on top of the vendor’s price" testId="settle-commission" />
+      <MetricCard tone="purple" label="Commission" value={formatINR(t.commissionPaise)} icon="fa-solid fa-percent" footer="Taken out of the vendor’s price" testId="settle-commission" />
       <MetricCard tone="orange" label="Member discounts" value={formatINR(t.memberDiscountsPaise)} icon="fa-solid fa-tag" footer="Given back out of the commission" testId="settle-discounts" />
       <MetricCard tone="cyan" label="NIVASA net" value={<NetAmount paise={t.netToPlatformPaise ?? 0} className="!text-2xl !font-bold" />} icon="fa-solid fa-scale-balanced" footer={netCaption(t.netToPlatformPaise || 0, vendorScope)} testId="settle-net" />
       <MetricCard tone="green" label="Vendor earnings" value={formatINR(t.vendorEarningsPaise)} icon="fa-solid fa-wallet" footer="Cash − NIVASA net" testId="settle-vendor" />

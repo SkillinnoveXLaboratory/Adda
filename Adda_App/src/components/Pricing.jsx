@@ -7,12 +7,14 @@ import { Button } from './ui';
 
 /**
  * Per-vendor pricing (skills/vendor-marketplace rule 5). The server always recomputes; these only preview it.
- * NIVASA's fee is ADDED on top of the vendor's price; the member discount is a share OF that fee.
+ * Members see and pay the vendor's price. NIVASA's fee is taken OUT of it (the vendor earns price − fee); the optional
+ * member discount is a share OF that fee, paid by NIVASA. Members never see the fee.
  * Percent → basis points first (≤ 2 decimals), then half-up whole paise — the same rounding as the server.
  */
 const bps = (percent) => Math.round((Number(percent) || 0) * 100);
 export const feeOf = (vendorPricePaise, commissionPercent) => Math.round((vendorPricePaise * bps(commissionPercent)) / 10_000);
-export const memberPriceOf = (vendorPricePaise, commissionPercent) => vendorPricePaise + feeOf(vendorPricePaise, commissionPercent);
+export const memberPriceOf = (vendorPricePaise) => vendorPricePaise;
+export const vendorEarningsOf = (vendorPricePaise, commissionPercent) => vendorPricePaise - feeOf(vendorPricePaise, commissionPercent);
 export const discountOf = (vendorPricePaise, commissionPercent, discountPercent) => Math.round((feeOf(vendorPricePaise, commissionPercent) * bps(discountPercent)) / 10_000);
 
 function Row({ label, value, strong, tone, testID }) {
@@ -56,18 +58,18 @@ export function MemberPricePreview({ pricePaise, pricing, onQuote }) {
       </View>
     );
   }
-  const member = memberPriceOf(pricePaise, commission);
+  const fee = feeOf(pricePaise, commission);
   const off = discountOf(pricePaise, commission, discount);
   return (
     <View style={styles.box} testID="member-price-preview">
-      <Row label="Your price" value={money(pricePaise)} />
-      <Row label={`NIVASA fee (${commission}%), added for members`} value={`+ ${money(member - pricePaise)}`} />
+      <Row label="Members see and pay" value={money(memberPriceOf(pricePaise))} testID="members-see" />
+      <Row label={`NIVASA fee (${commission}%)`} value={`− ${money(fee)}`} />
       <View style={styles.line} />
-      <Row label="Members see" value={money(member)} strong testID="members-see" />
+      <Row label="You earn" value={money(vendorEarningsOf(pricePaise, commission))} strong tone={colors.green} testID="you-earn" />
       <T size={11} color={colors.muted} style={{ lineHeight: 16 }}>
         {off > 0
-          ? `Members can apply a ${money(off)} discount (${discount}% of the fee) and pay ${money(member - off)}. You still earn ${money(pricePaise)}.`
-          : `You earn ${money(pricePaise)} for each paid job.`}
+          ? `Members never see the fee. They can apply a ${money(off)} NIVASA discount and pay ${money(pricePaise - off)} — NIVASA covers it, you still earn ${money(vendorEarningsOf(pricePaise, commission))}.`
+          : 'Members never see the fee — only your price.'}
       </T>
     </View>
   );

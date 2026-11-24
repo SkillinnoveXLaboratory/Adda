@@ -46,7 +46,7 @@ events), whitelist the domain `adda.skillinnovex.in` for checkout. Sandbox Easy 
 |---|---|---|---|
 | invoice | balance > 0 | society's Cashfree vendor if `settlementMode=cashfree_split`, else NIVASA | existing `markCaptured` (receipt + ledger) |
 | facility | booking `confirmed`, fee > 0 | as invoice | `payment.status=paid` + ledger credit `other_income` "Facility booking" |
-| booking (service) | booking `completed`, listed price | split: vendor gets `vendorEarnings` | settlement like cash mark-paid, `method: 'online'` |
+| booking (service) | booking `accepted` or `completed`, listed price (cancel/decline after paying → full refund) | split: vendor gets `vendorEarnings` | settlement like cash mark-paid, `method: 'online'` |
 | order (product) | at checkout (`paymentMethod: online`) | split: vendor gets `vendorEarnings` | order `awaiting_payment → placed` |
 
 Split amount for vendors = payable − (commission − discount) = vendor price total (+ delivery charge). NIVASA keeps

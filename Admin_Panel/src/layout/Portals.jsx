@@ -150,10 +150,13 @@ export function NoAccess({ owner = false }) {
   );
 }
 
-/** Platform route guard: the page renders only when the user may view `area` ('owner' = platform owner only). */
-export function RequireArea({ area, children }) {
-  const { canView } = useAuth();
-  if (!canView(area)) return <NoAccess owner={area === 'owner'} />;
+/**
+ * Platform route guard: the page renders only when the user may view `area` ('owner' = platform owner only),
+ * or — with `manage` — manage it (pages that only write, e.g. Add vendor).
+ */
+export function RequireArea({ area, manage = false, children }) {
+  const { canView, canManage } = useAuth();
+  if (!(manage ? canManage(area) : canView(area))) return <NoAccess owner={area === 'owner'} />;
   return children;
 }
 
