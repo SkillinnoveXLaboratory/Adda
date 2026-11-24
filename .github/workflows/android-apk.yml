@@ -133,6 +133,11 @@ jobs:
           BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|application-label:" | tee badging.txt
           grep -q "name='com.nivasa.app'" badging.txt || { echo "::error::Unexpected package name"; exit 1; }
+          # Google Play: these must stay optional or the app is hidden from tablets, Chromebooks, desktop and XR.
+          "$BT/aapt2" dump badging "$APK" | grep -E "uses-feature|uses-implied-feature" | tee features.txt || true
+          for f in android.hardware.screen.portrait android.hardware.wifi; do
+            if grep -qE "^uses-(implied-)?feature: name='$f'" features.txt; then echo "::error::$f is required — it must be optional (plugins/withOptionalHardware.js)"; exit 1; fi
+          done
           "$BT/apksigner" verify --verbose --print-certs "$APK" | tee signature.txt
           if grep -q "CN=Android Debug" signature.txt; then echo "::error::APK is signed with the debug key"; exit 1; fi
           # The APK certificate must be the one inside our keystore.
