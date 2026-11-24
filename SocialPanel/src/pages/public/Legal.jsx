@@ -84,25 +84,134 @@ const PAGES = {
     body: (
       <>
         <p>
-          <Who /> This policy explains what personal data we collect and how we use it.
+          <Who /> This policy covers the {LEGAL.brand} mobile app for Android (package <b>com.nivasa.app</b>), the Society Admin panel and the {LEGAL.brand} website (together, the “Service”). It
+          explains what personal data we collect, why, who can see it, how long we keep it and the choices you have. By using the Service you agree to this policy.
         </p>
-        <h2>What we collect</h2>
+
+        <h2>Who uses the app</h2>
         <p>
-          Name, mobile number, email, flat and society details, records you create (complaints, bookings, visitors, payments), and for vendors the verification details they submit (KYC). Payment card
-          and bank login details are handled by the payment gateway, not by us.
+          <b>Members</b> (residents of a housing society), <b>vendors</b> (independent service providers and sellers) and <b>gate staff</b> (security guards working for a society) use the app.
+          Society staff and the {LEGAL.brand} team use the web panels. The data we collect depends on which of these you are.
         </p>
-        <h2>How we use it</h2>
-        <p>To run the Service: sign-in, billing and receipts, notifications, society administration, visitor management and vendor bookings; and to keep the Service secure.</p>
-        <h2>Who can see it</h2>
+
+        <h2>Information you give us</h2>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <b>Account:</b> your name, mobile number, password (stored only as a one-way hash), and optionally your email address and city.
+          </li>
+          <li>
+            <b>Society membership (members):</b> your society, building, flat number and whether you are an owner or tenant.
+          </li>
+          <li>
+            <b>What you create:</b> complaints and the photos you attach, community posts, facility and service bookings, poll votes, guest / visitor entries, product orders and delivery addresses,
+            listings (properties, items, services, products) and their photos.
+          </li>
+          <li>
+            <b>Vendors — shop and verification (KYC):</b> shop name, logo and location; business name and type; PAN, Aadhaar number, bank account holder, account number, IFSC and bank name; and photos of the
+            PAN card and Aadhaar (front and back). PAN, Aadhaar and bank account numbers are stored encrypted, and the document photos are private files.
+          </li>
+          <li>
+            <b>Visitors:</b> when a member or a gateman registers a guest, we store the guest’s name, mobile number, purpose and entry / exit times so the society can manage its gate.
+          </li>
+        </ul>
+
+        <h2>Information collected when you use the app</h2>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <b>Location (only when you allow it, only while the app is open):</b> used to show services and products “near me” and to set a vendor’s shop location on the map. We do not track your location in
+            the background and we do not keep a history of where you have been. A vendor’s shop location is stored so members can find the shop.
+          </li>
+          <li>
+            <b>Camera and photos (only when you choose to attach a picture):</b> used to take or pick photos for complaints, posts, listings, products, your shop logo and KYC documents. Only the photos you
+            pick are uploaded.
+          </li>
+          <li>
+            <b>Files:</b> when you pick a document (for example a PDF), only that file is uploaded.
+          </li>
+          <li>
+            <b>Phone calls and WhatsApp:</b> “Call” and “WhatsApp” buttons open your phone’s dialer or WhatsApp with the number filled in. The app does not read your contacts or your call log.
+          </li>
+          <li>
+            <b>Technical data:</b> sign-in sessions (device name you give, IP address, time), security and audit logs of important actions, and basic error logs needed to keep the Service working and safe.
+            Sign-in tokens are kept in the secure storage of your phone.
+          </li>
+        </ul>
+        <p>The app does not use your microphone, does not read your contacts, SMS or call logs, and does not show third-party advertising.</p>
+
+        <h2>Payments</h2>
         <p>
-          Your society’s admins and staff see what they need to manage the society. Vendors see the booking details you send them. Verification documents are encrypted and visible only to authorised
-          platform staff. We do not sell personal data.
+          Online payments (maintenance dues, facility fees, service bookings and product orders) are processed by our payment partner <b>Cashfree Payments</b>. You enter your card, UPI or bank details on
+          Cashfree’s secure page — {LEGAL.brand} never receives or stores them. We keep the payment records we need (amount, status, payment reference, date) for receipts, refunds and accounting. To pay
+          vendors their share, we share a vendor’s name, email, mobile number, bank account details and PAN with Cashfree to create their payout account. Cash payments recorded by your society or a vendor
+          are stored in the same way.
         </p>
-        <h2>Security and retention</h2>
-        <p>Data is sent over encrypted connections, access is role-based and audited. Financial records are kept as required by law.</p>
-        <h2>Your choices</h2>
+
+        <h2>How we use your information</h2>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>To create and secure your account and let you sign in.</li>
+          <li>To run your society: membership approval, bills and receipts, complaints, notices, polls, facility bookings and the guest / visitor log.</li>
+          <li>To run the marketplace: show listings, take bookings and orders, deliver orders, calculate prices, commissions, discounts and vendor earnings.</li>
+          <li>To verify vendors (KYC) and pay them through Cashfree.</li>
+          <li>To send in-app notifications about your bookings, orders, payments, visitors and society notices.</li>
+          <li>To prevent fraud and misuse, keep audit records, and meet legal and tax obligations.</li>
+        </ul>
+        <p>We do not sell your personal data and we do not use it for advertising.</p>
+
+        <h2>Who can see your information</h2>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <b>Your society’s admins and staff</b> see the member, flat, billing, complaint, booking and visitor information they need to manage the society. Gate staff see the residents’ names and flat
+            numbers and the guests expected at the gate.
+          </li>
+          <li>
+            <b>Vendors</b> see the name, mobile number, address and note of a member who books their service or orders their product — only for that booking or order.
+          </li>
+          <li>
+            <b>Members</b> see a vendor’s shop name, logo, listings and contact number. Your society’s community posts are visible to members of the same society.
+          </li>
+          <li>
+            <b>The {LEGAL.brand} team</b> (authorised administrators only) can see account and vendor verification details to run and support the Service. Full PAN, Aadhaar and account numbers are
+            shown only to authorised staff on request, and every such view is recorded.
+          </li>
+          <li>
+            <b>Service providers</b> that host and run the Service for us: cloud hosting and database, payments (Cashfree), and maps / address search (OpenStreetMap). They may only use the data to provide
+            their service to us.
+          </li>
+          <li>
+            <b>Authorities</b>, when required by law or to protect the rights and safety of users.
+          </li>
+        </ul>
+
+        <h2>Security</h2>
         <p>
-          You can update your profile in the app. To request a copy or deletion of your data, contact us at <Mail />.
+          Data travels over encrypted connections (HTTPS). Passwords are stored as one-way hashes. Vendor PAN, Aadhaar and bank account numbers are encrypted at rest (AES-256), and KYC photos are private files
+          that open only through short-lived links for authorised staff. Access inside the Service is role-based, each society’s data is kept separate, and important actions are recorded in a tamper-evident
+          audit log.
+        </p>
+
+        <h2>How long we keep data</h2>
+        <p>
+          We keep your account data while your account is active. Payment, billing, receipt and ledger records are kept for as long as Indian tax and accounting laws require, even after an account is
+          closed. Visitor logs are kept while your society uses {LEGAL.brand}; a society can ask us to delete older logs. Other data is deleted or anonymised within 30 days after you ask us to delete your
+          account, except where we must keep it by law or to resolve a dispute.
+        </p>
+
+        <h2 id="delete-account">Delete your account or data</h2>
+        <p>
+          You can update your name, email and city in the app’s profile. To delete your account and personal data, email <Mail /> from the email on your account, or call <Phone />, with the subject
+          “Delete my NIVASA account” and your registered mobile number. We confirm the request with you, then delete your account within 30 days (keeping only the records the law requires, as explained
+          above). You can also ask us for a copy of your data or to correct it in the same way.
+        </p>
+
+        <h2>Children</h2>
+        <p>The Service is meant for adults (18+). We do not knowingly create accounts for children. If you believe a child has given us personal data, contact us and we will delete it.</p>
+
+        <h2>Changes to this policy</h2>
+        <p>We may update this policy. The date at the top shows the latest version. If a change affects how we use your data in an important way, we will tell you in the app or by email.</p>
+
+        <h2>Contact</h2>
+        <p>
+          {LEGAL.legalName} ({LEGAL.brand}) · <Mail /> · <Phone />
         </p>
       </>
     ),

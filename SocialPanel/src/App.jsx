@@ -72,6 +72,10 @@ export default function App() {
             {["contact", "terms", "privacy", "refunds", "shipping"].map((pg) => (
               <Route key={pg} path={'/' + pg} element={<Suspense fallback={<PublicFallback />}><Legal page={pg} /></Suspense>} />
             ))}
+            {/* Privacy policy of the whole NIVASA app (Google Play listing link). Both spellings work. */}
+            {["/privacy-policy", "/privecy-policy"].map((p) => (
+              <Route key={p} path={p} element={<Suspense fallback={<PublicFallback />}><Legal page="privacy" /></Suspense>} />
+            ))}
 
             <Route
               path="/society"
