@@ -142,7 +142,7 @@ const PAGES = {
         <p>
           Online payments (maintenance dues, facility fees, service bookings and product orders) are processed by our payment partner <b>Cashfree Payments</b>. You enter your card, UPI or bank details on
           Cashfree’s secure page — {LEGAL.brand} never receives or stores them. We keep the payment records we need (amount, status, payment reference, date) for receipts, refunds and accounting. To pay
-          vendors their share, we share a vendor’s name, email, mobile number, bank account details and PAN with Cashfree to create their payout account. Cash payments recorded by your society or a vendor
+          vendors their share, we share a vendor’s name, email, mobile number, bank account details, PAN (number and PAN card photo), GSTIN if given, and line of business with Cashfree to create and verify their payout account. We do not share Aadhaar with Cashfree. Cash payments recorded by your society or a vendor
           are stored in the same way.
         </p>
 

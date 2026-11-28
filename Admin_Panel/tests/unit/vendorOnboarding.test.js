@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isAadhaar, isBankAccount, isIfsc, isPan, verhoeffValid } from '../../src/lib/validation.js';
-import { activityLabel, activityLink, adminLabel, emptyKyc, emptyVendor, fieldFromPath, kycErrors, kycPayload, locationPayload, serverErrors, vendorPayload } from '../../src/lib/vendorOnboarding.js';
+import { activityLabel, activityLink, adminLabel, CF_LINES_OF_BUSINESS, emptyKyc, emptyVendor, fieldFromPath, gstinProblem, kycErrors, kycPayload, locationPayload, serverErrors, vendorPayload } from '../../src/lib/vendorOnboarding.js';
 import { ApiError } from '../../src/lib/api.js';
 
 const AADHAAR = '234567890124'; // passes Verhoeff
@@ -8,6 +8,7 @@ const doc = (id, sig) => ({ _id: id, name: `${id}.jpg`, mimeType: 'image/jpeg', 
 const goodKyc = () => ({
   ...emptyKyc(),
   businessName: 'Sen Electricals',
+  lineOfBusiness: 'Professional Services (Doctors, Lawyers, Architects, CAs, and other Professionals)',
   city: 'Kolkata',
   pan: 'abcde1234f',
   aadhaar: '2345 6789 0124',
@@ -50,6 +51,8 @@ describe('kycErrors / kycPayload', () => {
     expect(kycPayload(k)).toEqual({
       businessName: 'Sen Electricals',
       businessType: 'individual',
+      lineOfBusiness: 'Professional Services (Doctors, Lawyers, Architects, CAs, and other Professionals)',
+      gstin: undefined,
       city: 'Kolkata',
       address: undefined,
       pan: 'ABCDE1234F',
@@ -74,6 +77,17 @@ describe('kycErrors / kycPayload', () => {
     expect(e.vendorConsent).toBeTruthy();
     expect(e.panPhoto).toBeTruthy();
     expect(kycErrors({ ...goodKyc(), aadhaar: '123456789012' }).aadhaar).toMatch(/0 or 1/);
+  });
+  it('Cashfree fields: line of business required, GSTIN optional but must carry the PAN', () => {
+    expect(kycErrors({ ...goodKyc(), lineOfBusiness: '' }).lineOfBusiness).toMatch(/Cashfree/);
+    expect(kycErrors({ ...goodKyc(), lineOfBusiness: 'NBFC' }).lineOfBusiness).toBeTruthy();
+    expect(kycErrors({ ...goodKyc(), gstin: '27ABCDE1234F1Z5' })).toEqual({});
+    expect(kycPayload({ ...goodKyc(), gstin: '27abcde1234f1z5' }).gstin).toBe('27ABCDE1234F1Z5');
+    expect(kycErrors({ ...goodKyc(), gstin: '27ZZZZZ1234F1Z5' }).gstin).toMatch(/different PAN/);
+    expect(kycErrors({ ...goodKyc(), gstin: '27ABCDE1234F' }).gstin).toMatch(/15 characters/);
+    expect(gstinProblem('', 'ABCDE1234F')).toBeNull();
+    expect(CF_LINES_OF_BUSINESS).toContain('Retail and Shopping');
+    expect(CF_LINES_OF_BUSINESS).not.toContain('NBFCs/Organisations into Lending');
   });
   it('the three documents must be different files', () => {
     expect(kycErrors({ ...goodKyc(), aadhaarBack: doc('a2') }).documents).toBeTruthy();

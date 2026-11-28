@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { KYC_DOC_FIELDS } from '../lib/vendorOnboarding.js';
+import { CF_LINES_OF_BUSINESS, KYC_DOC_FIELDS, lineOfBusinessLabel } from '../lib/vendorOnboarding.js';
 import { Alert, Icon } from './ui.jsx';
 import { Field, Input, Select, Textarea } from './Form.jsx';
 import { UploadTile } from './UploadTile.jsx';
@@ -24,7 +24,7 @@ function KycInput({ k, label, hint, required = true, value, errors, set, classNa
  * "Enter / edit KYC details" on the vendor page. Full numbers live only in this form's state until submit.
  */
 export function KycDetailsForm({ value, onChange, errors = {}, onBusyChange, cashfreeNote = true }) {
-  const ids = { type: useId(), address: useId() };
+  const ids = { type: useId(), address: useId(), lob: useId() };
   const set = (k, v) => onChange(k, v);
   const p = { value, errors, set };
   return (
@@ -39,6 +39,17 @@ export function KycDetailsForm({ value, onChange, errors = {}, onBusyChange, cas
               <option value="business">Registered business</option>
             </Select>
           </Field>
+          <Field label="Line of business" required htmlFor={ids.lob} error={errors.lineOfBusiness} hint="Sent to Cashfree for payouts" className="sm:col-span-2">
+            <Select id={ids.lob} name="lineOfBusiness" value={value.lineOfBusiness || ''} onChange={(e) => set('lineOfBusiness', e.target.value)} invalid={Boolean(errors.lineOfBusiness)} data-testid="kyc-lineOfBusiness">
+              <option value="">Choose what this vendor does…</option>
+              {CF_LINES_OF_BUSINESS.map((v) => (
+                <option key={v} value={v}>
+                  {lineOfBusinessLabel(v)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <KycInput {...p} k="gstin" label="GSTIN" required={false} hint="Optional · needed above ₹20 lakh a year" maxLength={15} placeholder="27ABCDE1234F1Z5" className="font-mono" onChange={(e) => set('gstin', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} />
           <KycInput {...p} k="city" label="City" maxLength={80} placeholder="e.g. Kolkata" />
           <Field label="Address" hint="Optional" htmlFor={ids.address} error={errors.address} className="sm:col-span-2">
             <Textarea id={ids.address} name="address" rows={2} maxLength={300} value={value.address} onChange={(e) => set('address', e.target.value)} invalid={Boolean(errors.address)} placeholder="Shop / office address" data-testid="kyc-address" />
@@ -85,7 +96,7 @@ export function KycDetailsForm({ value, onChange, errors = {}, onBusyChange, cas
         <label className="flex cursor-pointer items-start gap-2.5 text-xs text-gray-700">
           <input type="checkbox" name="vendorConsent" checked={value.vendorConsent} onChange={(e) => set('vendorConsent', e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563eb]" data-testid="kyc-consent" />
           <span>
-            <b>The vendor agreed to KYC verification</b> — they gave these details and agreed that NIVASA verifies them and shares the bank and PAN details with Cashfree for payouts.
+            <b>The vendor agreed to KYC verification</b> — they gave these details and agreed that NIVASA verifies them and shares the bank details, PAN (number and card photo), GSTIN and line of business with Cashfree for payouts.
           </span>
         </label>
         {errors.vendorConsent && (

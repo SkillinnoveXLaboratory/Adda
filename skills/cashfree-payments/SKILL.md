@@ -54,12 +54,32 @@ commission − discount. Vendors must have an **active** Cashfree vendor account
 pay; otherwise 409 `VENDOR_PAYOUT_NOT_READY` and COD/cash still works.
 
 ## Vendor payout account (Easy Split "vendor verification")
+Cashfree API 2025-01-01, `POST /easy-split/vendors` — **required**: `vendor_id` (alnum/_), `status`, `name` (no
+special chars except `. / - &`, ≤100), `email`, `phone` (digits), `kyc_details` with **`business_type`** (Cashfree
+refuses the vendor without it: "kyc_details.business_type : is missing") + `account_type` + `pan`; `gst` optional.
+Bank OR UPI, never both. Update = `PATCH /easy-split/vendors/:id` (same fields, no vendor_id/status). Files =
+`POST /easy-split/vendor-docs/:id` multipart `doc_type` (PAN, GST, UIDAI_FRONT…) + `doc_value` + `file` (≤2 MB).
+Statuses: IN_BENE_CREATION / IN_BANK_VALIDATION / IN_KYC_REVIEW → pending; ACTIVE → active;
+BANK_VALIDATION_FAILED / BENE_CREATION_FAILED / ACTION_REQUIRED / ON_HOLD → failed (message says what to fix, with
+Cashfree's document remarks); BLOCKED / DELETED → blocked. Sandbox vendors turn ACTIVE after ~10 minutes.
+
+- `business_type` = the vendor's **line of business**: one of `CF_LINES_OF_BUSINESS` (exact Cashfree strings; the
+  same list in `Backend/server.js`, `Admin_Panel/src/lib/vendorOnboarding.js`, `Adda_App/src/lib/cashfree.js` — keep
+  them identical). Regulated lines (NBFC, chit funds, wallets, broking, gaming) are deliberately not offered.
+- GSTIN optional (needed above ₹20 lakh/yr); must carry the PAN in characters 3–12 (server + both clients check).
 - On KYC approval the server creates the Cashfree vendor (`vendor_id = nv<userId>`, bank + PAN decrypted only for
-  this call, never logged/returned) → `VendorProfile.payout { cfVendorId, status: pending|active|failed|blocked,
-  message }`. Cashfree status ACTIVE → active, BLOCKED/DELETED → blocked, other → pending.
-- Master Admin vendor page: "Cashfree payout account" card with status + **Create / refresh** (`POST
-  /platform/vendors/:id/payout`, `vendors.manage`). The vendor app shows the status in Shop/KYC.
-- A vendor account needs an email (Cashfree requires it) — missing → `failed` with a clear message.
+  this call, never logged/returned). A hash of the sent details (`payout.syncedHash`) means changed email / bank /
+  line of business / GSTIN are sent as an update on the next sync; unchanged → no call.
+- Only the **PAN card file** is uploaded (`payout.docs[]` records Cashfree's verdict per file). Aadhaar stays with
+  NIVASA (data minimisation). A file Cashfree rejected is **not** re-sent unchanged — a new photo (reject → Edit KYC →
+  approve) is uploaded; our own failed attempts (network, >2 MB, not JPG/PNG/PDF) are retried.
+- Missing before any call: email, valid mobile, bank/PAN, line of business → `failed` with a clear message, nothing
+  sent to Cashfree.
+- Master Admin vendor page: "Cashfree payout account" card: status, message, line of business, GSTIN, masked email,
+  documents sent; **Cashfree details** (`PATCH /platform/vendors/:id/payout-details` `{ lineOfBusiness?, gstin?,
+  email? }`, `vendors.manage`, works after approval, audited `platform.vendor_payout_details`, re-syncs at once) and
+  **Create / refresh** (`POST /platform/vendors/:id/payout`). Vendor app: line of business + GSTIN in the KYC form;
+  payout card can refresh once the account exists on Cashfree.
 
 ## Refunds
 - Product order paid online and cancelled (member before packed, or vendor) → full refund with `refund_splits`
@@ -73,7 +93,9 @@ pay; otherwise 409 `VENDOR_PAYOUT_NOT_READY` and COD/cash still works.
 ```
 cd Adda_App && npm run payments-check     # fake Cashfree gateway: invoice/facility/booking/order pay, split amounts,
                                           # webhook signature (good/bad/duplicate), amount mismatch, refunds,
-                                          # payout account create/refresh, 503 when not configured
+                                          # payout account create/refresh, 503 when not configured;
+                                          # the fake refuses vendors without business_type (like live)
+                                          # and records PATCH updates + vendor-docs uploads
 cd Adda_App && npm run vendor-check && npm run products-check
 ```
 Review: client-sent amounts; a success shown before `refresh` says paid; secrets in clients; settlement numbers that

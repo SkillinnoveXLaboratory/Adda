@@ -8,7 +8,7 @@ export const LEGAL = {
   email: 'nivasa2027@gmail.com',
   phone: '9370923933',
   phoneDisplay: '+91 93709 23933',
-  updated: '24 November 2026',
+  updated: '28 November 2026',
 };
 
 export const POLICY_LINKS = [

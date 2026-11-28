@@ -5,6 +5,47 @@
 import { isAadhaar, isBankAccount, isEmail, isIfsc, isIndianMobile, isPan, kycDigits, normalizePhone, passwordProblems } from './validation.js';
 import { parseRate, PRICING_RATE_ERROR } from './pricing.js';
 
+/**
+ * Cashfree Easy Split "line of business" (kyc_details.business_type — Cashfree refuses a vendor without it).
+ * Exact strings; same list as CF_LINES_OF_BUSINESS in Backend/server.js and Adda_App/src/lib/cashfree.js.
+ */
+export const CF_LINES_OF_BUSINESS = [
+  'Professional Services (Doctors, Lawyers, Architects, CAs, and other Professionals)',
+  'Retail and Shopping',
+  'Real Estate, Housing, Rentals',
+  'Grocery',
+  'Food and Beverages',
+  'E-commerce',
+  'Readymade',
+  'Pharmacy',
+  'Health care',
+  'Education',
+  'Travel and Hospitality',
+  'Logistics',
+  'Utilities',
+  'Telecom',
+  'Jewellery',
+  'Pan shop',
+  'Digital Goods',
+  'SaaS',
+  'B2B',
+  'Society/Trust/Club/Association',
+  'Miscellaneous',
+];
+/** Shorter labels for the dropdown (the value sent is always the exact Cashfree string). */
+export const lineOfBusinessLabel = (v) => (v?.startsWith('Professional Services') ? 'Professional / home services (plumbers, electricians, doctors, CAs…)' : v === 'Readymade' ? 'Readymade garments' : v || '');
+export const GSTIN_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+/** GSTIN problem (null when blank or valid). A GSTIN carries the PAN in characters 3–12. */
+export function gstinProblem(gstin, pan) {
+  const g = String(gstin ?? '').trim().toUpperCase();
+  if (!g) return null;
+  if (!GSTIN_RX.test(g)) return 'GSTIN is 15 characters, e.g. 27ABCDE1234F1Z5';
+  const p = String(pan ?? '').trim().toUpperCase();
+  if (p && g.slice(2, 12) !== p) return 'This GSTIN belongs to a different PAN — characters 3 to 12 must be the PAN';
+  return null;
+}
+
 export const KYC_DOC_FIELDS = [
   ['panPhoto', 'PAN card photo'],
   ['aadhaarFront', 'Aadhaar · front'],
@@ -15,6 +56,8 @@ export const KYC_DOC_FIELDS = [
 export const emptyKyc = () => ({
   businessName: '',
   businessType: 'individual',
+  lineOfBusiness: '',
+  gstin: '',
   city: '',
   address: '',
   pan: '',
@@ -42,10 +85,13 @@ export function kycErrors(k) {
   const e = {};
   if (!lenBetween(k.businessName, 2, 120)) e.businessName = 'Enter the business or full name as on PAN (2–120 characters)';
   if (!['individual', 'business'].includes(k.businessType)) e.businessType = 'Choose individual or business';
+  if (!CF_LINES_OF_BUSINESS.includes(k.lineOfBusiness)) e.lineOfBusiness = 'Choose the line of business (Cashfree needs it for payouts)';
   if (!lenBetween(k.city, 2, 80)) e.city = 'Enter the city (2–80 characters)';
   if (String(k.address ?? '').trim().length > 300) e.address = 'Keep the address under 300 characters';
   if (blank(k.pan)) e.pan = 'Enter the PAN';
   else if (!isPan(k.pan)) e.pan = 'PAN is 5 letters, 4 digits, 1 letter — e.g. ABCDE1234F';
+  const gst = gstinProblem(k.gstin, isPan(k.pan) ? k.pan : '');
+  if (gst) e.gstin = gst;
   const aad = kycDigits(k.aadhaar);
   if (!aad) e.aadhaar = 'Enter the Aadhaar number';
   else if (!/^\d{12}$/.test(aad)) e.aadhaar = 'Aadhaar is 12 digits';
@@ -77,6 +123,8 @@ export function kycPayload(k) {
   return {
     businessName: String(k.businessName).trim(),
     businessType: k.businessType,
+    lineOfBusiness: k.lineOfBusiness,
+    gstin: blank(k.gstin) ? undefined : String(k.gstin).trim().toUpperCase(),
     city: String(k.city).trim(),
     address: opt(k.address),
     pan: String(k.pan).trim().toUpperCase(),
@@ -219,6 +267,7 @@ const ACTION_LABELS = {
   'platform.vendor_kyc_approved': 'Approved vendor KYC',
   'platform.vendor_kyc_rejected': 'Rejected vendor KYC',
   'platform.vendor_payout_sync': 'Created / refreshed a vendor payout account',
+  'platform.vendor_payout_details': 'Changed vendor Cashfree details',
   'privacy.kyc_reveal': 'Revealed full vendor KYC',
   'vendor.pricing_updated': 'Changed vendor rates',
 };

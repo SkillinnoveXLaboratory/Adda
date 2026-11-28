@@ -750,11 +750,43 @@ const ServiceOffer = model$3('ServiceOffer', serviceOfferSchema);
  * the last 4 characters in clear for display. Document photos are private uploads (purpose "kyc").
  */
 const KYC_STATUSES = ['not_submitted', 'pending', 'approved', 'rejected'];
+/**
+ * Cashfree Easy Split "Vendor line of business" (sent as kyc_details.business_type — Cashfree refuses a vendor
+ * without it). Exact strings from Cashfree's Add Vendor guide; regulated lines (NBFC, chit funds, wallets, broking,
+ * gaming) are left out — they need extra licences NIVASA vendors don't have. Keep in sync with
+ * Admin_Panel/src/lib/vendorOnboarding.js and Adda_App/src/lib/cashfree.js (skills/cashfree-payments).
+ */
+const CF_LINES_OF_BUSINESS = [
+  'Professional Services (Doctors, Lawyers, Architects, CAs, and other Professionals)',
+  'Retail and Shopping',
+  'Real Estate, Housing, Rentals',
+  'Grocery',
+  'Food and Beverages',
+  'E-commerce',
+  'Readymade',
+  'Pharmacy',
+  'Health care',
+  'Education',
+  'Travel and Hospitality',
+  'Logistics',
+  'Utilities',
+  'Telecom',
+  'Jewellery',
+  'Pan shop',
+  'Digital Goods',
+  'SaaS',
+  'B2B',
+  'Society/Trust/Club/Association',
+  'Miscellaneous',
+];
+const GSTIN_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const vendorProfileSchema = new Schema$3(
   {
     user: { type: ObjectId$3, ref: 'User', required: true, unique: true },
     businessName: { type: String, trim: true, maxlength: 120 },
     businessType: { type: String, enum: ['individual', 'business'], default: 'individual' },
+    lineOfBusiness: { type: String, enum: CF_LINES_OF_BUSINESS },
+    gstin: { type: String, trim: true, uppercase: true, maxlength: 15 },
     city: { type: String, trim: true, maxlength: 80 },
     address: { type: String, trim: true, maxlength: 300 },
     panEnc: { type: String, select: false },
@@ -795,6 +827,10 @@ const vendorProfileSchema = new Schema$3(
       providerStatus: String,
       message: { type: String, maxlength: 300 },
       updatedAt: Date,
+      // Hash of the details last sent to Cashfree; a change (email, bank, line of business, GSTIN) is sent as an update.
+      syncedHash: { type: String, select: false },
+      // KYC files uploaded to Cashfree (vendor-docs API) and Cashfree's verdict on each.
+      docs: [{ _id: false, docType: String, media: { type: ObjectId$3, ref: 'UploadedMedia' }, status: String, remarks: String, at: Date }],
     },
   },
   { timestamps: true },
@@ -2287,9 +2323,10 @@ const cfBase = () =>
 const rupeesOf = (paise) => Number((paise / 100).toFixed(2));
 
 async function cfCall(method, path, body, { idempotencyKey } = {}) {
-  const headers = { 'x-client-id': env.CASHFREE_APP_ID, 'x-client-secret': env.CASHFREE_SECRET_KEY, 'x-api-version': '2025-01-01', 'Content-Type': 'application/json', Accept: 'application/json' };
+  const form = body instanceof FormData;
+  const headers = { 'x-client-id': env.CASHFREE_APP_ID, 'x-client-secret': env.CASHFREE_SECRET_KEY, 'x-api-version': '2025-01-01', Accept: 'application/json', ...(form ? {} : { 'Content-Type': 'application/json' }) };
   if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
-  const res = await fetch(`${cfBase().replace(/\/$/, '')}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
+  const res = await fetch(`${cfBase().replace(/\/$/, '')}${path}`, { method, headers, body: form ? body : body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(form ? 30000 : 15000) });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new AppError(502, 'PAYMENT_PROVIDER_ERROR', json?.message ? `Cashfree: ${String(json.message).slice(0, 200)}` : 'Payment provider request failed');
@@ -2330,6 +2367,15 @@ const cashfree = {
     }),
   createVendor: (body) => cfCall('POST', '/easy-split/vendors', body),
   getVendor: (vendorId) => cfCall('GET', `/easy-split/vendors/${encodeURIComponent(vendorId)}`),
+  updateVendor: (vendorId, body) => cfCall('PATCH', `/easy-split/vendors/${encodeURIComponent(vendorId)}`, body),
+  /** One KYC file (max 2 MB) for an Easy Split vendor: multipart doc_type + doc_value + file. */
+  uploadVendorDoc(vendorId, { docType, docValue, buffer, mimeType, fileName }) {
+    const form = new FormData();
+    form.append('doc_type', docType);
+    form.append('doc_value', docValue);
+    form.append('file', new Blob([buffer], { type: mimeType }), fileName);
+    return cfCall('POST', `/easy-split/vendor-docs/${encodeURIComponent(vendorId)}`, form);
+  },
   /** base64(HMAC-SHA256(timestamp + rawBody, client secret)) — over the exact raw bytes. */
   verifyWebhookSignature(rawBody, signature, timestamp) {
     if (!env.CASHFREE_SECRET_KEY || !signature || !timestamp || !rawBody) return false;
@@ -5123,6 +5169,8 @@ const kycSubmit = z
   .object({
     businessName: text(120, 2),
     businessType: z.enum(['individual', 'business']).default('individual'),
+    lineOfBusiness: z.enum(CF_LINES_OF_BUSINESS, { error: 'Choose the line of business from the list' }).optional(),
+    gstin: z.string().trim().toUpperCase().regex(GSTIN_RX, 'Enter a valid 15-character GSTIN, e.g. 27ABCDE1234F1Z5').optional(),
     city: text(80, 2),
     address: optText(300),
     pan: z.string().trim().toUpperCase().regex(PAN_RX, 'Enter a valid PAN, e.g. ABCDE1234F'),
@@ -5167,6 +5215,10 @@ const vendorPricingBody = z
   .refine((v) => v.commissionPercent !== undefined || v.memberDiscountPercent !== undefined, 'Send commissionPercent and/or memberDiscountPercent');
 
 const KYC_DOCS = ['panPhoto', 'aadhaarFront', 'aadhaarBack'];
+/** A GSTIN carries the holder's PAN in characters 3–12. */
+function assertGstinMatchesPan(gstin, pan) {
+  if (gstin && pan && gstin.slice(2, 12) !== pan) throw new AppError(400, 'VALIDATION_ERROR', 'The GSTIN does not match the PAN', [{ path: 'gstin', message: 'This GSTIN belongs to a different PAN — characters 3 to 12 of a GSTIN are the PAN' }]);
+}
 const maskTail = (last4, total) => (last4 ? `${'•'.repeat(Math.max(0, total - last4.length))}${last4}` : null);
 const docOut = (m, ttl) => (m?._id ? { _id: m._id, url: mediaUrl(m, ttl), mimeType: m.mimeType } : null);
 
@@ -5176,6 +5228,8 @@ function presentVendorProfile(p, docTtl = 600) {
   return {
     businessName: p.businessName || null,
     businessType: p.businessType,
+    lineOfBusiness: p.lineOfBusiness || null,
+    gstin: p.gstin || null,
     city: p.city || null,
     address: p.address || null,
     kycStatus: p.kycStatus,
@@ -5232,12 +5286,15 @@ async function submitKyc(req, res) {
   const b = req.valid.body;
   const p = (await VendorProfile.findOne({ user: req.user._id })) || new VendorProfile({ user: req.user._id });
   if (p.kycStatus === 'approved') throw conflict('Your KYC is already approved. Contact support to change verified details.', 'KYC_APPROVED');
+  assertGstinMatchesPan(b.gstin, b.pan);
   const docs = KYC_DOCS.map((k) => b[k]);
   if (new Set(docs.map(String)).size !== docs.length) throw badRequest('Upload a separate photo for PAN, Aadhaar front and Aadhaar back');
   await claimMedia(docs, { owner: req.user._id, purpose: 'kyc', max: 3 });
   Object.assign(p, {
     businessName: b.businessName,
     businessType: b.businessType,
+    lineOfBusiness: b.lineOfBusiness ?? p.lineOfBusiness,
+    gstin: b.gstin,
     city: b.city,
     address: b.address,
     panEnc: encryptKyc(b.pan),
@@ -5805,7 +5862,7 @@ async function listVendors(req, res) {
 }
 
 async function vendorUser(id) {
-  const user = await User.findOne({ _id: id, accountType: 'vendor' }).select('name phone status createdAt lastLoginAt').lean();
+  const user = await User.findOne({ _id: id, accountType: 'vendor' }).select('name phone email status createdAt lastLoginAt').lean();
   if (!user) throw notFound('Vendor');
   return user;
 }
@@ -5815,6 +5872,8 @@ async function vendorUser(id) {
 const adminKycFields = {
   businessName: text(120, 2),
   businessType: z.enum(['individual', 'business']).default('individual'),
+  lineOfBusiness: z.enum(CF_LINES_OF_BUSINESS, { error: 'Choose the line of business from the list' }).optional(),
+  gstin: z.string().trim().toUpperCase().regex(GSTIN_RX, 'Enter a valid 15-character GSTIN, e.g. 27ABCDE1234F1Z5').optional(),
   city: text(80, 2),
   address: optText(300),
   pan: z.string().trim().toUpperCase().regex(PAN_RX, 'Enter a valid PAN, e.g. ABCDE1234F'),
@@ -5853,6 +5912,7 @@ const adminVendorCreate = z
 /** Applies (encrypted) KYC details to a profile. Documents must be uploads made by this admin (purpose kyc). */
 async function applyAdminKyc(req, profile, vendorUserId, k) {
   if (!env.kycKey) throw unavailable('Vendor verification is not set up on this server yet (KYC_ENCRYPTION_KEY).', 'KYC_UNAVAILABLE');
+  assertGstinMatchesPan(k.gstin, k.pan);
   const docs = KYC_DOCS.map((d) => k[d]);
   if (new Set(docs.map(String)).size !== docs.length) throw badRequest('Upload a separate photo for PAN, Aadhaar front and Aadhaar back');
   // Accept files the admin uploaded now, or the ones already on this vendor's profile.
@@ -5862,6 +5922,8 @@ async function applyAdminKyc(req, profile, vendorUserId, k) {
   Object.assign(profile, {
     businessName: k.businessName,
     businessType: k.businessType,
+    lineOfBusiness: k.lineOfBusiness ?? profile.lineOfBusiness,
+    gstin: k.gstin,
     city: k.city,
     address: k.address,
     panEnc: encryptKyc(k.pan),
@@ -5982,7 +6044,7 @@ async function getVendor(req, res) {
   const settled = await ServiceBooking.aggregate([{ $match: { vendor: user._id, 'payment.status': 'paid' } }, { $group: SETTLEMENT_GROUP }]);
   res.json({
     settlement: presentSettlement(settled[0]),
-    user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
+    user: { _id: user._id, name: user.name, phone: maskPhone(user.phone), email: user.email ? maskEmail(user.email) : null, hasEmail: Boolean(user.email), status: user.status, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt },
     profile: presentVendorProfile(profile, 900),
     pricing: presentRates(profile),
     counts: { properties, services, bookings, ads, products: await Product.countDocuments({ vendor: user._id, moderationStatus: { $ne: 'removed' } }), orders: await ProductOrder.countDocuments({ vendor: user._id, status: { $ne: 'awaiting_payment' } }) },
@@ -7047,7 +7109,21 @@ async function payServiceBooking(req, res) {
 }
 
 // ======================= Vendor payout account (Cashfree Easy Split vendor) =======================
-const payoutStatusOf = (s) => (s === 'ACTIVE' ? 'active' : ['BLOCKED', 'DELETED'].includes(s) ? 'blocked' : 'pending');
+/** Cashfree vendor status → our payout status + what the admin / vendor should know. */
+const CF_VENDOR_STATUS = {
+  ACTIVE: ['active', null],
+  IN_BENE_CREATION: ['pending', 'Cashfree is setting up the payout account.'],
+  IN_BANK_VALIDATION: ['pending', 'Cashfree is verifying the bank account.'],
+  IN_KYC_REVIEW: ['pending', 'Cashfree is reviewing the KYC documents.'],
+  BANK_VALIDATION_FAILED: ['failed', 'Cashfree could not verify the bank account: the account holder name must match the bank’s records. Correct the bank details (reject the KYC, then Edit KYC details) and press Create / refresh.'],
+  BENE_CREATION_FAILED: ['failed', 'Cashfree could not register the bank account. Check the account number and IFSC, then press Create / refresh.'],
+  ACTION_REQUIRED: ['failed', 'Cashfree rejected one or more KYC documents. Upload a clear new photo (reject the KYC, then Edit KYC details) and press Create / refresh.'],
+  ON_HOLD: ['failed', 'Cashfree put the account on hold: documents are missing or not clear enough.'],
+  BLOCKED: ['blocked', 'Cashfree blocked this vendor account.'],
+  DELETED: ['blocked', 'This vendor account was deleted on Cashfree.'],
+};
+const CF_DOC_MAX_BYTES = 2 * 1024 * 1024;
+const CF_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'application/pdf']);
 const cfName = (s) => String(s || '').replace(/[^A-Za-z0-9 ./&-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
 const presentPayout = (p) => ({
   status: p?.payout?.status || 'not_created',
@@ -7055,22 +7131,88 @@ const presentPayout = (p) => ({
   providerStatus: p?.payout?.providerStatus || null,
   message: p?.payout?.message || null,
   updatedAt: p?.payout?.updatedAt || null,
+  documents: (p?.payout?.docs || []).map((d) => ({ docType: d.docType, status: d.status || null, remarks: d.remarks || null, at: d.at || null })),
   ready: p?.payout?.status === 'active',
   available: gatewayReady(),
 });
 
-/** Create the vendor's Cashfree Easy Split account from the approved KYC (or refresh its status). */
+/** What a vendor still needs before Cashfree will accept it (null when complete). */
+function payoutMissing(p, user) {
+  if (!user?.email) return 'Add an email address to this vendor account — Cashfree needs it.';
+  if (!/^[6-9]\d{9}$/.test(user.phone || '')) return 'The vendor account has no valid mobile number.';
+  if (!p.bankAccountEnc || !p.bankIfsc || !p.panEnc) return 'KYC bank account / PAN details are missing.';
+  if (!p.lineOfBusiness) return 'Choose the vendor’s line of business (Cashfree details) — Cashfree needs it.';
+  return null;
+}
+
+/** Vendor details Cashfree keeps (create + update share them). Decrypted only for this call. */
+function cashfreeVendorDetails(p, user) {
+  return {
+    name: cfName(p.shopName || p.businessName || user.name) || 'NIVASA vendor',
+    email: user.email,
+    phone: user.phone,
+    verify_account: env.CASHFREE_ENV === 'production',
+    dashboard_access: false,
+    bank: { account_number: decryptKyc(p.bankAccountEnc), account_holder: cfName(p.bankAccountHolder || user.name) || 'Account holder', ifsc: p.bankIfsc },
+    kyc_details: { account_type: p.businessType === 'business' ? 'BUSINESS' : 'INDIVIDUAL', business_type: p.lineOfBusiness, pan: decryptKyc(p.panEnc), ...(p.gstin ? { gst: p.gstin } : {}) },
+  };
+}
+
+/**
+ * Uploads the PAN card file to Cashfree (vendor-docs API) unless this same file was already accepted there.
+ * Only the PAN is sent: Cashfree requires PAN for every vendor; Aadhaar stays with NIVASA.
+ */
+async function uploadPayoutDocs(p, vendorId) {
+  // Read the stored list as plain objects (copies of Mongoose subdocuments lose their fields).
+  const docs = ((await VendorProfile.findById(p._id).select('payout.docs').lean())?.payout?.docs || []).map((d) => ({ ...d }));
+  if (!p.panPhoto) return docs;
+  const prev = docs.find((d) => d.docType === 'PAN');
+  // Same file already with Cashfree → don't send it again (a file Cashfree rejected must be replaced, not re-sent);
+  // only our own failed attempts (network, size, format) are retried.
+  if (prev && String(prev.media) === String(p.panPhoto) && prev.status !== 'failed') return docs;
+  const media = await UploadedMedia.findById(p.panPhoto).lean();
+  const entry = { docType: 'PAN', media: p.panPhoto, at: new Date() };
+  if (!media) Object.assign(entry, { status: 'failed', remarks: 'The PAN card file is missing — upload it again in the KYC.' });
+  else if (!CF_DOC_TYPES.has(media.mimeType)) Object.assign(entry, { status: 'failed', remarks: 'Cashfree accepts JPG, PNG or PDF — upload the PAN card in one of those formats.' });
+  else if (media.size > CF_DOC_MAX_BYTES) Object.assign(entry, { status: 'failed', remarks: 'The PAN card file is over 2 MB (Cashfree’s limit) — upload a smaller photo.' });
+  else {
+    try {
+      const buffer = await fs.readFile(resolveStoragePath(media.storageKey));
+      const r = await provider.uploadVendorDoc(vendorId, { docType: 'PAN', docValue: decryptKyc(p.panEnc), buffer, mimeType: media.mimeType, fileName: `pan.${media.mimeType === 'application/pdf' ? 'pdf' : media.mimeType === 'image/png' ? 'png' : 'jpg'}` });
+      Object.assign(entry, { status: r?.status || 'IN_REVIEW', remarks: r?.remarks || null });
+    } catch (err) {
+      Object.assign(entry, { status: 'failed', remarks: String(err.message || 'Upload failed').slice(0, 200) });
+    }
+  }
+  return [...docs.filter((d) => d.docType !== 'PAN'), entry];
+}
+
+/**
+ * Creates the vendor's Cashfree Easy Split account from the approved KYC, sends changed details as an update,
+ * uploads the PAN card, and records Cashfree's status. Never throws for Cashfree errors — they are saved as
+ * `failed` with Cashfree's message so the admin sees what to fix.
+ */
 async function ensureVendorPayout(userId) {
   assertGatewayReady();
-  const p = await VendorProfile.findOne({ user: userId }).select('+bankAccountEnc +panEnc');
+  const p = await VendorProfile.findOne({ user: userId }).select('+bankAccountEnc +panEnc +payout.syncedHash');
   if (!p || p.kycStatus !== 'approved') throw conflict("Approve the vendor's KYC first.", 'KYC_REQUIRED');
   const user = await User.findById(userId).select('name email phone').lean();
   const vendorId = p.payout?.cfVendorId || `nv${userId}`;
   const save = (patch) => {
     const $set = { 'payout.provider': 'cashfree', 'payout.cfVendorId': vendorId, 'payout.updatedAt': new Date() };
-    for (const [k, v] of Object.entries(patch)) $set[`payout.${k}`] = v;
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) $set[`payout.${k}`] = v;
     return VendorProfile.updateOne({ _id: p._id }, { $set });
   };
+  const result = async () => presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
+  const missing = payoutMissing(p, user);
+  if (missing) {
+    await save({ status: 'failed', providerStatus: p.payout?.providerStatus || null, message: missing });
+    return result();
+  }
+  const details = cashfreeVendorDetails(p, user);
+  const hash = sha256(JSON.stringify(details));
+  let docs;
+  let syncedHash;
   try {
     let v = null;
     if (p.payout?.cfVendorId) {
@@ -7080,36 +7222,41 @@ async function ensureVendorPayout(userId) {
       });
     }
     if (!v) {
-      const missing = !user?.email ? 'Add an email address to this vendor account — Cashfree needs it.' : !/^[6-9]\d{9}$/.test(user.phone || '') ? 'The vendor account has no valid mobile number.' : !p.bankAccountEnc || !p.bankIfsc || !p.panEnc ? 'KYC bank account / PAN details are missing.' : null;
-      if (missing) {
-        await save({ status: 'failed', providerStatus: null, message: missing });
-        return presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
-      }
-      const body = {
-        vendor_id: vendorId,
-        status: 'ACTIVE',
-        name: cfName(p.shopName || p.businessName || user.name) || 'NIVASA vendor',
-        email: user.email,
-        phone: user.phone,
-        verify_account: env.CASHFREE_ENV === 'production',
-        dashboard_access: false,
-        bank: { account_number: decryptKyc(p.bankAccountEnc), account_holder: cfName(p.bankAccountHolder || user.name) || 'Account holder', ifsc: p.bankIfsc },
-        kyc_details: { account_type: p.businessType === 'business' ? 'BUSINESS' : 'INDIVIDUAL', pan: decryptKyc(p.panEnc) },
-      };
       try {
-        v = await provider.createVendor(body);
+        v = await provider.createVendor({ vendor_id: vendorId, status: 'ACTIVE', ...details });
+        syncedHash = hash;
       } catch (err) {
         if (!/already exist/i.test(err.message)) throw err;
         v = await provider.getVendor(vendorId);
       }
     }
-    const status = payoutStatusOf(v?.status);
-    await save({ status, providerStatus: v?.status || null, message: status === 'active' ? null : status === 'blocked' ? 'Cashfree blocked or deleted this vendor account.' : 'Cashfree is verifying the bank account. In test mode this takes about 10 minutes.' });
+    if (syncedHash !== hash && p.payout?.syncedHash !== hash) {
+      // Details changed since the last sync (or the vendor pre-dates this record): send them as an update.
+      await provider.updateVendor(vendorId, details);
+      syncedHash = hash;
+    }
+    if (syncedHash) await save({ syncedHash });
+    docs = await uploadPayoutDocs(p, vendorId);
+    v = await provider.getVendor(vendorId).catch(() => v);
+    // Cashfree's verdict per document (related_docs) → our record.
+    for (const rd of v?.related_docs || []) {
+      const d = docs.find((x) => x.docType === rd.doc_type);
+      if (d) Object.assign(d, { status: rd.status || d.status, remarks: rd.remarks || null });
+    }
+    const [status, base] = CF_VENDOR_STATUS[v?.status] || ['pending', v?.status ? `Cashfree status: ${humanizeCf(v.status)}.` : 'Waiting for Cashfree.'];
+    const docProblems = docs.filter((d) => ['failed', 'ACTION_REQUIRED', 'REJECTED'].includes(d.status)).map((d) => `${d.docType === 'PAN' ? 'PAN card' : d.docType}: ${d.remarks || 'rejected'}`);
+    const rdProblems = (v?.related_docs || []).filter((rd) => ['ACTION_REQUIRED', 'REJECTED'].includes(rd.status) && rd.remarks && !docs.some((d) => d.docType === rd.doc_type)).map((rd) => `${humanizeCf(rd.doc_type)}: ${rd.remarks}`);
+    const problems = [...docProblems, ...rdProblems];
+    let message = base;
+    if (status === 'pending') message = `${base}${env.CASHFREE_ENV === 'sandbox' ? ' In test mode this takes about 10 minutes.' : ''}`;
+    if (problems.length) message = `${status === 'active' ? '' : `${message} `}${problems.join(' · ')}`;
+    await save({ status, providerStatus: v?.status || null, message: message ? message.slice(0, 300) : null, docs });
   } catch (err) {
-    await save({ status: 'failed', providerStatus: null, message: String(err.message || 'Cashfree request failed').slice(0, 300) });
+    await save({ status: 'failed', providerStatus: null, message: String(err.message || 'Cashfree request failed').slice(0, 300), ...(docs ? { docs } : {}) });
   }
-  return presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
+  return result();
 }
+const humanizeCf = (s) => String(s || '').toLowerCase().replace(/_/g, ' ');
 
 async function platformVendorPayout(req, res) {
   const user = await vendorUser(req.valid.params.id);
@@ -7118,11 +7265,45 @@ async function platformVendorPayout(req, res) {
   res.json(payout);
 }
 
+/**
+ * Master Admin fills in what Cashfree needs that isn't verified KYC: line of business, GSTIN and the account email
+ * (works after approval too). Then the payout account is created / updated straight away.
+ */
+const payoutDetailsBody = z
+  .object({
+    lineOfBusiness: z.enum(CF_LINES_OF_BUSINESS, { error: 'Choose the line of business from the list' }).optional(),
+    gstin: z.union([z.string().trim().toUpperCase().regex(GSTIN_RX, 'Enter a valid 15-character GSTIN, e.g. 27ABCDE1234F1Z5'), z.literal(''), z.null()]).optional(),
+    email: email.optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'Send lineOfBusiness, gstin or email');
+
+async function setVendorPayoutDetails(req, res) {
+  const user = await vendorUser(req.valid.params.id);
+  const b = req.valid.body;
+  const p = await VendorProfile.findOne({ user: user._id }).select('+panEnc');
+  if (!p) throw notFound('Vendor profile');
+  const changes = {};
+  if (b.email !== undefined) {
+    if (await User.exists({ email: b.email, _id: { $ne: user._id } })) throw conflict('Another account already uses this email.', 'EMAIL_EXISTS');
+    await User.updateOne({ _id: user._id }, { $set: { email: b.email } });
+    changes.email = 'changed';
+  }
+  if (b.gstin) assertGstinMatchesPan(b.gstin, p.panEnc ? decryptKyc(p.panEnc) : null);
+  if (b.lineOfBusiness !== undefined) (changes.lineOfBusiness = { from: p.lineOfBusiness || null, to: b.lineOfBusiness }), (p.lineOfBusiness = b.lineOfBusiness);
+  if (b.gstin !== undefined) (changes.gstin = b.gstin ? 'set' : 'cleared'), (p.gstin = b.gstin || undefined);
+  await p.save();
+  await audit(req, { action: 'platform.vendor_payout_details', targetType: 'User', targetId: user._id, summary: `Cashfree details updated (${Object.keys(changes).join(', ')})`, changes });
+  const payout = gatewayReady() && p.kycStatus === 'approved' ? await ensureVendorPayout(user._id) : presentPayout(await VendorProfile.findById(p._id).select('payout').lean());
+  const fresh = await loadVendorProfile(user._id);
+  res.json({ profile: presentVendorProfile(fresh, 900), payout, hasEmail: Boolean(b.email || (await User.findById(user._id).select('email').lean())?.email) });
+}
+
 async function vendorRefreshPayout(req, res) {
   const p = await VendorProfile.findOne({ user: req.user._id }).select('payout kycStatus').lean();
   if (!gatewayReady() || p?.kycStatus !== 'approved') return res.json(presentPayout(p));
-  // Vendors may only refresh an existing account; creation happens on KYC approval / by the Master Admin.
-  if (!p?.payout?.cfVendorId || p.payout.status === 'failed') return res.json(presentPayout(p));
+  // Vendors may only refresh an account that exists on Cashfree; creation happens on KYC approval / by the Master Admin.
+  if (!p?.payout?.cfVendorId || (p.payout.status === 'failed' && !p.payout.providerStatus)) return res.json(presentPayout(p));
   res.json(await ensureVendorPayout(req.user._id));
 }
 
@@ -9424,6 +9605,7 @@ platformRouter.get('/earnings', requirePlatformPerm('earnings.view'), page, plat
 platformRouter.get('/product-orders', requirePlatformPerm('orders.view'), page, listProductOrdersPlatform);
 platformRouter.post('/product-orders/:id/refund-retry', requirePlatformPerm('vendors.manage'), id, platformRetryOrderRefund);
 platformRouter.post('/vendors/:id/payout', requirePlatformPerm('vendors.manage'), id, platformVendorPayout);
+platformRouter.patch('/vendors/:id/payout-details', requirePlatformPerm('vendors.manage'), id, validate({ body: payoutDetailsBody }), setVendorPayoutDetails);
 
 // Sub-admins: owner only, never grantable.
 platformRouter.get('/subadmins', requireOwner, listSubAdmins);

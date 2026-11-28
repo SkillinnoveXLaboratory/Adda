@@ -22,6 +22,9 @@ Contract: `docs/backend/API.md` → "Master Admin: add vendors + KYC on their be
    account is created from those details when Cashfree is configured (status shown on the vendor page). Otherwise the
    KYC is `pending` and goes through the normal review queue. An approved KYC can't be overwritten (409
    `KYC_APPROVED`) — reject it first.
+   Cashfree also needs the **line of business** (required in the form; Cashfree's `business_type`) and optionally the
+   **GSTIN** (must carry the PAN). For vendors already approved, the payout card's **Cashfree details** sets line of
+   business / GSTIN / email without touching verified KYC and re-syncs Cashfree (see `skills/cashfree-payments`).
 5. **Traceability:** every create / KYC entry is audited (`platform.vendor_created`, `platform.vendor_kyc_entered[_approved]`)
    with the actor. Vendor list/detail show **Added by** (name + Owner/Sub-admin) and **KYC entered by**. The owner opens
    Sub-admins → **Activity** to see everything a sub-admin did (with counts of vendors added / KYC entered).
@@ -34,6 +37,9 @@ Automated: `cd Admin_Panel && node scripts/vendor-onboarding-check.mjs` (local A
 - [ ] Validation: weak password, bad PAN / Aadhaar checksum / IFSC / account, same photo twice, missing consent,
       unknown field → 400, and **the mobile is still free afterwards** (no half-created account).
 - [ ] Duplicates: mobile → 409 ACCOUNT_EXISTS, email → 409 EMAIL_EXISTS.
+- [ ] Cashfree fields (payments-check): no line of business → payout `failed`, nothing sent; unknown line → 400;
+      GSTIN of another PAN → 400 on `gstin`; Cashfree details → vendor created with `business_type` + `gst`, PAN file
+      uploaded once, Aadhaar never sent; changed email → Cashfree update; vendor token on payout-details → 403.
 - [ ] Foreign documents: another admin's or another vendor's upload → 400.
 - [ ] Vendor without KYC → admin enters KYC (pending) → normal approve works → editing again → 409 KYC_APPROVED.
 - [ ] Sub-admin with `vendors.manage` adds a vendor → list/detail show `addedBy` = that sub-admin (role sub_admin).

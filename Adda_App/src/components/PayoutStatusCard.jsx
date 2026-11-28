@@ -64,7 +64,9 @@ export function PayoutStatusCard({ payout: initial, kycStatus }) {
       tone: 'danger',
       badge: 'Needs attention',
       title: 'Payout account could not be set up',
-      body: `${payout.message || 'Cashfree could not create your payout account.'} ${askEmail ? 'Add your email below, then ask NIVASA support to retry.' : 'Check your KYC bank details, then ask NIVASA support to retry.'}`,
+      body: `${payout.message || 'Cashfree could not create your payout account.'} ${askEmail ? 'Add your email below, then ask NIVASA support to retry.' : 'NIVASA support will fix it with you; members can pay you in cash meanwhile.'}`,
+      // The account exists on Cashfree (e.g. a document needs another look): the vendor may check again.
+      refresh: Boolean(payout.providerStatus),
     };
   } else if (st === 'blocked') {
     view = { icon: 'ban-outline', tone: 'danger', badge: 'Blocked', title: 'Payout account blocked', body: `${payout.message ? `${payout.message} ` : ''}Contact NIVASA support. Members can still pay you in cash.` };

@@ -15,8 +15,9 @@ import { ShopLogo } from '../../components/ShopLogo.jsx';
 import { useToast } from '../../components/Toast.jsx';
 import { useCounts } from '../../layout/Portals.jsx';
 import { KycDetailsForm } from '../../components/KycDetailsForm.jsx';
-import { adminLabel, emptyKyc, kycErrors, kycPayload, serverErrors } from '../../lib/vendorOnboarding.js';
-import { focusFirstError } from '../../lib/validation.js';
+import { adminLabel, CF_LINES_OF_BUSINESS, emptyKyc, gstinProblem, kycErrors, kycPayload, lineOfBusinessLabel, serverErrors } from '../../lib/vendorOnboarding.js';
+import { focusFirstError, isEmail } from '../../lib/validation.js';
+import { Field, Input, Select } from '../../components/Form.jsx';
 
 const DOCS = [
   ['panPhoto', 'PAN card'],
@@ -35,8 +36,11 @@ const PAYOUT_STATUS = {
  * Cashfree Easy Split vendor account: needed before members can pay this vendor online (services, products).
  * Create / refresh → POST /platform/vendors/:id/payout (vendors.manage).
  */
-function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, className = '' }) {
+const DOC_STATUS = { IN_REVIEW: ['In review', 'warning'], VERIFIED: ['Verified', 'success'], ACTION_REQUIRED: ['Rejected', 'danger'], REJECTED: ['Rejected', 'danger'], failed: ['Not uploaded', 'danger'] };
+
+function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, profile, user, className = '' }) {
   const toast = useToast();
+  const [editing, setEditing] = useState(false);
   const po = payout || { status: 'not_created', available: false };
   const [label, tone] = PAYOUT_STATUS[po.status] || [humanize(po.status), 'neutral'];
   const [sync, syncing] = useAction(() => api.post(`/platform/vendors/${vendorId}/payout`), {
@@ -51,9 +55,14 @@ function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, className
       title="Cashfree payout account"
       actions={
         canManage && (
-          <Button size="xs" variant="outline" icon="fa-solid fa-rotate-right" loading={syncing} disabledReason={blocked} onClick={() => sync()} data-testid="payout-sync">
-            Create / refresh
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="xs" variant="ghost" icon="fa-solid fa-pen" onClick={() => setEditing(true)} data-testid="payout-details-open">
+              Cashfree details
+            </Button>
+            <Button size="xs" variant="outline" icon="fa-solid fa-rotate-right" loading={syncing} disabledReason={blocked} onClick={() => sync()} data-testid="payout-sync">
+              Create / refresh
+            </Button>
+          </div>
         )
       }
     >
@@ -73,14 +82,125 @@ function PayoutCard({ vendorId, payout, kycStatus, canManage, onSaved, className
             ['Provider status', po.providerStatus],
             ['Message', po.message],
             ['Last updated', po.updatedAt ? formatDateTime(po.updatedAt) : null],
+            ['Line of business', profile?.lineOfBusiness ? lineOfBusinessLabel(profile.lineOfBusiness) : <span key="lob" className="text-amber-600">Not chosen — Cashfree needs it</span>],
+            ['GSTIN', profile?.gstin ? <span key="g" className="font-mono">{profile.gstin}</span> : 'Not given'],
+            ['Account email', user?.hasEmail ? user.email : <span key="em" className="text-amber-600">Missing — Cashfree needs it</span>],
           ]}
         />
+        {po.documents?.length > 0 && (
+          <div className="mt-3" data-testid="payout-docs">
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400">Documents sent to Cashfree</p>
+            <ul className="space-y-1.5">
+              {po.documents.map((d) => {
+                const [l, t] = DOC_STATUS[d.status] || [humanize(d.status || 'sent'), 'neutral'];
+                return (
+                  <li key={d.docType} className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
+                    <span className="font-semibold">{d.docType === 'PAN' ? 'PAN card' : humanize(d.docType)}</span>
+                    <Badge tone={t}>{l}</Badge>
+                    {d.remarks && <span className="text-[11px] text-rose-600">{d.remarks}</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
         <p className="mt-3 text-[11px] leading-relaxed text-brand-muted">
-          Created from the approved KYC (bank + PAN) when KYC is approved. Online payments to this vendor need an <b>active</b> account; until then members pay cash (COD). The vendor’s account needs an email address.
+          Created when KYC is approved: name, email, mobile, bank account, PAN, line of business and GSTIN go to Cashfree, and the PAN card photo is uploaded as the KYC document (Aadhaar stays with NIVASA). Online payments to this vendor need an <b>active</b> account; until then members pay cash (COD).
           {!canManage && ' Creating or refreshing it needs the “Vendors & KYC · manage” permission.'}
         </p>
       </div>
+      {editing && <PayoutDetailsModal vendorId={vendorId} profile={profile} user={user} onClose={() => setEditing(false)} onSaved={() => (setEditing(false), onSaved())} />}
     </Card>
+  );
+}
+
+/**
+ * What Cashfree needs that isn't verified KYC: line of business, GSTIN, the account email.
+ * PATCH /platform/vendors/:id/payout-details (vendors.manage) — also works after KYC approval, then re-syncs Cashfree.
+ */
+function PayoutDetailsModal({ vendorId, profile, user, onClose, onSaved }) {
+  const toast = useToast();
+  const [f, setF] = useState({ lineOfBusiness: profile?.lineOfBusiness || '', gstin: profile?.gstin || '', email: '' });
+  const [errors, setErrors] = useState({});
+  const [general, setGeneral] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => {
+    setF((x) => ({ ...x, [k]: v }));
+    setErrors((e) => ({ ...e, [k]: undefined }));
+  };
+  const save = async () => {
+    if (busy) return;
+    const e = {};
+    if (!CF_LINES_OF_BUSINESS.includes(f.lineOfBusiness)) e.lineOfBusiness = 'Choose the line of business';
+    const g = gstinProblem(f.gstin, '');
+    if (g) e.gstin = g;
+    const email = f.email.trim().toLowerCase();
+    if (!user?.hasEmail && !email) e.email = 'Cashfree needs an email address — enter the vendor’s email';
+    else if (email && !isEmail(email)) e.email = 'Enter a valid email address, e.g. name@example.com';
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    const body = { lineOfBusiness: f.lineOfBusiness, gstin: f.gstin.trim() ? f.gstin.trim().toUpperCase() : null, ...(email ? { email } : {}) };
+    setBusy(true);
+    setGeneral(null);
+    try {
+      const r = await api.patch(`/platform/vendors/${vendorId}/payout-details`, body);
+      const st = r?.payout?.status;
+      toast.success(st === 'active' ? 'Saved — payout account is active' : st === 'pending' ? 'Saved and sent to Cashfree — verification in progress' : st === 'failed' ? 'Saved — Cashfree still needs something, see the message' : 'Saved');
+      onSaved();
+    } catch (err) {
+      if (err.code === 'EMAIL_EXISTS') setErrors({ email: 'Another account already uses this email' });
+      else {
+        const { fields, general: msg } = serverErrors(err);
+        setErrors(fields);
+        setGeneral(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      busy={busy}
+      icon="fa-solid fa-building-columns"
+      title="Cashfree details"
+      subtitle="What Cashfree needs besides the verified KYC. Saving sends it to Cashfree straight away."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button icon="fa-regular fa-floppy-disk" loading={busy} onClick={save} data-testid="payout-details-save">
+            Save & send to Cashfree
+          </Button>
+        </>
+      }
+    >
+      {general && (
+        <Alert tone="danger" className="mb-4" title="Not saved">
+          {general}
+        </Alert>
+      )}
+      <div className="space-y-4">
+        <Field label="Line of business" required htmlFor="pd-lob" error={errors.lineOfBusiness}>
+          <Select id="pd-lob" value={f.lineOfBusiness} onChange={(e) => set('lineOfBusiness', e.target.value)} invalid={Boolean(errors.lineOfBusiness)} data-testid="payout-lob">
+            <option value="">Choose what this vendor does…</option>
+            {CF_LINES_OF_BUSINESS.map((v) => (
+              <option key={v} value={v}>
+                {lineOfBusinessLabel(v)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="GSTIN" hint="Optional · needed above ₹20 lakh a year · must belong to the vendor’s PAN" htmlFor="pd-gst" error={errors.gstin}>
+          <Input id="pd-gst" value={f.gstin} maxLength={15} className="font-mono" placeholder="27ABCDE1234F1Z5" autoComplete="off" spellCheck={false} invalid={Boolean(errors.gstin)} onChange={(e) => set('gstin', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} data-testid="payout-gstin" />
+        </Field>
+        <Field label={user?.hasEmail ? 'New email (optional)' : 'Vendor email'} required={!user?.hasEmail} hint={user?.hasEmail ? `Current: ${user.email}. Leave empty to keep it.` : 'The vendor’s account has no email — Cashfree needs one'} htmlFor="pd-email" error={errors.email}>
+          <Input id="pd-email" type="email" value={f.email} maxLength={200} placeholder="name@example.com" autoComplete="off" invalid={Boolean(errors.email)} onChange={(e) => set('email', e.target.value)} data-testid="payout-email" />
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -97,6 +217,8 @@ function KycEditModal({ vendorId, profile, onClose, onSaved }) {
     ...emptyKyc(),
     businessName: profile?.businessName || '',
     businessType: profile?.businessType || 'individual',
+    lineOfBusiness: profile?.lineOfBusiness || '',
+    gstin: profile?.gstin || '',
     city: profile?.city || '',
     address: profile?.address || '',
     bankAccountHolder: profile?.bankAccountHolder || '',
@@ -426,7 +548,7 @@ export default function VendorDetail() {
               </Card>
             </div>
 
-            <PayoutCard className="mb-6" vendorId={u._id} payout={payout} kycStatus={status} canManage={manage} onSaved={q.reload} />
+            <PayoutCard className="mb-6" vendorId={u._id} payout={payout} kycStatus={status} canManage={manage} onSaved={q.reload} profile={p} user={u} />
 
             <div className="mb-6 grid grid-cols-12 gap-6">
               <Card className="col-span-12 lg:col-span-5" title="Account">
@@ -444,6 +566,7 @@ export default function VendorDetail() {
                 <KeyValue
                   items={[
                     ['Mobile', <span key="m" className="font-mono">{u.phone || '—'}</span>],
+                    ['Email', u.email || 'Not set'],
                     ['Joined', formatDate(u.createdAt)],
                     ['Last sign-in', u.lastLoginAt ? formatRelative(u.lastLoginAt) : 'Never'],
                     ['Added by', addedBy ? <span key="ab" data-testid="vendor-added-by">{adminLabel(addedBy)}</span> : 'Self sign-up in the app'],
@@ -460,6 +583,8 @@ export default function VendorDetail() {
                   items={[
                     ['Business name', p?.businessName],
                     ['Type', p?.businessType ? humanize(p.businessType) : null],
+                    ['Line of business', p?.lineOfBusiness ? lineOfBusinessLabel(p.lineOfBusiness) : null],
+                    ['GSTIN', p?.gstin ? <span key="gst" className="font-mono">{p.gstin}</span> : null],
                     ['City', p?.city],
                     ['Address', p?.address],
                     ['KYC submitted', p?.submittedAt ? formatDateTime(p.submittedAt) : 'Not yet'],

@@ -11,6 +11,8 @@ import { useAction, useApi } from '../../hooks/useApi';
 import { api } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import { aadhaarValid, formatAadhaar, IFSC_RX, PAN_RX } from '../../lib/validation';
+import { CF_LINES_OF_BUSINESS, gstinProblem, lineOfBusinessLabel } from '../../lib/cashfree';
+import { LineOfBusinessPicker } from '../../components/LineOfBusinessPicker';
 import { colors } from '../../theme';
 
 const STATUS = {
@@ -87,6 +89,8 @@ function KycView({ profile: p, onSaved }) {
       <Card>
         <KeyValue label="Name" value={p.businessName} />
         <KeyValue label="Type" value={p.businessType === 'business' ? 'Business' : 'Individual'} />
+        {p.lineOfBusiness ? <KeyValue label="Line of business" value={lineOfBusinessLabel(p.lineOfBusiness)} /> : null}
+        {p.gstin ? <KeyValue label="GSTIN" value={p.gstin} /> : null}
         <KeyValue label="City" value={p.city} />
         {p.address ? <KeyValue label="Address" value={p.address} /> : null}
         {p.submittedAt ? <KeyValue label="Submitted" value={formatDate(p.submittedAt)} /> : null}
@@ -128,7 +132,7 @@ function KycView({ profile: p, onSaved }) {
 function KycForm({ profile: p, onDone, onCancel }) {
   const toast = useToast();
   const { refreshProfile } = useAuth();
-  const [f, setF] = useState({ businessName: p.businessName || '', businessType: p.businessType || 'individual', city: p.city || '', address: p.address || '', pan: '', aadhaar: '', bankAccountHolder: p.bankAccountHolder || '', bankAccountNumber: '', confirmAccount: '', bankIfsc: p.bankIfsc || '', bankName: p.bankName || '' });
+  const [f, setF] = useState({ businessName: p.businessName || '', businessType: p.businessType || 'individual', lineOfBusiness: p.lineOfBusiness || '', gstin: p.gstin || '', city: p.city || '', address: p.address || '', pan: '', aadhaar: '', bankAccountHolder: p.bankAccountHolder || '', bankAccountNumber: '', confirmAccount: '', bankIfsc: p.bankIfsc || '', bankName: p.bankName || '' });
   const [docs, setDocs] = useState({ panPhoto: [], aadhaarFront: [], aadhaarBack: [] });
   const [consent, setConsent] = useState(false);
   const [errors, setErrors] = useState({});
@@ -139,8 +143,10 @@ function KycForm({ profile: p, onDone, onCancel }) {
     const e = {};
     const aadhaar = f.aadhaar.replace(/\s/g, '');
     if (f.businessName.trim().length < 2) e.businessName = 'Enter your business or full name';
+    if (!CF_LINES_OF_BUSINESS.includes(f.lineOfBusiness)) e.lineOfBusiness = 'Choose what you do';
     if (f.city.trim().length < 2) e.city = 'Enter your city';
     e.pan = panProblem(f.pan.trim().toUpperCase());
+    e.gstin = gstinProblem(f.gstin, f.pan);
     e.aadhaar = aadhaarProblem(aadhaar);
     if (f.bankAccountHolder.trim().length < 2) e.bankAccountHolder = 'Enter the account holder’s name';
     if (!/^\d{9,18}$/.test(f.bankAccountNumber)) e.bankAccountNumber = 'Enter a valid account number (9 to 18 digits)';
@@ -160,6 +166,8 @@ function KycForm({ profile: p, onDone, onCancel }) {
         body: {
           businessName: f.businessName.trim(),
           businessType: f.businessType,
+          lineOfBusiness: f.lineOfBusiness,
+          ...(f.gstin.trim() && { gstin: f.gstin.trim().toUpperCase() }),
           city: f.city.trim(),
           ...(f.address.trim() && { address: f.address.trim() }),
           pan: f.pan.trim().toUpperCase(),
@@ -198,12 +206,14 @@ function KycForm({ profile: p, onDone, onCancel }) {
         onChange={set('businessType')}
       />
       <Field label={f.businessType === 'business' ? 'Business name' : 'Full name (as on PAN)'} value={f.businessName} onChangeText={set('businessName')} maxLength={120} error={errors.businessName} />
+      <LineOfBusinessPicker value={f.lineOfBusiness} onChange={set('lineOfBusiness')} error={errors.lineOfBusiness} />
       <Field label="City" value={f.city} onChangeText={set('city')} maxLength={80} error={errors.city} />
       <Field label="Address (optional)" value={f.address} onChangeText={set('address')} maxLength={300} multiline />
 
       <SectionTitle title="Identity" />
       <Field label="PAN number" value={f.pan} onChangeText={(v) => set('pan')(v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} autoCapitalize="characters" maxLength={10} placeholder="ABCDE1234F" error={errors.pan} />
       <Field label="Aadhaar number" value={f.aadhaar} onChangeText={(v) => set('aadhaar')(formatAadhaar(v))} keyboardType="number-pad" maxLength={14} placeholder="1234 5678 9012" error={errors.aadhaar} />
+      <Field label="GSTIN (optional)" value={f.gstin} onChangeText={(v) => set('gstin')(v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15))} autoCapitalize="characters" maxLength={15} placeholder="27ABCDE1234F1Z5" hint="Only if your business is GST-registered" error={errors.gstin} />
 
       <SectionTitle title="Bank account (for payouts)" />
       <Field label="Account holder name" value={f.bankAccountHolder} onChangeText={set('bankAccountHolder')} maxLength={120} error={errors.bankAccountHolder} />
@@ -235,7 +245,7 @@ function KycForm({ profile: p, onDone, onCancel }) {
       <Pressable onPress={() => setConsent((c) => !c)} accessibilityRole="checkbox" accessibilityState={{ checked: consent }} style={styles.consent}>
         <Ionicons name={consent ? 'checkbox' : 'square-outline'} size={22} color={consent ? colors.navy : '#94a3b8'} />
         <T size={12.5} color="#334155" style={{ flex: 1, lineHeight: 18 }}>
-          I confirm these details and documents are mine and correct, and I agree to NIVASA verifying them for vendor KYC.
+          I confirm these details and documents are mine and correct. I agree to NIVASA verifying them for vendor KYC and sharing my bank details, PAN (number and card photo), GSTIN and line of business with Cashfree to receive online payments.
         </T>
       </Pressable>
       {errors.consent ? (

@@ -44,16 +44,17 @@ async function call(method, path, { token, body } = {}) {
 const code = (r) => r.body?.error?.code;
 
 // ---------------------------------------------------------------- fake Cashfree gateway
-const gw = { orders: new Map(), vendors: new Map(), refunds: [], vendorStatus: 'IN_BENE_CREATION', refundStatus: 'SUCCESS', calls: [] };
+const gw = { orders: new Map(), vendors: new Map(), refunds: [], docs: [], vendorStatus: 'IN_BENE_CREATION', refundStatus: 'SUCCESS', calls: [] };
 const fake = http.createServer(async (req, res) => {
   let raw = '';
   for await (const c of req) raw += c;
-  const body = raw ? JSON.parse(raw) : null;
+  const multipart = /multipart\/form-data/.test(req.headers['content-type'] || '');
+  const body = raw && !multipart ? JSON.parse(raw) : null;
   const send = (status, obj) => {
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(obj));
   };
-  gw.calls.push({ method: req.method, url: req.url, headers: req.headers, body });
+  gw.calls.push({ method: req.method, url: req.url, headers: req.headers, body, multipart, raw: multipart ? raw : undefined });
   if (req.headers['x-client-id'] !== 'TEST_APP_ID' || req.headers['x-client-secret'] !== SECRET || !req.headers['x-api-version']) return send(401, { message: 'authentication failed', code: 'request_failed' });
   const u = new URL(req.url, 'http://x');
   const m = u.pathname.match(/^\/pg\/orders\/([^/]+)(?:\/(payments|refunds))?(?:\/([^/]+))?$/);
@@ -73,6 +74,9 @@ const fake = http.createServer(async (req, res) => {
   }
   if (m && req.method === 'GET' && m[2] === 'refunds') return send(200, { refund_id: m[3], refund_status: gw.refundStatus });
   if (req.method === 'POST' && u.pathname === '/pg/easy-split/vendors') {
+    // Same validation as live Cashfree (the bug that hit production: business_type missing).
+    if (!body.kyc_details?.business_type) return send(400, { message: 'kyc_details.business_type : is missing in the request. Value received: ', code: 'kyc_details.business_type_missing' });
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.email || '')) return send(400, { message: 'email: should be valid email.' });
     if (gw.vendors.has(body.vendor_id)) return send(409, { message: 'vendor already exists' });
     gw.vendors.set(body.vendor_id, { ...body, status: gw.vendorStatus });
     return send(200, { vendor_id: body.vendor_id, status: gw.vendorStatus });
@@ -80,7 +84,23 @@ const fake = http.createServer(async (req, res) => {
   const v = u.pathname.match(/^\/pg\/easy-split\/vendors\/([^/]+)$/);
   if (v && req.method === 'GET') {
     const x = gw.vendors.get(v[1]);
-    return x ? send(200, { vendor_id: x.vendor_id, status: x.status }) : send(404, { message: 'vendor does not exist' });
+    return x ? send(200, { vendor_id: x.vendor_id, status: x.status, business_type: x.kyc_details?.business_type, related_docs: x.related_docs || [] }) : send(404, { message: 'vendor does not exist' });
+  }
+  if (v && req.method === 'PATCH') {
+    const x = gw.vendors.get(v[1]);
+    if (!x) return send(404, { message: 'vendor does not exist' });
+    Object.assign(x, body, { kyc_details: { ...x.kyc_details, ...body.kyc_details } });
+    return send(200, { vendor_id: x.vendor_id, status: x.status });
+  }
+  const vd = u.pathname.match(/^\/pg\/easy-split\/vendor-docs\/([^/]+)$/);
+  if (vd && req.method === 'POST') {
+    if (!multipart) return send(400, { message: 'multipart expected' });
+    const docType = (raw.match(/name="doc_type"\r\n\r\n([^\r]*)/) || [])[1];
+    const docValue = (raw.match(/name="doc_value"\r\n\r\n([^\r]*)/) || [])[1];
+    if (!docType) return send(400, { message: 'doc_type : is missing in the request. Value received: ""', code: 'doc_type_missing' });
+    if (!gw.vendors.has(vd[1])) return send(404, { message: 'vendor does not exist' });
+    gw.docs.push({ vendorId: vd[1], docType, docValue, hasFile: /name="file"; filename=/.test(raw) });
+    return send(200, { vendor_id: vd[1], doc_type: docType, doc_value: 'easySplit/vendorKycDocs/x.png', status: 'IN_REVIEW', remarks: null });
   }
   send(404, { message: 'not found' });
 });
@@ -143,12 +163,56 @@ try {
   await new Promise((r) => setTimeout(r, 500));
   let pv = await call('GET', `/platform/vendors/${vId}`, { token: T });
   check('no email → payout account failed with a clear message', pv.body?.payout?.status === 'failed' && /email/i.test(pv.body.payout.message || ''), pv.body?.payout);
+  check('platform vendor view: hasEmail false, no raw email', pv.body?.user?.hasEmail === false && pv.body.user.email === null, pv.body?.user);
   await call('PATCH', '/me', { token: V, body: { email: `vendor.${RUN}@example.com` } });
-  const sync1 = await call('POST', `/platform/vendors/${vId}/payout`, { token: T });
-  check('Master Admin "Create / refresh" → pending (bank being verified)', sync1.status === 200 && sync1.body.status === 'pending' && sync1.body.cfVendorId === `nv${vId}`, sync1.body);
+  // Line of business is required by Cashfree (kyc_details.business_type) — the production failure.
+  const noLob = await call('POST', `/platform/vendors/${vId}/payout`, { token: T });
+  check('no line of business → failed, nothing sent to Cashfree', noLob.body?.status === 'failed' && /line of business/i.test(noLob.body.message || '') && !gw.calls.some((c) => c.url === '/pg/easy-split/vendors' && c.method === 'POST'), noLob.body);
+  const GSTIN = `27${PAN}1Z5`;
+  const badLob = await call('PATCH', `/platform/vendors/${vId}/payout-details`, { token: T, body: { lineOfBusiness: 'NBFC' } });
+  check('payout-details: unknown line of business → 400', badLob.status === 400, badLob.body);
+  const badGst = await call('PATCH', `/platform/vendors/${vId}/payout-details`, { token: T, body: { gstin: '27ABCDE1234F1Z5' } });
+  check('payout-details: GSTIN of another PAN → 400 on gstin', badGst.status === 400 && badGst.body?.error?.details?.[0]?.path === 'gstin', badGst.body);
+  const vendorTries = await call('PATCH', `/platform/vendors/${vId}/payout-details`, { token: V, body: { lineOfBusiness: 'Retail and Shopping' } });
+  check('payout-details: vendor token refused', [401, 403].includes(vendorTries.status), vendorTries.status);
+  const det = await call('PATCH', `/platform/vendors/${vId}/payout-details`, { token: T, body: { lineOfBusiness: 'Retail and Shopping', gstin: GSTIN.toLowerCase() } });
+  check('Master Admin sets line of business + GSTIN → account created (pending)', det.status === 200 && det.body.payout?.status === 'pending' && det.body.payout.cfVendorId === `nv${vId}` && det.body.profile?.lineOfBusiness === 'Retail and Shopping' && det.body.profile.gstin === GSTIN, det.body);
+  const sync1 = { status: det.status, body: det.body?.payout };
   const created = gw.calls.find((c) => c.url === '/pg/easy-split/vendors' && c.method === 'POST' && c.body?.email);
   check('Cashfree vendor created with bank + PAN (decrypted only for the call)', created?.body?.bank?.account_number === ACCOUNT && created.body.kyc_details?.pan === PAN && created.body.bank.ifsc === 'SBIN0004567' && created.body.verify_account === false, created?.body?.bank);
-  check('payout response never contains bank / PAN', !JSON.stringify(sync1.body).includes(ACCOUNT) && !JSON.stringify(sync1.body).includes(PAN));
+  check('kyc_details: account_type INDIVIDUAL + business_type + gst', created?.body?.kyc_details?.account_type === 'INDIVIDUAL' && created.body.kyc_details.business_type === 'Retail and Shopping' && created.body.kyc_details.gst === GSTIN && !('uidai' in created.body.kyc_details), created?.body?.kyc_details);
+  const panDoc = gw.docs.find((d) => d.vendorId === `nv${vId}` && d.docType === 'PAN');
+  check('PAN card uploaded to Cashfree vendor-docs (file + PAN number), Aadhaar not sent', panDoc?.hasFile === true && panDoc.docValue === PAN && !gw.docs.some((d) => /UIDAI/.test(d.docType)), gw.docs);
+  check('payout shows the PAN document in review', sync1.body?.documents?.some((d) => d.docType === 'PAN' && d.status === 'IN_REVIEW'), sync1.body?.documents);
+  check('payout response never contains bank / PAN', !JSON.stringify(det.body).includes(ACCOUNT) && !JSON.stringify(sync1.body).includes(PAN));
+  const noChange = await call('POST', `/platform/vendors/${vId}/payout`, { token: T });
+  check('refresh with no changes → no update call, PAN not re-uploaded', noChange.body?.status === 'pending' && !gw.calls.some((c) => c.method === 'PATCH' && c.url.startsWith('/pg/easy-split/vendors/')) && gw.docs.filter((d) => d.vendorId === `nv${vId}`).length === 1, { patches: gw.calls.filter((c) => c.method === 'PATCH').map((c) => c.url), docs: gw.docs.map((d) => d.docType + ':' + d.vendorId.slice(-4)) });
+  const newMail = `shop.${RUN}@example.com`;
+  const em = await call('PATCH', `/platform/vendors/${vId}/payout-details`, { token: T, body: { email: newMail } });
+  const upd = gw.calls.find((c) => c.method === 'PATCH' && c.url === `/pg/easy-split/vendors/nv${vId}`);
+  check('changed email → sent to Cashfree as a vendor update', em.status === 200 && upd?.body?.email === newMail && upd.body.kyc_details?.business_type === 'Retail and Shopping' && !('vendor_id' in upd.body) && !('status' in upd.body), upd?.body);
+  const pv2 = await call('GET', `/platform/vendors/${vId}`, { token: T });
+  check('platform vendor view: email masked', pv2.body?.user?.hasEmail === true && pv2.body.user.email !== newMail && /•••@example\.com$/.test(pv2.body.user.email || ''), pv2.body?.user);
+  // Cashfree rejects the PAN photo → failed with Cashfree's remark; the vendor may refresh after a fix.
+  Object.assign(gw.vendors.get(`nv${vId}`), { status: 'ACTION_REQUIRED', related_docs: [{ doc_type: 'PAN', status: 'ACTION_REQUIRED', remarks: 'Image is blurred' }] });
+  const ar = await call('POST', `/platform/vendors/${vId}/payout`, { token: T });
+  check('ACTION_REQUIRED → failed with Cashfree’s document remark', ar.body?.status === 'failed' && ar.body.providerStatus === 'ACTION_REQUIRED' && /blurred/i.test(ar.body.message || ''), ar.body);
+  check('a PAN file Cashfree rejected is not re-sent unchanged', gw.docs.filter((d) => d.vendorId === `nv${vId}` && d.docType === 'PAN').length === 1 && /new photo/i.test(ar.body.message || ''), gw.docs.length);
+  // Fix path: reject KYC → admin enters it again with a new PAN photo + approves → the new file goes to Cashfree.
+  await call('POST', `/platform/vendors/${vId}/kyc`, { token: T, body: { decision: 'rejected', note: 'PAN photo blurred' } });
+  const adminUp = async () => {
+    const form = new FormData();
+    form.append('purpose', 'kyc');
+    form.append('file', new Blob([PNG], { type: 'image/png' }), 'pan2.png');
+    const r = await fetch(`${API}/platform/vendors/uploads`, { method: 'POST', headers: { Authorization: `Bearer ${T}` }, body: form });
+    return (await r.json())?._id;
+  };
+  const newPan = await adminUp();
+  const reKyc = await call('PUT', `/platform/vendors/${vId}/kyc-details`, { token: T, body: { businessName: `Fresh Mart ${RUN}`, businessType: 'individual', lineOfBusiness: 'Retail and Shopping', gstin: GSTIN, city: 'Nagpur', pan: PAN, aadhaar: withVerhoeff(`4${String(STAMP).slice(-10)}`), bankAccountHolder: 'Sanjay N', bankAccountNumber: ACCOUNT, bankIfsc: 'SBIN0004567', panPhoto: newPan, aadhaarFront: docs[1], aadhaarBack: docs[2], vendorConsent: true, approve: true } });
+  check('re-approved with a new PAN photo → new file uploaded to Cashfree', reKyc.status === 200 && gw.docs.filter((d) => d.vendorId === `nv${vId}` && d.docType === 'PAN').length === 2 && reKyc.body.profile?.lineOfBusiness === 'Retail and Shopping', { status: reKyc.status, docs: gw.docs.length, body: reKyc.body?.error });
+  Object.assign(gw.vendors.get(`nv${vId}`), { status: 'IN_KYC_REVIEW', related_docs: [{ doc_type: 'PAN', status: 'IN_REVIEW', remarks: null }] });
+  const vr2 = await call('POST', '/vendor/payout/refresh', { token: V });
+  check('vendor can refresh a Cashfree-side failure → pending (KYC review)', vr2.body?.status === 'pending' && /reviewing the KYC/i.test(vr2.body.message || ''), vr2.body);
   const subadminNo = await call('POST', `/platform/vendors/${vId}/payout`, { token: V });
   check('vendor token cannot use the platform payout route', [401, 403].includes(subadminNo.status), subadminNo.status);
   await call('PATCH', `/platform/vendors/${vId}/pricing`, { token: T, body: { commissionPercent: 20, memberDiscountPercent: 50 } });
